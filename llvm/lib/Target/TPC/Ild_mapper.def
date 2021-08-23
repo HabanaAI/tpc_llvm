@@ -1,0 +1,96 @@
+#ifndef MAP_III
+#  error Define the MAP_III Macro
+#endif
+
+#ifndef MAP_INST
+#  error Define the MAP_INST Macro
+#endif
+
+#ifndef MAP_INST_SPU
+#  error Define the MAP_INST_SPU Macro
+#endif
+
+#ifndef MAP_INTRIN
+#  error Define the MAP_INTRIN Macro
+#endif
+
+#ifndef MAP_INTRIN_VPU
+#  error Define the MAP_INTRIN_VPU Macro
+#endif
+
+MAP_III(add, Add, ADD)
+MAP_III(and, And, AND)
+MAP_III(cmp_eq, ICmp, CMP_EQ)
+MAP_III(mul, Mul, MUL)
+MAP_III(or, Or, OR)
+MAP_III(sub, Sub, SUB)
+MAP_III(xor, Xor, XOR)
+MAP_III(shl, Shl, SHL)
+MAP_III(shr, LShr, SHR)
+
+MAP_INST(FAdd, ADD)
+MAP_INST(FSub, SUB)
+MAP_INST(FMul, MUL)
+MAP_INST(FCmp, CMP_EQ)
+
+MAP_COMPOUND_INST(Trunc, MapTruncate)
+MAP_COMPOUND_INST(FPTrunc, MapTruncate)
+MAP_COMPOUND_INST(ZExt, MapExtend)
+MAP_COMPOUND_INST(SExt, MapExtend)
+MAP_COMPOUND_INST(FPExt, MapExtend)
+MAP_COMPOUND_INST(FPToUI, MapExtendTruncate)
+MAP_COMPOUND_INST(UIToFP, MapExtendTruncate)
+MAP_COMPOUND_INST(FPToSI, MapExtendTruncate)
+MAP_COMPOUND_INST(SIToFP, MapExtendTruncate)
+MAP_COMPOUND_INST(Select, MapSelect)
+MAP_COMPOUND_INST(UDiv, MapUnsignedDivide)
+MAP_COMPOUND_INST(URem, MapUnsignedDivide)
+MAP_COMPOUND_INST(SDiv, MapSignedDivide)
+MAP_COMPOUND_INST(SRem, MapSignedDivide)
+MAP_COMPOUND_INST(FDiv, MapFDivide)
+MAP_COMPOUND_INST(FRem, MapFRem)
+
+MAP_INST_SPU(Br, JMPA)
+MAP_INST_SPU(IndirectBr, JMPR)
+MAP_INST_SPU(Ret, JMPA)
+
+
+MAP_INTRIN(abs, ABS)
+MAP_INTRIN(mac, MAC)
+MAP_INTRIN(max, MAX)
+MAP_INTRIN(min, MIN)
+MAP_INTRIN(not, NOT)
+MAP_INTRIN(brev, BREV)
+MAP_INTRIN(calc_fp_special, CALC_FP_SPECIAL)
+MAP_INTRIN(popcnt, POPCNT)
+MAP_INTRIN(fclass, FCLASS)
+MAP_INTRIN(extract_exp, EXTRACT_EXP)
+MAP_INTRIN(cmp_leq, CMP_LEQ)
+MAP_INTRIN(cmp_less, CMP_LESS)
+MAP_INTRIN(cmp_neq, CMP_NEQ)
+MAP_INTRIN(cmp_grt, CMP_GRT)
+MAP_INTRIN(cmp_geq, CMP_GEQ)
+MAP_INTRIN(convert, CONVERT)
+MAP_INTRIN(convert_int,  CONVERT_INT32)
+MAP_INTRIN(convert_uint,  CONVERT_UINT32)
+MAP_INTRIN(nearbyint, NEARBYINT)
+MAP_INTRIN(mov, MOV)
+
+MAP_INTRIN_VPU(sel_eq, SEL_EQ)
+MAP_INTRIN_VPU(sel_neq, SEL_NEQ)
+MAP_INTRIN_VPU(sel_less, SEL_LESS)
+MAP_INTRIN_VPU(sel_leq, SEL_LEQ)
+MAP_INTRIN_VPU(sel_grt, SEL_GRT)
+MAP_INTRIN_VPU(sel_geq, SEL_GEQ)
+MAP_INTRIN_VPU(sel2_less, SEL2_LESS)
+MAP_INTRIN_VPU(sel2_leq, SEL2_LEQ)
+MAP_INTRIN_VPU(sel2_grt, SEL2_GRT)
+MAP_INTRIN_VPU(sel2_geq, SEL2_GEQ)
+MAP_INTRIN_VPU(msac, MSAC)
+MAP_INTRIN_VPU(pack, PACK)
+MAP_INTRIN_VPU(unpack, UNPACK)
+MAP_INTRIN_VPU(shuffle, SHUFFLE)
+MAP_INTRIN_VPU(form_fp_num, FORM_FP_NUM)
+MAP_INTRIN_VPU(get_lut_entry, GET_LUT_ENTRY_AND_INTERVAL_START)
+MAP_INTRIN_VPU(mov_dual_group, MOV_DUAL_GROUP)
+MAP_INTRIN_VPU(mov_group, MOV_GROUP)

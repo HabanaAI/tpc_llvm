@@ -1,0 +1,9 @@
+llvm_tpc_cleanup
+llvm_tpc_compileModule
+llvm_tpc_configure
+llvm_tpc_disassembleTPC
+llvm_tpc_redirectOutput
+llvm_tpc_setGlobalAllocHeap
+llvm_tpc_setHeapAllocationFuncs
+llvm_tpc_shutdown
+llvm_tpc_startup

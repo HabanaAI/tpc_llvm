@@ -1,0 +1,32 @@
+@LIT_SITE_CFG_IN_HEADER@
+
+import sys
+
+config.llvm_src_root = "%(llvm_src)s"
+config.llvm_obj_root = "%(llvm_build)s"
+config.llvm_tools_dir = "%(llvm_build)s/%(build_mode)s/bin"
+config.llvm_libs_dir = "%(llvm_build)s/%(build_mode)s/lib"
+config.llvm_build_mode = "@LLVM_BUILD_MODE@"
+config.clang_obj_root = "%(llvm_build)s/tools/clang"
+config.enable_shared = @ENABLE_SHARED@
+config.shlibdir = "%(llvm_build)s/%(build_mode)s/lib"
+config.target_triple = "@TARGET_TRIPLE@"
+
+# Support substitution of the tools_dir, libs_dirs, and build_mode with user
+# parameters. This is used when we can't determine the tool dir at
+# configuration time.
+try:
+    config.llvm_src_root = config.llvm_src_root % lit_config.params
+    config.llvm_obj_root = config.llvm_obj_root % lit_config.params
+    config.llvm_tools_dir = config.llvm_tools_dir % lit_config.params
+    config.llvm_libs_dir = config.llvm_libs_dir % lit_config.params
+    config.llvm_build_mode = config.llvm_build_mode % lit_config.params
+    config.clang_obj_root = config.clang_obj_root % lit_config.params
+    config.shlibdir = config.shlibdir % lit_config.params
+except KeyError:
+    e = sys.exc_info()[1]
+    key, = e.args
+    lit_config.fatal("unable to find %r parameter, use '--param=%s=VALUE'" % (key,key))
+
+# Let the main config do the real work.
+lit_config.load_config(config, "%(clang_src)s/test/Unit/lit.cfg.py" % lit_config.params)

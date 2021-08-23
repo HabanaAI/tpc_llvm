@@ -1,0 +1,117 @@
+//===--- BuiltinsTPC.def --- TPC Builtin function database ------*- C++ -*-===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file defines the TPC-specific builtin function database.  Users of
+// this file must define the BUILTIN macro to make use of this information.
+//
+//===----------------------------------------------------------------------===//
+
+#if defined(BUILTIN) && !defined(TARGET_BUILTIN)
+#   define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BUILTIN(ID, TYPE, ATTRS)
+#endif
+
+// The format of this database matches clang/Basic/Builtins.def.
+
+// Structure typed are supported by record specifier, which has a form "RN",
+// where N is a number assigned to the type. Current set of supported records
+// is:
+//
+// R0     float64_pair_t
+// R1     float64_int64_pair_t
+// R2     float64_uint64_pair_t
+//
+// R3     int64_float64_pair_t
+// R4     int64_pair_t
+// R5     int64_uint64_pair_t
+//
+// R6     uint64_float64_pair_t
+// R7     uint64_int64_pair_t
+// R8     uint64_pair_t
+//
+// R9     bfloat128_pair_t
+// R10    bfloat128_half128_pair_t
+// R11    bfloat128_short128_pair_t
+// R12    bfloat128_ushort128_pair_t
+//
+// R13    half128_bfloat128_pair_t
+// R14    half128_pair_t
+// R15    half128_short128_pair_t
+// R16    half128_ushort128_pair_t
+//
+// R17    short128_bfloat128_pair_t
+// R18    short128_half128_pair_t
+// R19    short128_pair_t
+// R20    short128_ushort128_pair_t"
+//
+// R21    ushort128_bfloat128_pair_t
+// R22    ushort128_half128_pair_t
+// R23    ushort128_short128_pair_t
+// R24    ushort128_pair_t
+//
+// R25    char256_pair_t
+// R26    char256_uchar256_pair_t
+// R27    char256_minifloat256_pair_t
+// R28    char256_minihalf256_pair_t
+//
+// R29    uchar256_char256_pair_t
+// R30    uchar256_pair_t
+// R31    uchar256_minifloat256_pair_t
+// R32    uchar256_minihalf256_pair_t
+// 
+// R33    uint32_t_pair_t
+// R34    uint16_t_pair_t
+// R35    uint8_t_pair_t
+//
+// R36    int256
+// R37    uint256
+// R38    float256
+//
+// R39    minifloat256_pair_t
+// R40    minifloat256_minihalf256_pair_t
+// R41    minifloat256_char256_pair_t
+// R42    minifloat256_uchar256_pair_t
+//
+// R43    minihalf256_pair_t
+// R44    minihalf256_minifloat256_pair_t
+// R45    minihalf256_char256_pair_t
+// R46    minihalf256_uchar256_pair_t
+
+BUILTIN(to_bool128, "V16UcV32Uc", "nc")
+BUILTIN(to_bool64,  "V8UcV32Uc", "nc")
+BUILTIN(from_bool128, "V32UcV16Uc", "nc")
+BUILTIN(from_bool64,  "V32UcV8Uc", "nc")
+
+TARGET_BUILTIN(require_cpu_goya, "v", "", "goya")
+TARGET_BUILTIN(require_cpu_gaudi, "v", "", "gaudi")
+BUILTIN(get_index_space_offset, "V5i", "")
+BUILTIN(get_index_space_size, "V5i", "")
+
+BUILTIN(printf_i, "vcC*i", "")
+BUILTIN(printf_ui, "vcC*Ui", "")
+BUILTIN(printf_f8, "vcC*q", "")
+BUILTIN(printf_h8, "vcC*Q", "")
+BUILTIN(printf_bf, "vcC*B", "")
+BUILTIN(printf_h, "vcC*h", "")
+BUILTIN(printf_f, "vcC*f", "")
+BUILTIN(printf_s, "vcC*s", "")
+BUILTIN(printf_us, "vcC*Us", "")
+BUILTIN(printf_c, "vcC*c", "")
+BUILTIN(printf_uc, "vcC*Uc", "")
+BUILTIN(printf_st, "vcC*", "")
+
+BUILTIN(read_lfsr, "E256c", "")
+BUILTIN(write_lfsr, "vE256c", "")
+BUILTIN(read_lfsrnc, "E256c", "nc")
+
+
+// Include definitions obtained by intrinsic generator from the file 'tpc-intrinsics.h'.
+#include "BuiltinsTPCAutogenNew.def"
+
+#undef BUILTIN
+#undef TARGET_BUILTIN

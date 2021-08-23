@@ -1,0 +1,70 @@
+// RUN: %clang -cc1as -triple tpc-none-none -filetype obj %s -o %t.o
+// RUN: %disasm %t.o | FileCheck %s
+
+LOOKUP V1, V2, BV32, 1; NOP; NOP; NOP
+LOOKUP V1, V2, BV32, 1, SP3; NOP; NOP; NOP
+LOOKUP V1, V2, BV32, 1, !SP3; NOP; NOP; NOP
+// CHECK: lookup BV32 V1, V2, 0x1, SP0;   nop;    nop;    nop
+// CHECK: lookup BV32 V1, V2, 0x1, SP3;   nop;    nop;    nop
+// CHECK: lookup BV32 V1, V2, 0x1, !SP3;  nop;    nop;    nop
+
+LOOKUP V1, V2, BV16_HIGH, 1; NOP; NOP; NOP
+LOOKUP V1, V2, BV16_HIGH, 1, SP3; NOP; NOP; NOP
+LOOKUP V1, V2, BV16_HIGH, 1, !SP3; NOP; NOP; NOP
+// CHECK: lookup BV16_HIGH V1, V2, 0x1, SP0;     nop;    nop;    nop
+// CHECK: lookup BV16_HIGH V1, V2, 0x1, SP3;     nop;    nop;    nop
+// CHECK: lookup BV16_HIGH V1, V2, 0x1, !SP3;    nop;    nop;    nop
+
+LOOKUP V1, V2, BV16_LOW, 1; NOP; NOP; NOP
+LOOKUP V1, V2, BV16_LOW, 1, SP3; NOP; NOP; NOP
+LOOKUP V1, V2, BV16_LOW, 1, !SP3; NOP; NOP; NOP
+// CHECK: lookup BV16_LOW V1, V2, 0x1, SP0;      nop;    nop;    nop
+// CHECK: lookup BV16_LOW V1, V2, 0x1, SP3;      nop;    nop;    nop
+// CHECK: lookup BV16_LOW V1, V2, 0x1, !SP3;     nop;    nop;    nop
+
+LOOKUP V1, V2, BV8_ELEMENT_0, 1; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_0, 1, SP3; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_0, 1, !SP3; NOP; NOP; NOP
+// CHECK: lookup BV8_0 V1, V2, 0x1, SP0;         nop;    nop;    nop
+// CHECK: lookup BV8_0 V1, V2, 0x1, SP3;         nop;    nop;    nop
+// CHECK: lookup BV8_0 V1, V2, 0x1, !SP3;        nop;    nop;    nop
+
+LOOKUP V1, V2, BV8_ELEMENT_1, 1; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_1, 1, SP3; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_1, 1, !SP3; NOP; NOP; NOP
+// CHECK: lookup BV8_1 V1, V2, 0x1, SP0;         nop;    nop;    nop
+// CHECK: lookup BV8_1 V1, V2, 0x1, SP3;         nop;    nop;    nop
+// CHECK: lookup BV8_1 V1, V2, 0x1, !SP3;        nop;    nop;    nop
+
+LOOKUP V1, V2, BV8_ELEMENT_2, 1; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_2, 1, SP3; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_2, 1, !SP3; NOP; NOP; NOP
+// CHECK: lookup BV8_2 V1, V2, 0x1, SP0;         nop;    nop;    nop
+// CHECK: lookup BV8_2 V1, V2, 0x1, SP3;         nop;    nop;    nop
+// CHECK: lookup BV8_2 V1, V2, 0x1, !SP3;        nop;    nop;    nop
+
+LOOKUP V1, V2, BV8_ELEMENT_3, 1; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_3, 1, SP3; NOP; NOP; NOP
+LOOKUP V1, V2, BV8_ELEMENT_3, 1, !SP3; NOP; NOP; NOP
+// CHECK: lookup BV8_3 V1, V2, 0x1, SP0;         nop;    nop;    nop
+// CHECK: lookup BV8_3 V1, V2, 0x1, SP3;         nop;    nop;    nop
+// CHECK: lookup BV8_3 V1, V2, 0x1, !SP3;        nop;    nop;    nop
+
+
+LOOKUP V0, V39, BV32, 1, SP1; NOP; NOP; NOP
+LOOKUP V1, V38, BV32, 2, SP1; NOP; NOP; NOP
+LOOKUP V2, V37, BV32, 3, SP1; NOP; NOP; NOP
+LOOKUP V3, V36, BV32, 4, SP1; NOP; NOP; NOP
+// CHECK: lookup      BV32 V0, V39, 0x1, SP1;  nop;    nop;    nop
+// CHECK: lookup      BV32 V1, V38, 0x2, SP1;  nop;    nop;    nop
+// CHECK: lookup      BV32 V2, V37, 0x3, SP1;  nop;    nop;    nop
+// CHECK: lookup      BV32 V3, V36, 0x4, SP1;  nop;    nop;    nop
+
+LOOKUP V36, V3, BV32, 5, SP1; NOP; NOP; NOP
+LOOKUP V37, V2, BV32, 6, SP1; NOP; NOP; NOP
+LOOKUP V38, V1, BV32, 7, SP1; NOP; NOP; NOP
+LOOKUP V39, V0, BV32, 8, SP1; NOP; NOP; NOP
+// CHECK: lookup      BV32 V36, V3, 0x5, SP1;  nop;    nop;    nop
+// CHECK: lookup      BV32 V37, V2, 0x6, SP1;  nop;    nop;    nop
+// CHECK: lookup      BV32 V38, V1, 0x7, SP1;  nop;    nop;    nop
+// CHECK: lookup      BV32 V39, V0, 0x8, SP1;  nop;    nop;    nop

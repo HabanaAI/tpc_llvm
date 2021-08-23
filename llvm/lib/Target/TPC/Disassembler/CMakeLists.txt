@@ -1,0 +1,4 @@
+add_llvm_component_library(LLVMTPCDisassembler
+  TPCDisassembler.cpp
+)
+add_dependencies(LLVMTPCDisassembler TPCCommonTableGen)

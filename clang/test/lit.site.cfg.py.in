@@ -1,0 +1,60 @@
+@LIT_SITE_CFG_IN_HEADER@
+
+import sys
+
+config.llvm_src_root = "%(llvm_src)s"
+config.llvm_obj_root = "%(llvm_build)s"
+config.llvm_tools_dir = "%(llvm_build)s/%(build_mode)s/bin"
+config.llvm_libs_dir = "%(llvm_build)s/%(build_mode)s/lib"
+config.llvm_shlib_dir = "%(llvm_build)s/%(build_mode)s/lib"
+config.llvm_plugin_ext = "@LLVM_PLUGIN_EXT@"
+config.lit_tools_dir = "@LLVM_LIT_TOOLS_DIR@"
+config.clang_obj_root = "%(llvm_build)s/tools/clang"
+config.clang_src_dir = "%(clang_src)s"
+config.clang_tools_dir = "%(llvm_build)s/%(build_mode)s/bin"
+config.host_triple = "@LLVM_HOST_TRIPLE@"
+config.target_triple = "@TARGET_TRIPLE@"
+config.host_cxx = "@CMAKE_CXX_COMPILER@"
+config.llvm_use_sanitizer = "@LLVM_USE_SANITIZER@"
+config.have_zlib = @HAVE_LIBZ@
+config.clang_arcmt = @CLANG_ENABLE_ARCMT@
+config.clang_default_cxx_stdlib = "@CLANG_DEFAULT_CXX_STDLIB@"
+config.clang_staticanalyzer = @CLANG_ENABLE_STATIC_ANALYZER@
+config.clang_staticanalyzer_z3 = "@LLVM_WITH_Z3@"
+config.clang_examples = @CLANG_BUILD_EXAMPLES@
+config.enable_shared = @ENABLE_SHARED@
+config.enable_backtrace = @ENABLE_BACKTRACES@
+config.enable_experimental_new_pass_manager = @ENABLE_EXPERIMENTAL_NEW_PASS_MANAGER@
+config.enable_threads = @LLVM_ENABLE_THREADS@
+config.host_arch = "@HOST_ARCH@"
+config.python_executable = "@PYTHON_EXECUTABLE@"
+config.use_z3_solver = lit_config.params.get('USE_Z3_SOLVER', "@USE_Z3_SOLVER@")
+config.has_plugins = @LLVM_ENABLE_PLUGINS@
+
+
+# For TPC runtime tests
+config.simulator = "@TPCSIM_SIMULATOR_PATH@"
+config.environment["GLOG_minloglevel"] = "3"
+
+
+# Support substitution of the tools and libs dirs with user parameters. This is
+# used when we can't determine the tool dir at configuration time.
+try:
+    config.clang_obj_root = config.clang_obj_root % lit_config.params
+    config.clang_tools_dir = config.clang_tools_dir % lit_config.params
+    config.clang_src_dir = config.clang_src_dir % lit_config.params
+    config.llvm_obj_root = config.llvm_obj_root % lit_config.params
+    config.llvm_src_root = config.llvm_src_root % lit_config.params
+    config.llvm_tools_dir = config.llvm_tools_dir % lit_config.params
+    config.llvm_shlib_dir = config.llvm_shlib_dir % lit_config.params
+    config.llvm_libs_dir = config.llvm_libs_dir % lit_config.params
+except KeyError:
+    e = sys.exc_info()[1]
+    key, = e.args
+    lit_config.fatal("unable to find %r parameter, use '--param=%s=VALUE'" % (key,key))
+
+import lit.llvm
+lit.llvm.initialize(lit_config, config)
+
+# Let the main config do the real work.
+lit_config.load_config(config, "%(clang_src)s/test/lit.cfg.py" % lit_config.params)

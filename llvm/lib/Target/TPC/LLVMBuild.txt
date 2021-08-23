@@ -1,0 +1,33 @@
+;===- ./lib/Target/TPC/LLVMBuild.txt --------------------------*- Conf -*--===;
+;
+;                     The LLVM Compiler Infrastructure
+;
+;===------------------------------------------------------------------------===;
+;
+; This is an LLVMBuild description file for the components in this subdirectory.
+;
+; For more information on the LLVMBuild system, please see:
+;
+;   http://llvm.org/docs/LLVMBuild.html
+;
+;===------------------------------------------------------------------------===;
+
+[common]
+subdirectories = AsmParser Disassembler MCTargetDesc TargetInfo
+
+[component_0]
+type = TargetGroup
+name = TPC
+parent = Target
+has_asmparser = 1
+has_asmprinter = 1
+has_disassembler = 1
+has_jit = 0
+
+[component_1]
+type = Library
+name = TPCCodeGen
+parent = TPC
+required_libraries = Analysis TPCDesc TPCInfo AsmPrinter CodeGen Core MC Scalar IPO InstCombine SelectionDAG Support Target TransformUtils
+add_to_library_groups = TPC
+
