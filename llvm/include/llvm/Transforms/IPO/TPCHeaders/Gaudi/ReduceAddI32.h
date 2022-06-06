@@ -1,12 +1,3 @@
-//===--------ReduceAddI32.h-----------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 const llvm::StringRef GaudiReduceAddI32LL = R"(
 ; Function Attrs: alwaysinline nounwind
 define  dso_local <64 x i32> @v_i32_reduce_add(<64 x i32> %x) local_unnamed_addr #5 {
@@ -19,9 +10,9 @@ entry:
   %5 = bitcast <64 x float> %1 to <256 x i8>
   %6 = bitcast <64 x float> %3 to <256 x i8>
   %7 = bitcast <64 x float> %4 to <256 x i8>
-  %8 = call <64 x i32> @llvm.tpc.mov.dual.group.all.v64i32.i1(<64 x i32> %x, i32 -1, i32 16756992, <64 x i32> zeroinitializer, i1 true, i1 false)
+  %8 = call <64 x i32> @llvm.tpc.mov.dual.group.all.v64i32.i1(<64 x i32> %x, i32 -1, i32 0, i32 16756992, <64 x i32> zeroinitializer, i1 true, i1 false)
   %9 = add <64 x i32> %8, %x
-  %10 = call <64 x i32> @llvm.tpc.mov.dual.group.all.v64i32.i1(<64 x i32> %9, i32 -1, i32 16731648, <64 x i32> %8, i1 true, i1 false)
+  %10 = call <64 x i32> @llvm.tpc.mov.dual.group.all.v64i32.i1(<64 x i32> %9, i32 -1, i32 0, i32 16731648, <64 x i32> %8, i1 true, i1 false)
   %11 = add <64 x i32> %9, %10
   %12 = call <64 x i32> @llvm.tpc.mov.group.v64i32.v64i32.i1(<64 x i32> %11, i32 -1, i32 63, <64 x i32> %10, i1 true, i1 false)
   %13 = add <64 x i32> %11, %12
@@ -82,7 +73,7 @@ declare <64 x float> @llvm.tpc.lookup.1c.v64f32.v64i32(<64 x i32>, i32, i32, <64
 
 declare <128 x float> @llvm.tpc.lookup.2c.v128f32.v64i32(<64 x i32>, i32, i32, <128 x float>, i1, i1) #2
 
-declare <64 x i32> @llvm.tpc.mov.dual.group.all.v64i32.i1(<64 x i32>, i32, i32, <64 x i32>, i1, i1) #2
+declare <64 x i32> @llvm.tpc.mov.dual.group.all.v64i32.i1(<64 x i32>, i32, i32, i32, <64 x i32>, i1, i1) #2
 
 declare <64 x i32> @llvm.tpc.mov.group.v64i32.v64i32.i1(<64 x i32>, i32, i32, <64 x i32>, i1, i1) #2
 

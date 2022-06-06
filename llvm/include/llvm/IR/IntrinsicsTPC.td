@@ -26,14 +26,51 @@ let TargetPrefix = "tpc" in {  // All intrinsics start with "llvm.tpc.".
 def int_tpc_get_index_space_offset : Intrinsic<[llvm_v5i32_ty], [], [IntrNoMem]>;
 def int_tpc_get_index_space_size   : Intrinsic<[llvm_v5i32_ty], [], [IntrNoMem]>;
 
-def int_tpc_read_lfsr              : Intrinsic<[llvm_v256i8_ty], [], []>;
-def int_tpc_write_lfsr             : Intrinsic<[], [llvm_v256i8_ty], []>;
-def int_tpc_read_lfsrnc            : Intrinsic<[llvm_v256i8_ty], [], [IntrNoMem]>;
+def int_tpc_read_lfsr              : Intrinsic<[llvm_v256i8_ty],
+                                               [ llvm_v256i8_ty,     // Income
+                                                 llvm_any_ty,        // Predicate (i1/v256i1)
+                                                 llvm_i1_ty          // Polarity
+                                               ],
+                                               []>;
+def int_tpc_write_lfsr             : Intrinsic<[],
+                                               [ llvm_v256i8_ty,     // Src
+                                                 llvm_any_ty,        // Predicate (i1/v256i1)
+                                                 llvm_i1_ty          // Polarity
+                                               ],
+                                               [IntrWriteMem, IntrInaccessibleMemOnly]>;
+def int_tpc_read_lfsrnc            : Intrinsic<[llvm_v256i8_ty],
+                                               [ llvm_v256i8_ty,     // Income
+                                                 llvm_any_ty,        // Predicate (i1/v256i1)
+                                                 llvm_i1_ty          // Polarity
+                                               ],
+                                               [IntrReadMem, IntrInaccessibleMemOnly]>;
 
-def int_tpc_s_read_lfsr              : Intrinsic<[llvm_i32_ty], [], []>;
-def int_tpc_write_lfsr_s             : Intrinsic<[], [llvm_i32_ty], []>;
-def int_tpc_s_read_lfsrnc            : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
+def int_tpc_s_read_lfsr              : Intrinsic<[llvm_i32_ty],
+                                                 [ llvm_i32_ty,        // Income
+                                                   llvm_i1_ty,         // Predicate
+                                                   llvm_i1_ty          // Polarity
+                                                 ],
+                                                 []>;
+def int_tpc_write_lfsr_s             : Intrinsic<[],
+                                                 [ llvm_i32_ty,        // Src
+                                                   llvm_i1_ty,         // Predicate
+                                                   llvm_i1_ty          // Polarity
+                                                 ],
+                                                 [IntrWriteMem, IntrInaccessibleMemOnly]>;
+def int_tpc_s_read_lfsrnc            : Intrinsic<[llvm_i32_ty],
+                                                 [ llvm_i32_ty,        // Income
+                                                   llvm_i1_ty,         // Predicate
+                                                   llvm_i1_ty          // Polarity
+                                                 ],
+                                                 [IntrReadMem, IntrInaccessibleMemOnly]>;
 
+
+def int_tpc_read_lane_id             : Intrinsic<[llvm_any_ty],
+                                                 [ LLVMMatchType<0>,   // Income
+                                                   llvm_any_ty,        // Predicate
+                                                   llvm_i1_ty          // Polarity
+                                                 ],
+                                                 [IntrNoMem]>;
 
 //------ MOVs ------------------------------------------------------------------
 
@@ -200,6 +237,18 @@ def int_tpc_lookup_1c     : Intrinsic<[llvm_anyvector_ty],
 def int_tpc_lookup_2c     : Intrinsic<[llvm_anyvector_ty],
                                       [llvm_any_ty, llvm_i32_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_i1_ty, llvm_i1_ty],
                                       [IntrNoMem]>;
+def int_tpc_ld_tnsr_cnvrt : Intrinsic<[llvm_anyvector_ty],
+                                      [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_any_ty, llvm_i1_ty],
+                                      [IntrNoMem]>;
+def int_tpc_ld_tnsr_cnvrt_partial : Intrinsic<[llvm_anyvector_ty],
+                                              [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_any_ty, llvm_i1_ty],
+                                              [IntrNoMem]>;
+def int_tpc_ld_tnsr_cnvrt_direct : Intrinsic<[llvm_anyvector_ty],
+                                             [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_any_ty, llvm_i1_ty],
+                                             [IntrNoMem]>;
+def int_tpc_ld_tnsr_cnvrt_partial_direct : Intrinsic<[llvm_anyvector_ty],
+                                                     [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_any_ty, llvm_i1_ty],
+                                                     [IntrNoMem]>;
 
 //------ Scalar slot, also instructions common for scalar and vector slots.
 
@@ -730,10 +779,54 @@ def int_tpc_convert_int64   : Intrinsic<[llvm_any_ty],
                                       ],
                                       [IntrNoMem]>;
 
+// Universal routine to convert any vector types (u/int, fp) and keep order of elements (no swizzling).
+// A chain of intermediate conversions will be generated automatically if target architecture does not 
+// support direct hardware conversion. 
+// Supports native TPC rounding modes, saturation and clipping where applicable. 
+// The rounding mode switches are the same as for TPC-C API (tpc-defs.h):
+//         \li SW_RHNE - Round half to nearest even.
+//         \li SW_RZ - Round zero.
+//         \li SW_RU - Round up.
+//         \li SW_RD - Round down.
+//         \li SW_SR - Stochastic Rounding.
+//         \li SW_RHAZ - Round half away from zero.
+//         \li SW_CSR - Take rounding mode from CSR register 
+//         \li SW_SR_RNE - Stochastic Rounding, but use RNE when rounding denormals.
+//         \li SW_CLIP_FP - Convert FP with clipping.
+// Source and destination DT should be specified explicitly, this allows to distinguish 
+// between signed vs unsigned types. 
+// The source DT is passed via dedicated arg, values follow PRM encoding of optype.
+// The dest DT is passed via switch operand, values have optype encoding shifted left by 8 (see InstructionDB.h):
+//    SW_TO_FP32            = OpType::FP32 << 8,
+//    SW_TO_BF16            = OpType::BF16 << 8,
+//    SW_TO_INT32           = OpType::INT32 << 8,
+//    SW_TO_UINT32          = OpType::UINT32 << 8,
+//    SW_TO_INT8            = OpType::INT8 << 8,
+//    SW_TO_UINT8           = OpType::UINT8 << 8,
+//    SW_TO_INT16           = OpType::INT16 << 8,
+//    SW_TO_UINT16          = OpType::UINT16 << 8,
+//    SW_TO_FP16            = OpType::FP16 << 8,
+//    SW_TO_FP8_152         = OpType::FP8_152 << 8,
+//    SW_TO_FP8_143         = OpType::FP8_143 << 8,
+def int_tpc_convert_linear       : Intrinsic<[llvm_any_ty],
+                                      [ llvm_any_ty,       // Value to convert
+                                        llvm_i8_ty,        // Src DataType
+                                        llvm_i32_ty,       // Switches (Dest datatype, rounding mode)
+                                        LLVMMatchType<0>,  // Income
+                                        llvm_any_ty,       // Predicate (i1/v256i1)
+                                        llvm_i1_ty         // Polarity
+                                      ],
+                                      [IntrNoMem]>;
+
+// Universal routine to convert any vector types (u/int, fp) w/ swizzling 
+// (i.e. to perform native TPC behaviour for up- or down-converts).
+// A chain of intermediate conversions will be generated automatically if 
+// target architecture does not support direct hardware conversion.
+// Switches and DT follow the same convention as int_tpc_convert_linear().
 def int_tpc_convert       : Intrinsic<[llvm_any_ty],
                                       [ llvm_any_ty,       // Value to convert
-                                        llvm_i8_ty,        // DataType
-                                        llvm_i32_ty,       // Switches
+                                        llvm_i8_ty,        // Src DataType
+                                        llvm_i32_ty,       // Switches (Dest datatype, rounding mode)
                                         LLVMMatchType<0>,  // Income
                                         llvm_any_ty,       // Predicate (i1/v256i1)
                                         llvm_i1_ty         // Polarity
@@ -759,7 +852,28 @@ def int_tpc_convert_uint  : Intrinsic<[llvm_any_ty],
                                       ],
                                       [IntrNoMem]>;
 
-// Floating point rounding mode intrinsics
+def int_tpc_convert_int_linear   : Intrinsic<[llvm_any_ty],
+                                      [ llvm_any_ty,       // Value to convert
+                                        llvm_any_ty,       // Shift value (char/char256)
+                                        llvm_i32_ty,       // Switches
+                                        LLVMMatchType<0>,  // Income
+                                        llvm_any_ty,       // Predicate (i1/v256i1)
+                                        llvm_i1_ty         // Polarity
+                                      ],
+                                      [IntrNoMem]>;
+def int_tpc_convert_uint_linear  : Intrinsic<[llvm_any_ty],
+                                      [ llvm_any_ty,       // Value to convert
+                                        llvm_any_ty,       // Shift value (char/char256)
+                                        llvm_i32_ty,       // Switches
+                                        LLVMMatchType<0>,  // Income
+                                        llvm_any_ty,       // Predicate (i1/v256i1)
+                                        llvm_i1_ty         // Polarity
+                                      ],
+                                      [IntrNoMem]>;
+
+
+
+// Floating point rounding mode intrinsics (deprecated)
 def int_tpc_fptrunc_swch  : Intrinsic<[llvm_anyfloat_ty],
                                       [ llvm_anyfloat_ty,       // Value to convert
                                         llvm_i32_ty,            // Switches
@@ -856,6 +970,8 @@ def int_tpc_calc_fp_special : Intrinsic<[llvm_any_ty],
                                       [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i8_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_any_ty, llvm_i1_ty],
                                       [IntrNoMem]>;
 
+def int_tpc_thread_sync  : Intrinsic<[], [], []>;
+
 def int_tpc_convert_fp_flex  : Intrinsic<[llvm_any_ty],
                                          [ llvm_any_ty,
                                            llvm_any_ty,       // i16 or v256i16
@@ -890,6 +1006,7 @@ def int_tpc_mov_group     : Intrinsic<[llvm_any_ty],
 def int_tpc_mov_dual_group : Intrinsic<[llvm_anyvector_ty],
                                       [ LLVMMatchType<0>,  // Source
                                         llvm_i32_ty,       // ByteEn (encoded in immediate)
+                                        llvm_i32_ty,       // CTRL value (encoded in imm or scalar (since doron1))
                                         llvm_i32_ty,       // Switches
                                         LLVMMatchType<0>,  // Income value
                                         llvm_any_ty,       // Predicate (i1/v256i1)
@@ -899,6 +1016,7 @@ def int_tpc_mov_dual_group : Intrinsic<[llvm_anyvector_ty],
 def int_tpc_mov_dual_group_all : Intrinsic<[llvm_anyvector_ty],
                                       [ LLVMMatchType<0>,  // Source
                                         llvm_i32_ty,       // ByteEn (encoded in immediate)
+                                        llvm_i32_ty,       // CTRL value (encoded in imm or scalar (since doron1))
                                         llvm_i32_ty,       // Switches
                                         LLVMMatchType<0>,  // Income value
                                         llvm_any_ty,       // Predicate (i1/v256i1)
@@ -1082,11 +1200,11 @@ def int_tpc_st_tnsr_high_rmw_direct : Intrinsic<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                       [IntrWriteMem]>;
 
-def int_tpc_st_tnsr_sqz       : Intrinsic<[llvm_i32_ty],
-                                          [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
+def int_tpc_st_tnsr_sqz       : Intrinsic<[],
+                                          [llvm_v5i32_ty, llvm_i8_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
                                           [IntrWriteMem]>;
-def int_tpc_st_tnsr_sqz_rmw   : Intrinsic<[llvm_i32_ty],
-                                          [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
+def int_tpc_st_tnsr_sqz_rmw   : Intrinsic<[],
+                                          [llvm_v5i32_ty, llvm_i8_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
                                           [IntrWriteMem]>;
 
 def int_tpc_st_tnsr_s         : Intrinsic<[],
@@ -1102,11 +1220,72 @@ def int_tpc_st_tnsr_s_hwr_rmw : Intrinsic<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                           [IntrWriteMem]>;
 
+def int_tpc_reset_sqz_cntr    : Intrinsic<[], [llvm_i8_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty], [IntrHasSideEffects]>;
+
 def int_tpc_cache_flush       : Intrinsic<[], [llvm_i32_ty, llvm_i1_ty, llvm_i1_ty], []>;
 def int_tpc_cache_invalidate  : Intrinsic<[], [llvm_i32_ty, llvm_i1_ty, llvm_i1_ty], []>;
+
+def int_tpc_cache_flush_addr      : Intrinsic<[], [global_ptr_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty], []>;
+def int_tpc_cache_invalidate_addr : Intrinsic<[], [global_ptr_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty], []>;
 
 def int_tpc_tanh : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
 def int_tpc_reciprocal : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
 def int_tpc_rsqrt : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
+def int_tpc_swizzle : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+def int_tpc_gen_stage1_seed_v64f32 : Intrinsic<[llvm_v64f32_ty], [llvm_i32_ty]>;
+
+//===------------------------ Cast LTO Intrinsics -------------------------===//
+let IntrProperties = [IntrNoMem, IntrWillReturn] in {
+  def int_tpc_trunc_i32_to_i8 : Intrinsic<[llvm_v256i8_ty], [llvm_v64i32_ty, llvm_v64i32_ty, llvm_v64i32_ty, llvm_v64i32_ty]>;
+}
+
+//===------------------------ Reduction Intrinsics ------------------------===//
+//
+let IntrProperties = [IntrNoMem, IntrWillReturn] in {
+  def int_tpc_vector_reduce_v2_fadd  : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_v2_fmul  : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_add  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_mul  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_and  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_or  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_xor  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_smax  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_smin  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_umax  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_umin  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_fmax  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+  def int_tpc_vector_reduce_fmin  : Intrinsic<[llvm_anyvector_ty], [LLVMMatchType<0>]>;
+}
+
+//===------------------------ MMIO access Intrinsics ----------------------===//
+let IntrProperties = [IntrReadMem, IntrWillReturn] in {
+  def int_tpc_get_dim_size   : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty]>;
+  def int_tpc_get_dim_stride : Intrinsic<[llvm_i32_ty], [llvm_i32_ty, llvm_i32_ty]>;
+
+  def int_tpc_get_tensor_hwpref_stride : Intrinsic<[llvm_i32_ty], [llvm_i32_ty]>;
+
+  def int_tpc_get_pad_value : Intrinsic<[llvm_any_ty],   [llvm_i32_ty]>;
+}
+
+let IntrProperties = [IntrWriteMem, IntrWillReturn] in {
+  def int_tpc_set_dim_size   : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty]>;
+  def int_tpc_set_dim_stride : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty, llvm_i32_ty]>;
+
+  def int_tpc_set_tensor_hwpref_stride : Intrinsic<[], [llvm_i32_ty, llvm_i32_ty]>;
+
+  def int_tpc_set_pad_value : Intrinsic<[], [llvm_i32_ty, llvm_any_ty]>;
+}
+
+let IntrProperties = [IntrWillReturn] in {
+  def int_tpc_get_semaphore_value : Intrinsic<[llvm_i32_ty]>;
+  def int_tpc_set_semaphore_value : Intrinsic<[], [llvm_i32_ty]>;
+
+  def int_tpc_get_csr_value : Intrinsic<[llvm_i32_ty]>;
+  def int_tpc_set_csr_value : Intrinsic<[], [llvm_i32_ty]>;
+
+  def int_tpc_get_convert_csr_value : Intrinsic<[llvm_i32_ty]>;
+  def int_tpc_set_convert_csr_value : Intrinsic<[], [llvm_i32_ty]>;
+}
+
 }
 

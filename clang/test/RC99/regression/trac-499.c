@@ -17,7 +17,7 @@ void main(tensor ifm , tensor mean_tensor, tensor var_tensor)
     int5 storeCoord = {0,0,0,0,0};
     for (int z = 0 ; z < a[1]; z += 1)
     {
-        f32_st_tnsr_i_v_b(storeCoord, mean_tensor, z==0 ? ss : mean, 1,0);
+        v_f32_st_tnsr(storeCoord, mean_tensor, z==0 ? ss : mean, 0, 1, 0);
     }
 }
 

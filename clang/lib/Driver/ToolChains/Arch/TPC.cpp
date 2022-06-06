@@ -1,12 +1,7 @@
 //===--- TPC.cpp - TPC Helpers for Tools ------------------------*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
+
 #include "TPC.h"
 #include "ToolChains/CommonArgs.h"
 #include "clang/Driver/Driver.h"
@@ -20,8 +15,7 @@ using namespace clang::driver::tools;
 using namespace clang;
 using namespace llvm::opt;
 
-const char *tpc::getTPCTargetCPU(const ArgList &Args,
-                                 const llvm::Triple &Triple) {
+const char *tpc::getTPCTargetCPU(const ArgList &Args) {
   StringRef CPU;
   if (const Arg *A = Args.getLastArg(options::OPT_march_EQ))
     CPU = A->getValue();
@@ -32,6 +26,8 @@ const char *tpc::getTPCTargetCPU(const ArgList &Args,
 
   if (CPU.equals("dali"))
     return "goya";
+  if (CPU.equals("goya2"))
+    return "greco";
   if (!CPU.empty())
     return CPU.data();
 

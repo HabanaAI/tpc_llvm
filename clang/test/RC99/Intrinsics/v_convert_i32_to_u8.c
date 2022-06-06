@@ -31,7 +31,7 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
 
     res = v_convert_i32_to_u8_b(x, 2, SW_RHNE, res, 1, 0);
     *dest_ptr++ = res;
-// CHECK: convert.i32 lane_sel=2 target_type=uint8 rhne [[DEST]], [[SRC]], %SP0
+// CHECK: convert.i32 lane_sel=2 target_type=uint8 rhne [[DEST]], [[SRC]]
     
     res = v_convert_i32_to_u8_b(x, 1, 0, res, pred, 0);
     *dest_ptr++ = res;

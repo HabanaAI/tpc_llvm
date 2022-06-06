@@ -1,5 +1,5 @@
 // RUN: %clang -cc1as -triple tpc-none-none -filetype obj %s -o %t.o
-// RUN: llvm-objdump -s -j .text %t.o | FileCheck %s
+// RUN: %llvm-objdump --triple tpc -s -j .text %t.o | FileCheck %s
 
 	.text
 	.globl	main

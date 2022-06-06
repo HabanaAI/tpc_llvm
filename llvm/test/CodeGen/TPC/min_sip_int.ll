@@ -82,8 +82,8 @@ declare <5 x i32> @llvm.tpc.get.index.space.size() #1
 !6 = !{!"omnipotent char", !7, i64 0}
 !7 = !{!"Simple C/C++ TBAA"}
 
-; CHECK: min.i16  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80, %SP{{[0-9]+}}
-; CHECK: min.i8  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x40, %SP{{[0-9]+}}
-; CHECK: min.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80, %SP{{[0-9]+}}
-; CHECK: convert.i16 target_type=int32 rhne %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: convert.i8 target_type=int32 rhne %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK: min.i16  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80
+; CHECK: min.i8  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x40
+; CHECK: min.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80
+; CHECK: convert.i16 target_type=int32 rhne %S{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK: convert.i8 target_type=int32 rhne %S{{[0-9]+}}, %S{{[0-9]+}}

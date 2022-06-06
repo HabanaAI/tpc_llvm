@@ -1,17 +1,15 @@
 //===- TPCLatencyResolver.cpp ---- Latency Resolver for TPC ---------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 //===----------------------------------------------------------------------===//
 
 #include "TPCInstrInfo.h"
+#include "TPCLoopData.h"
 #include "TPCSubtarget.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "TPCMachineScheduler.h"
+#include "TPCTargetMachine.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineScheduler.h"
@@ -36,6 +34,14 @@ static cl::opt<bool> DisableDelaySlotUtilization("tpc-disable-delay-slot-utiliza
   cl::ZeroOrMore, cl::init(false),
   cl::desc("Disable loop delay slot utilization"));
 
+static cl::opt<bool> DisableJmpDelaySlotUtilization("tpc-disable-jmp-slot-utilization", cl::Hidden,
+  cl::ZeroOrMore, cl::init(false),
+  cl::desc("Disable JMP delay slot utilization"));
+
+static cl::opt<bool> UseTakenJumpBubbles("tpc-use-taken-jump-bubbles", cl::Hidden,
+  cl::ZeroOrMore, cl::init(true),
+  cl::desc("Use 5 bubbles of taken jump to hide latency"));
+
 // LLVM-425 ld_tnsr cannot be scheduled at 4 cycle after st_tnsr
 static cl::opt<bool> EnableLdTnsrWorkaround("tpc-ld-tnsr-workaround", cl::Hidden,
               cl::init(true),
@@ -58,6 +64,9 @@ public:
     ItinData = nullptr;
     TII = nullptr;
     TRI = nullptr;
+    Subtarget = nullptr;
+    checking_loop_delay_slot = false;
+    checking_jmp_delay_slot = false;
   };
   void getAnalysisUsage(AnalysisUsage &AU) const override;
   bool runOnMachineFunction(MachineFunction &Fn) override;
@@ -65,36 +74,44 @@ public:
 private:
   MachineLoopInfo          * MLI;
   MachineFunction          * MF;
+  const TPCSubtarget       * Subtarget;
   const InstrItineraryData * ItinData;
   const TargetInstrInfo    * TII;
   const TargetRegisterInfo * TRI;
 
-  int  getRequiredDistance(const MachineInstr& DefMI, const MachineInstr& UseMI ,int curDistance);
-  int  getBBCycles(MachineBasicBlock* MBB, MachineBasicBlock* Succ, bool ignore_loop_instr);
+  bool checking_loop_delay_slot;
+  bool checking_jmp_delay_slot;
+
+  int  getRequiredDistance(const MachineInstr& DefMI, const MachineInstr& UseMI,
+                           int curDistance, bool instrFollowingJump = false);
+  int  getBBCycles(MachineBasicBlock* MBB, MachineBasicBlock* Succ);
   void insertDebugNops(MachineBasicBlock& MBB, int numPreNops);
   void fixSmallLoops(MachineBasicBlock& MBB);
   void fillLoopDelaySlot(MachineBasicBlock& MBB);
+  void fillJmpDelaySlot(MachineBasicBlock& MBB);
   void ensureLoopEndAndJmpLatency(MachineBasicBlock& MBB);
-  bool resolveBlockLatency(MachineBasicBlock& MBB, bool check_only = false, bool ignore_loop_instr = false);
+  bool resolveBlockLatency(MachineBasicBlock& MBB, bool check_only = false);
   bool resolveFunctionLatency(MachineFunction &MF);
   bool resolveCrossBlockLatency(MachineBasicBlock& MBB,
                                 bool topdown = false,
                                 bool deep = false,
-                                bool check_only = false,
-                                bool ignore_loop_instr = false);
+                                bool check_only = false);
   bool resolveCrossBlockLatency(MachineBasicBlock& MBB,
                                 MachineBasicBlock* PredMBB,
                                 bool topdown,
                                 bool deep,
                                 int distance,
                                 bool check_only,
-                                bool ignore_loop_instr,
 				std::vector<const MachineBasicBlock*> ProcessedBB);
   int getRequiredBBDistance(MachineBasicBlock* PBB,
-				MachineBasicBlock* SBB,
-				bool ignore_loop_instr);
+				MachineBasicBlock* SBB);
 
   bool isLoopTaken(const MachineInstr *MI);
+  
+  // Insert three noops bundle at the end of the last basic block if the block
+  // has not a HALT instructions.
+  // If the block has a HALT instruction do nothing.
+  void AddNopsForLastLayoutBlock();
 };
 
 }
@@ -119,21 +136,20 @@ FunctionPass* createTPCLatencyResolver() {
 // isHaltInstr: returns true if MI is a HALT instruction
 //
 static bool isHaltInstr(const MachineInstr* MI) {
-    if (MI->isBundle()) {
-      const MachineBasicBlock* MBB = MI->getParent();
-      MachineBasicBlock::const_instr_iterator MII = MI->getIterator();
-      for (++MII; MII != MBB->instr_end() && MII->isInsideBundle(); ++MII) {
-        const MachineInstr& BMI = *MII;
-	if (isHaltInstr(&BMI))
-	  return true;
-      }
+  if (MI->isBundle()) {
+    const MachineBasicBlock* MBB = MI->getParent();
+    MachineBasicBlock::const_instr_iterator MII = MI->getIterator();
+    for (++MII; MII != MBB->instr_end() && MII->isInsideBundle(); ++MII) {
+      const MachineInstr& BMI = *MII;
+      if (isHaltInstr(&BMI))
+        return true;
     }
-    else {
-	if ((MI->getOpcode() == TPC::HALTs) || (MI->getOpcode() == TPC::HALTv)) {
-	  return true;
-	}
+  } else {
+    if ((MI->getOpcode() == TPC::HALTs) || (MI->getOpcode() == TPC::HALTv)) {
+      return true;
     }
-    return false;
+  }
+  return false;
 }
 
 //
@@ -254,11 +270,13 @@ void TPCLatencyResolver::getAnalysisUsage(AnalysisUsage &AU) const {
 
 bool TPCLatencyResolver::runOnMachineFunction(MachineFunction &Fn) {
   MF = &Fn;
+  Subtarget = &Fn.getSubtarget<TPCSubtarget>();
   TII = Fn.getSubtarget().getInstrInfo();
   ItinData = Fn.getSubtarget().getInstrItineraryData();
   TRI = Fn.getSubtarget().getRegisterInfo();
   MLI = &getAnalysis<MachineLoopInfo>();
   TRI = Fn.getSubtarget().getRegisterInfo();
+  
 
   LLVM_DEBUG(dbgs() << "\n\n*** TPC Latency Resolver\n\n");
 
@@ -301,37 +319,18 @@ bool TPCLatencyResolver::runOnMachineFunction(MachineFunction &Fn) {
 
   for (auto &MBB : Fn) {
     if (!MBB.empty()) {
+      fillJmpDelaySlot(MBB);
+    }
+  }
+
+  for (auto &MBB : Fn) {
+    if (!MBB.empty()) {
       ensureLoopEndAndJmpLatency(MBB);
     }
   }
+  
+  AddNopsForLastLayoutBlock();
   return true;
-}
-
-static bool getLoopTakenFromMetadata(const MDNode* LoopMD) {
-  // First operand should refer to the loop id itself.
-  assert(LoopMD->getNumOperands() > 0 && "requires at least one operand");
-
-  MDNode *MD = nullptr;
-
-  for (unsigned i = 1, e = LoopMD->getNumOperands(); i < e; ++i) {
-    MD = dyn_cast<MDNode>(LoopMD->getOperand(i));
-    if (!MD)
-      continue;
-
-    MDString *S = dyn_cast<MDString>(MD->getOperand(0));
-    if (!S)
-      continue;
-
-    if (S->getString().equals("llvm.loop.taken")) {
-      assert(MD->getNumOperands() == 2 &&
-             "Loop taken hint metadata should have two operands.");
-      unsigned Count =
-        mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
-      return Count != 0;
-    }
-  }
-
-  return false;
 }
 
 static bool ignoreInstr(MachineInstr *MI) {
@@ -345,26 +344,24 @@ static bool ignoreInstr(MachineInstr *MI) {
 bool TPCLatencyResolver::isLoopTaken(const MachineInstr *MI) {
   assert(MI->getOpcode() == TPC::LOOPEND);
 
-  if (MF->getSubtarget<TPCSubtarget>().getTargetLowering()->getTargetMachine().Options.AllLoopsTaken) {
+  if (Subtarget->getTargetLowering()->getTargetMachine().Options.AllLoopsTaken) {
     return true;
-  }
-  
-  const MDNode* LoopMD = nullptr;
-
-  if(MI->getOperand(MI->getNumOperands() - 5).isMetadata()) {
-    LoopMD = MI->getOperand(MI->getNumOperands() - 5).getMetadata();
   }
 
   // Get info from pragma
-  if (LoopMD)
-    return getLoopTakenFromMetadata(LoopMD);
-  return false;
+  return any_of(MI->operands(), [&](const MachineOperand &MO) {
+    return MO.isMetadata() && hasLoopTakenMD(*MO.getMetadata());
+  });
 }
 
 static bool isFloatData(TPCII::OpType X) {
   switch (X) {
   case TPCII::OpType::BF16:
+  case TPCII::OpType::FP16:
   case TPCII::OpType::FP32:
+  // Gaudi2 opcodes:
+  case TPCII::OpType::FP8_152:
+  case TPCII::OpType::FP8_143:
     return true;
   default:
     return false;
@@ -387,22 +384,14 @@ static bool HasLookup(const MachineInstr &MI) {
 
 // TODO: When a loop instruction will implicit-def only one iterator
 // register, use Reg argument.
-static bool HasLoopIter(const MachineInstr& MI/*, Register Reg*/) {
+static bool hasLoopIter(const MachineInstr &MI, const TPCSubtarget &ST) {
   assert(!MI.isBundle());
-  for (unsigned i = 0; i < MI.getNumOperands(); ++i) {
-    const MachineOperand &MO = MI.getOperand(i);
-    if (!MO.isReg())
-      continue;
-
-    Register Reg = MO.getReg();
-    if (Reg == TPC::S32 || Reg == TPC::S33 || Reg == TPC::S34 ||
-        Reg == TPC::S35)
-      return true;
-  }
-
-  return false;
+  return any_of(MI.operands(), [&](const MachineOperand &MO) {
+    return MO.isReg() && ST.isHWLoopReg(MO.getReg());
+  });
 }
 
+/*
 static MachineBasicBlock * GetPrevNonEmptyMBB(const MachineBasicBlock *MBB) {
   assert(MBB);
   MachineBasicBlock *LayoutPred = nullptr;
@@ -418,6 +407,26 @@ static MachineBasicBlock * GetPrevNonEmptyMBB(const MachineBasicBlock *MBB) {
   else
     return GetPrevNonEmptyMBB(LayoutPred);
 }
+*/
+
+#if 0
+static bool IsPredicateJmp(const MachineInstr *MI) {
+  if (MI->isBundle()) {
+    const MachineBasicBlock* MBB = MI->getParent();
+    MachineBasicBlock::const_instr_iterator MII = MI->getIterator();
+    for (++MII; MII != MBB->instr_end() && MII->isInsideBundle(); ++MII) {
+      const MachineInstr& BMI = *MII;
+      if (IsPredicateJmp(&BMI))
+        return true;
+    }
+    return false;
+  }
+
+  return (MI->getOpcode() == TPC::JMPR || MI->getOpcode() == TPC::JMPA) &&
+    (MI->getOperand(1).getReg() != TPC::SPRF_TRUE ||
+     MI->getOperand(2).getImm() != 0);
+}
+#endif
 
 //
 // getRequiredDistance ()
@@ -426,23 +435,24 @@ static MachineBasicBlock * GetPrevNonEmptyMBB(const MachineBasicBlock *MBB) {
 //
 int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
                                             const MachineInstr& UseMI,
-                                            int curDistance) {
+                                            int   curDistance,
+                                            bool  instrFollowingJump) {
   int alatency = 0;
-  std::vector<const MachineInstr*> DefInstrs;
-  std::vector<const MachineInstr*> UseInstrs;
 
   // Needed for EnableLdTnsrGaudiWorkaround
   bool defHasStTnsr = false;
   bool useHasLdTnsr = false;
   bool needLdTnsrWorkaround = false;
+  bool hasGaudi2StlvLookupRestrict = false;
 
-  if (curDistance <= 4 && EnableLdTnsrWorkaround) {
+  if (curDistance <= 4 && EnableLdTnsrWorkaround &&
+      Subtarget->isPriorGen4()/*<=goya2*/) {
     needLdTnsrWorkaround = true;
   }
 
   // Collect all instructions from DefMI bundle
   //
-  DefInstrs.clear();
+  SmallVector<const MachineInstr *, 8> DefInstrs;
   if (DefMI.isBundle()) {
     const MachineBasicBlock* MBB = DefMI.getParent();
     MachineBasicBlock::const_instr_iterator MII = DefMI.getIterator();
@@ -457,7 +467,7 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
   
   // Collect all instructions from UseMI bundle
   //
-  UseInstrs.clear();
+  SmallVector<const MachineInstr *, 8> UseInstrs;
   if (UseMI.isBundle()) {
     const MachineBasicBlock* MBB = UseMI.getParent();
     MachineBasicBlock::const_instr_iterator MII = UseMI.getIterator();
@@ -496,6 +506,15 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
               TRI->isSubRegister(UReg, DReg)) {
             int lat = TII->getOperandLatency(ItinData, *DMI, DefIdx, *UMI, UseIdx);
             alatency = std::max(alatency, lat);
+
+            // It is not allowed to modify a register 3 cycles before a lookup
+            // instruction which is using it as a source (i.e. not allowed to
+            // have exactly 2 instructions separating the producer-instruction
+            // and the lookup-consumer-instruction).
+            if (TPCII::isLookup(DMI->getDesc()) &&
+                Subtarget->hasGen3Plus() &&
+                (alatency == 4 || curDistance == 4))
+              alatency = 5;
           }
         }
       }
@@ -524,46 +543,54 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
         }
       }
 
-      // One cycle After LOOKUP_C1C2, LOOKUP_C0 and LOOKUP, a VPU instruction
-      // which uses SRC_D isn't allowed to scheduled.
+      // One cycle After LOOKUP_C1C2, LOOKUP_C0 and LOOKUP (for Goya), a VPU
+      // instruction which uses SRC_D isn't allowed to scheduled.
       // TODO: check for SrcD here
       //
       if (TPCII::isVPUInst(UMI->getDesc()) && !isNopInstr(UMI)) {
         bool srcD = isUsingSrcD(UMI, ItinData);
-        if (srcD && TPCII::isLookupC(DMI->getDesc())) {
-          alatency = std::max(alatency, 2);
+        
+        if (!Subtarget->hasGoyaISA()) {
+          if (srcD && TPCII::isLookupC(DMI->getDesc()))
+            alatency = std::max(alatency, 2);
+        } else {
+          if (srcD && TPCII::isLookup(DMI->getDesc()))
+            alatency = std::max(alatency, 2);
         }
       }
 
-      // One cycles After LOOKUP_C0C2, LOOKUP_C1 and LOOKUP, the LOAD issue slot must
-      // contain an NOP instruction.
+      // One cycles After LOOKUP_C0C2, LOOKUP_C1 and LOOKUP (for Goya), the
+      // LOAD issue slot must contain an NOP instruction.
       //
       if (TPCII::isLoadInst(UMI->getDesc()) && !isNopInstr(UMI)) {
-        if (TPCII::isLookupC(DMI->getDesc())) {
-          alatency = std::max(alatency, 2);
+        if (!Subtarget->hasGoyaISA()) {
+          if (TPCII::isLookupC(DMI->getDesc()))
+            alatency = std::max(alatency, 2);
+        } else {
+          if (TPCII::isLookup(DMI->getDesc()))
+            alatency = std::max(alatency, 2);
         }
       }
 
       // One cycle After LOOKUP_C1C2, LOOKUP_C0 and LOOKUP,
       // ST_L_V isn't allowed to be scheduled.
-      //
-      if (TPCII::isStoreInst(UMI->getDesc()) &&
-          opcUse == TPCII::ST_L_V) {
-        if (TPCII::isLookupC(DMI->getDesc())) {
-          alatency = std::max(alatency, 2);
-        }
+      // Only for Goya
+      if ((Subtarget->hasGoyaISA() || Subtarget->hasGaudiISA() || Subtarget->hasGrecoISA() ||Subtarget->hasGaudiBISA()) &&
+          TPCII::isStoreInst(UMI->getDesc()) &&
+          opcUse == TPCII::ST_L_V && TPCII::isLookup(DMI->getDesc())) {
+        alatency = std::max(alatency, 2);
       }
 
       // After LOOKUP_1C, LOOKUP_2C and LOOKUP,
       // the STORE issue slot must not contain a LD_TNSR* instruction.
-      //
-      if (TPCII::isStoreInst(UMI->getDesc()) &&
+      // Goya2 (Greco) and Gaudi2
+      if (Subtarget->hasGen3Plus() &&
+          TPCII::isStoreInst(UMI->getDesc()) &&
           (opcUse == TPCII::stLD_TNSR ||
            opcUse == TPCII::stLD_TNSR_LOW ||
-           opcUse == TPCII::stLD_TNSR_HIGH)) {
-        if (TPCII::isLookup(DMI->getDesc())) {
-          alatency = std::max(alatency, 2);
-        }
+           opcUse == TPCII::stLD_TNSR_HIGH) &&
+           TPCII::isLookup(DMI->getDesc())) {
+        alatency = std::max(alatency, 2);
       }
 
 
@@ -584,15 +611,9 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
 
       // 1 Insturction after JMP*, a NOP must exists in all issue slots, besides VPU issue slot.
       //
-      if (!TPCII::isVPUInst(UMI->getDesc()) && !isNopInstr(UMI)) {
+      if (!Subtarget->hasDoron1ISA() && !TPCII::isVPUInst(UMI->getDesc()) && !isNopInstr(UMI)) {
         if (isJmpInstr(DMI)) {
-          MachineBasicBlock * DestMBB = getJmpDest(DMI);
-          const MachineBasicBlock * UseMBB = UMI->getParent();
-          const MachineBasicBlock * DefMBB = DMI->getParent();
-          if ((DestMBB->getNumber() == UseMBB->getNumber()) ||
-              ((UseMBB->getNumber() != DefMBB->getNumber()+1) &&
-               (UseMBB->getNumber() != DefMBB->getNumber()))) {
-            // JMP taken
+          if (!instrFollowingJump) {
             alatency = std::max(alatency, 0);
           }
           else {
@@ -651,33 +672,66 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
       // Gaudi (Gen2): The following cycle after MAC/MUL BF16/FP32, it is not allowed
       //               to schedule an instruction which writes to the same destination
       //               (or destinations) as the MAC/MUL
+      // Gaudisb     : The following cycle after MAC/MUL BF16/FP32/FP16 or ADD/SUB FP16,
+      //               it is not allowed to schedule an instruction which writes to the same
+      //               destination(or destinations) as the MAC/MUL/ADD/SUB.
+      // Goya2 (Gen3), Gaudi2 (Gen4): The following cycle after MAC/MUL BF16/FP32/FP16
+      //               or ADD/SUB FP16, it is not allowed to schedule an instruction
+      //               which writes to the same destination (or destinations) as
+      //               the MAC/MUL/ADD/SUB.
+      // Gaudi2 (Gen4): The following cycle after MAC/MUL/MADD BF16/FP32/FP16/FP8_152/FP8_143
+      //               or ADD/SUB FP16/FP8_152/FP8_143 or ADD/SUB FP32 with X2, it is not allowed
+      //               to schedule an instruction which writes to the same destination
+      //               (or destinations) as the MAC/MUL/ADD/SUB/MADD.
       //
-      if (!MF->getSubtarget<TPCSubtarget>().hasGoyaISA()) {
-        const MCInstrDesc &DefMCID = DMI->getDesc();
-        const MCInstrDesc &UseMCID = UMI->getDesc();
-        bool isDefRestrict = false;
-        if ((TPCII::isVPUInst(DefMCID) && (opcDef == TPCII::vpuMAC || opcDef == TPCII::vpuMUL)) ||
-            (TPCII::isSPUInst(DefMCID) && (opcDef == TPCII::spuMAC || opcDef == TPCII::spuMUL))) {
-          isDefRestrict = isFloatData(getOpType(DefMI));
+      if (!Subtarget->hasGoyaISA()) {
+        bool IsDefRestrict = false;
+        const MCInstrDesc &DefDesc = DMI->getDesc();
+        TPCII::OpType Type = getOpType(*DMI);
+        
+        if ((TPCII::isVPUInst(DefDesc) &&
+             (opcDef == TPCII::vpuMAC || opcDef == TPCII::vpuMUL)) ||
+            (TPCII::isSPUInst(DefDesc) &&
+             (opcDef == TPCII::spuMAC || opcDef == TPCII::spuMUL))) {
+          IsDefRestrict = isFloatData(Type);
+        } else if ((TPCII::isVPUInst(DefDesc) && opcDef == TPCII::vpuMADD)) {
+          IsDefRestrict = Subtarget->hasGen4Plus() &&
+              isFloatData(Type);
+        } else if ((TPCII::isVPUInst(DefDesc) &&
+                    (opcDef == TPCII::vpuADD || opcDef == TPCII::vpuSUB)) ||
+                   (TPCII::isSPUInst(DefDesc) &&
+                    (opcDef == TPCII::spuADD || opcDef == TPCII::spuSUB))) {
+          
+          switch (Type) {
+          case TPCII::OpType::FP32: {
+            unsigned SwVal = getSwitches(*DMI);
+            IsDefRestrict = (Subtarget->hasGen4Plus() &&
+                             SwVal & TPCII::SW_X2_ARITHMETIC);
+            }
+            break;
+            // This restrictions appeared with the new architectures,
+            // so architectures checking might be skipped
+          case TPCII::OpType::FP16:
+            IsDefRestrict = true;
+            break;
+          case TPCII::OpType::FP8_152:
+          case TPCII::OpType::FP8_143:
+            IsDefRestrict = true;
+            break;
+          default:
+            break;
+          }
         }
-        if (isDefRestrict &&
-            ((TPCII::isVPUInst(UseMCID) && (opcUse == TPCII::vpuMAC || opcUse == TPCII::vpuMUL)) ||
-             (TPCII::isSPUInst(UseMCID) && (opcUse == TPCII::spuMAC || opcUse == TPCII::spuMUL)) ||
-             (TPCII::isVPUInst(UseMCID) && (opcUse == TPCII::vpuADD || opcUse == TPCII::vpuSUB)) ||
-             (TPCII::isSPUInst(UseMCID) && (opcUse == TPCII::spuADD || opcUse == TPCII::spuSUB)) ||
-             (TPCII::isVPUInst(UseMCID) && (opcUse == TPCII::vpuMADD))))
-        {
+        
+        if (IsDefRestrict) {
           // Check if the "use" instr writes to the same destination as "def"
+          assert(DMI->getNumOperands() > 0);
           const MachineOperand &DMO = DMI->getOperand(0);
           assert(DMO.isReg());
-          unsigned Dreg = DMO.getReg();
           if (UMI->getNumOperands() > 0) {
             const MachineOperand &UMO = UMI->getOperand(0);
-            if (UMO.isReg()) {
-              unsigned Ureg = UMO.getReg();
-              if (Ureg == Dreg) { // restriction
-                alatency = std::max(alatency, 2);
-              }
+            if (UMO.isReg() && (UMO.getReg() == DMO.getReg())) {
+              alatency = std::max(alatency, 2);
             }
           }
         }
@@ -721,11 +775,11 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
       //
       if (TPCII::isLoopInst(UMI->getDesc())) {
         if ((TPCII::isStoreInst(DMI->getDesc()) && opcDef == TPCII::ST_L_V) ||
-            (TPCII::isLoadInst(DMI->getDesc())  && opcDef == TPCII::LD_L) ||
+            (TPCII::isLoadInst(DMI->getDesc())  && opcDef == TPCII::LD_L_V) ||
             (TPCII::isLoadInst(DMI->getDesc())  && opcDef == TPCII::ldMOV) ||
             (TPCII::isVPUInst(DMI->getDesc())   && !isNopInstr(DMI))
             ) {
-          bool use_loop_iterator = HasLoopIter(*DMI);
+          bool use_loop_iterator = hasLoopIter(*DMI, *Subtarget);
           if (use_loop_iterator) {
             if (UMI->getOpcode() != TPC::LOOPEND) { // LOOP
               alatency = std::max(alatency, 6);
@@ -740,7 +794,7 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
         // LOOP on VPU SLOT
         if (!isNopInstr(DMI) &&
             TPCII::isVPUInst(DMI->getDesc())) {
-          if (HasLoopIter(*DMI))
+          if (hasLoopIter(*DMI, *Subtarget))
             alatency = std::max(alatency, 5);
         }
 
@@ -749,17 +803,31 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
         if (UMI->getOpcode() == TPC::LOOPEND &&
             !isNopInstr(DMI) &&
             TPCII::isVPUInst(DMI->getDesc())) {
-          if (HasLoopIter(*DMI))
+          if (hasLoopIter(*DMI, *Subtarget))
             // With LOOPEND pseudo instruction
             alatency = std::max(alatency, 8);
           }
       }
 
-      const TPCSubtarget &Subtarget = MF->getSubtarget<TPCSubtarget>();
+      // (Gen4Plus) restrictions
+      if (Subtarget->hasGen4Plus()) {
+        // ST_L_V cannot be scheduled 2 or 3 cycles before LOOKUP instruction
+        // (i.e. ST_L_V, 1 or 2 instructions, then LOOKUP*)
+        if ((TPCII::isStoreInst(DMI->getDesc()) && opcDef == TPCII::ST_L_V) &&
+            (TPCII::isLookupC(UMI->getDesc()))) {
+          hasGaudi2StlvLookupRestrict = true;
+        }
+
+        if ((TPCII::isSPUInst(DMI->getDesc()) && opcDef == TPCII::spuUDIV) &&
+            (UMI->getOpcode() == TPC::HALTs || UMI->getOpcode() == TPC::HALTv)) {
+          alatency = std::max(alatency, 5);
+        }
+      }
 
       // At least 6 instructions must separate between 2 consecutive
       // UDIV_4STEP instructions.
-      if (Subtarget.hasGaudiISA())
+      if (Subtarget->hasGaudiISA() || Subtarget->hasGaudiBISA() ||
+          Subtarget->hasGrecoISA())
         if (TPCII::isSPUInst(DMI->getDesc()) &&
             opcDef == TPCII::spuUDIV_4STEP &&
             TPCII::isSPUInst(UMI->getDesc()) &&
@@ -804,13 +872,12 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
       //   and ST_TNSR*.
 
       // TODO: think how to move it to general code for TPCSubtarget.cpp.
-      if (Subtarget.hasGen2Plus() &&
+      if (Subtarget->hasGen2Plus() &&
           TPCII::isStoreInst(DMI->getDesc()) &&
           TPCII::getSlotOpCode(DMI->getDesc()) == TPCII::ST_L &&
-          DMI->getOperand(
-            DMI->getNumOperands() - 3).getImm() & TPCII::SW_MMIO) {
+          getSwitches(*DMI) & TPCII::SW_MMIO) {
         unsigned Opcode = TPCII::getSlotOpCode(UMI->getDesc());
-        unsigned NumOperands = UMI->getNumOperands();
+        // unsigned NumOperands = UMI->getNumOperands();
         const MCInstrDesc &Desc = UMI->getDesc();
 
         if ((TPCII::isSPUInst(Desc) &&
@@ -827,7 +894,10 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
           TPCII::OpType Type = getOpType(*UMI);
           switch (Type) {
           case TPCII::OpType::FP32:
+          case TPCII::OpType::FP16:
           case TPCII::OpType::BF16:
+          case TPCII::OpType::FP8_143:
+          case TPCII::OpType::FP8_152:
             alatency = std::max(alatency, 3);
             break;
           default:
@@ -851,8 +921,7 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
                    Opcode == TPCII::vpuCONVERT_UINT8 ||
                    Opcode == TPCII::vpuCONVERT_UINT16 ||
                    Opcode == TPCII::vpuCONVERT_UINT32))) {
-          unsigned RoundMode =
-              UMI->getOperand(NumOperands - 4).getImm() & TPCII::SW_GROUP_RM;
+          unsigned RoundMode = getSwitches(*UMI) & TPCII::SW_GROUP_RM;
           if (RoundMode == TPCII::SW_CSR)
             alatency = std::max(alatency, 3);
           else if (RoundMode == TPCII::SW_SR)
@@ -862,8 +931,7 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
                   Opcode == TPCII::spuNEARBYINT) ||
                  (TPCII::isVPUInst(UMI->getDesc()) &&
                   Opcode == TPCII::vpuNEARBYINT)) {
-          unsigned RoundMode =
-              UMI->getOperand(NumOperands - 4).getImm() & TPCII::SW_GROUP_RM;
+          unsigned RoundMode = getSwitches(*UMI) & TPCII::SW_GROUP_RM;
           if (RoundMode == TPCII::SW_CSR)
             alatency = std::max(alatency, 3);
         }
@@ -879,18 +947,18 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
                    Opcode == TPCII::stLD_TNSR_LOW ||
                    Opcode == TPCII::ST_TNSR ||
                    Opcode == TPCII::ST_TNSR_HIGH ||
-                   Opcode == TPCII::ST_TNSR_LOW))) {
+                   Opcode == TPCII::ST_TNSR_LOW ||
+                   Opcode == TPCII::ST_TNSR_S ||
+                   Opcode == TPCII::ST_TNSR_SQZ))) {
           alatency = std::max(alatency, 2);
         }
         else if ((TPCII::isLoadInst(Desc) && Opcode == TPCII::LD_L)) {
-          bool isMMIO =
-              UMI->getOperand(NumOperands - 4).getImm() & TPCII::SW_MMIO;
+          bool isMMIO = getSwitches(*UMI) & TPCII::SW_MMIO;
           if (isMMIO)
             alatency = std::max(alatency, 2);
         }
         else if (TPCII::isStoreInst(Desc) && Opcode == TPCII::ST_L) {
-          bool isMMIO =
-              UMI->getOperand(NumOperands - 3).getImm() & TPCII::SW_MMIO;
+          bool isMMIO = getSwitches(*UMI) & TPCII::SW_MMIO;
           if (isMMIO)
             alatency = std::max(alatency, 2);
         }
@@ -898,8 +966,10 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
                   (UMI->getOpcode() == TPC::ReadSLFSR ||
                    UMI->getOpcode() == TPC::ReadSLFSRNC)) ||
                  (TPCII::isVPUInst(Desc) &&
-                  (UMI->getOpcode() == TPC::ReadLFSR ||
-                   UMI->getOpcode() == TPC::ReadLFSRNC))) {
+                  (UMI->getOpcode() == TPC::ReadLFSRp ||
+                   UMI->getOpcode() == TPC::ReadLFSRm ||
+                   UMI->getOpcode() == TPC::ReadLFSRNCp ||
+                   UMI->getOpcode() == TPC::ReadLFSRNCm))) {
           alatency = std::max(alatency, 2);
         }
         else if (TPCII::isStoreInst(Desc) && Opcode == TPCII::ASO) {
@@ -910,7 +980,7 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
   }
 
   if (DefMI.getOpcode() == TPC::LOOPEND && UseMI.getOpcode() == TPC::LOOPEND) {
-    alatency = isLoopTaken(&DefMI) ? 2 : 4;
+    alatency = isLoopTaken(&DefMI) ? 1 : 4;
   }
 
   // The LOOKUP* instruction cannot be the last instruction in a loop block.
@@ -933,6 +1003,19 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
     }
   }
 
+  // ST_L_V cannot be scheduled 2 or 3 cycles before LOOKUP instruction
+  // (i.e. ST_L_V, 1 or 2 instructions, then LOOKUP*)
+  if (hasGaudi2StlvLookupRestrict) {
+    if (alatency < 2) {
+      if (curDistance >= 2) {
+        alatency = 4;
+      }
+    }
+    else {
+      alatency = std::max(alatency, 4);
+    }
+  }
+  
   return alatency;
 }
 
@@ -941,11 +1024,11 @@ int TPCLatencyResolver::getRequiredDistance(const MachineInstr& DefMI,
 // Checks distance requirements between instructions in one basic block.
 // Inserts NOPs between instructions if distance requirements are not met.
 //
-bool TPCLatencyResolver::resolveBlockLatency(MachineBasicBlock& MBB, bool check_only, bool ignore_loop_instr) {
+bool TPCLatencyResolver::resolveBlockLatency(MachineBasicBlock& MBB, bool check_only) {
   MachineBasicBlock::iterator BegBB = MBB.begin();
   MachineBasicBlock::iterator EndBB = MBB.end();
   int Cycle = 0;
-  int numPreNops;
+  int numPreNops = 0;
   bool changed = false;
 
   if (check_only) {
@@ -955,9 +1038,8 @@ bool TPCLatencyResolver::resolveBlockLatency(MachineBasicBlock& MBB, bool check_
     LLVM_DEBUG(dbgs() << "Resolve latencies in BB#" << MBB.getNumber() << "\n");
   }
 
-  for (MachineBasicBlock::iterator I = BegBB, E = EndBB; I != E; Cycle++) {
+  for (MachineBasicBlock::iterator I = BegBB, E = EndBB; I != E; ++I, ++Cycle) {
     MachineInstr &MI = *I;
-    ++I;
     if (ignoreInstr(&MI)) {
       Cycle--;
       continue;
@@ -966,21 +1048,24 @@ bool TPCLatencyResolver::resolveBlockLatency(MachineBasicBlock& MBB, bool check_
     if (MIIt != BegBB) {
       MIIt--;
       int defCycle = Cycle - 1;
-      if (ignore_loop_instr && TPCII::isLoopInst(MI.getDesc()) && (MI.getOpcode() != TPC::LOOPEND)) {
+      if (checking_loop_delay_slot && TPCII::isLoopInst(MI.getDesc()) && (MI.getOpcode() != TPC::LOOPEND)) {
+        Cycle--;
+      }
+      if (checking_jmp_delay_slot && isJmpInstr(&MI)) {
         Cycle--;
       }
 
       int defCycleSaved = defCycle;
       do {
         numPreNops = 0;
-        for (MachineBasicBlock::iterator J = MIIt; defCycle >= 0; defCycle--) {
+        for (MachineBasicBlock::iterator J = MIIt; defCycle >= 0; --J, --defCycle) {
           MachineInstr &defMI = *J;
-          --J;
           if (ignoreInstr(&defMI)) {
             defCycle++;
             continue;
           }
-          int lat = getRequiredDistance(defMI, MI, Cycle - defCycle);
+          // ((Cycle - defCycle) <= 1) means that MI is immediately following DefMI
+          int lat = getRequiredDistance(defMI, MI, Cycle - defCycle, ((Cycle - defCycle) <= 1));
           if (lat > (Cycle - defCycle)) {
             int numNops = lat - (Cycle - defCycle);
             LLVM_DEBUG(dbgs() << "   NOP(" << numNops << ") needed before MI(" << Cycle << ")\n"; printMI(&MI));
@@ -992,8 +1077,8 @@ bool TPCLatencyResolver::resolveBlockLatency(MachineBasicBlock& MBB, bool check_
           if (!check_only) {
             LLVM_DEBUG(dbgs() << "   NOP(" << numPreNops << ") inserted before MI(" << Cycle << ")\n"; printMI(&MI));
             for (int j = 0; j < numPreNops; ++j) {
-        	TII->insertNoop(MBB, MachineBasicBlock::iterator(MI));
-        	Cycle++;
+              TII->insertNoop(MBB, MachineBasicBlock::iterator(MI));
+              Cycle++;
             }
           } else {
             Cycle++;
@@ -1027,6 +1112,20 @@ bool TPCLatencyResolver::resolveBlockLatency(MachineBasicBlock& MBB, bool check_
       TII->insertNoop(MBB, MBB.end());
       TII->insertNoop(MBB, MBB.end());
       LLVM_DEBUG(dbgs() << "   NOP(" << 3 << ") inserted after HALT\n");
+
+      //
+      // After HALT, 3 VLIW instructions which are NOPs should appear.
+      // When using compressed instruction format, it means we need 6 VLIW
+      // instructions which are NOPs (so that they will be united into 3 VLIW
+      // compressed-instructions)
+      //
+      if (Subtarget->hasCompress() &&
+          Subtarget->getTargetLowering()->getTargetMachine().Options.CompressInstructions) {
+        TII->insertNoop(MBB, MBB.end());
+        TII->insertNoop(MBB, MBB.end());
+        TII->insertNoop(MBB, MBB.end());
+        LLVM_DEBUG(dbgs() << "   NOP(" << 3 << ") inserted after HALT (compressed)\n");
+      }
     }
 
     // Special case when there're no real instructions in the Latch with two or more
@@ -1136,7 +1235,8 @@ bool TPCLatencyResolver::resolveFunctionLatency(MachineFunction &MF) {
 
   bool IsChanged = false;
 
-  return IsChanged;
+  if (!Subtarget->hasGaudi2ISA())
+    return IsChanged;
 
   for (MachineBasicBlock &MBB : MF) {
     for(MachineBasicBlock::reverse_iterator MII = MBB.rbegin();
@@ -1154,18 +1254,33 @@ bool TPCLatencyResolver::resolveFunctionLatency(MachineFunction &MF) {
   return IsChanged;
 }
 
+static MachineBasicBlock *getImmediatelyFollowingMBB(MachineFunction * MF, MachineBasicBlock *MBB)
+{
+  MachineBasicBlock* NBB;
+  MachineFunction::iterator mbbit(MBB);
+  if (++mbbit == MF->end()) {
+    NBB = nullptr;
+  }
+  else {
+    NBB = &*mbbit;
+  }
+  return NBB;
+}
+
+
 //
 // getRequiredBBDistance ()
 // Returns the distance (in cycles) required between the end of one BB and the start of
 // other BB.
 //
 int TPCLatencyResolver::getRequiredBBDistance(MachineBasicBlock* PBB,
-                                              MachineBasicBlock* SBB,
-                                              bool ignore_loop_instr)
+                                              MachineBasicBlock* SBB)
 {
   int DefCycle;
   int UseCycle;
   int dist = 0;
+
+  bool JumpTakenCase = false;
 
   UseCycle = 0;
   for (MachineBasicBlock::iterator I = SBB->begin(), E = SBB->end(); I != E;) {
@@ -1176,7 +1291,10 @@ int TPCLatencyResolver::getRequiredBBDistance(MachineBasicBlock* PBB,
     }
     UseCycle++;
 
-    if (ignore_loop_instr && TPCII::isLoopInst(UseMI.getDesc()) && (UseMI.getOpcode() != TPC::LOOPEND)) {
+    if (checking_loop_delay_slot && TPCII::isLoopInst(UseMI.getDesc()) && (UseMI.getOpcode() != TPC::LOOPEND)) {
+      UseCycle--;
+    }
+    if (checking_jmp_delay_slot && isJmpInstr(&UseMI)) {
       UseCycle--;
     }
     if (UseCycle > TPC_MAX_LATENCY) {
@@ -1194,17 +1312,32 @@ int TPCLatencyResolver::getRequiredBBDistance(MachineBasicBlock* PBB,
       if (DefMI.getOpcode() != TPC::LOOPEND) {
         DefCycle++;
       }
-
-      if (isJmpInstr(&DefMI)) {
-          MachineBasicBlock * DestMBB = getJmpDest(&DefMI);
-          if (DestMBB && DestMBB->getNumber() == SBB->getNumber()) {
-            DefCycle = 0;
-          }
-      }
-
-      if (ignore_loop_instr && TPCII::isLoopInst(DefMI.getDesc()) && (DefMI.getOpcode() != TPC::LOOPEND)) {
+      if (checking_loop_delay_slot && TPCII::isLoopInst(DefMI.getDesc()) && (DefMI.getOpcode() != TPC::LOOPEND)) {
         DefCycle--;
       }
+      if (checking_jmp_delay_slot && isJmpInstr(&DefMI)) {
+        DefCycle--;
+      }
+
+      bool instrFollowingJump = false;
+  
+      if (isJmpInstr(&DefMI)) {
+        MachineBasicBlock* FBB = getImmediatelyFollowingMBB(MF, PBB);
+        MachineBasicBlock * DestMBB = getJmpDest(&DefMI);
+        if (FBB && (SBB->getNumber() == FBB->getNumber())) {
+          instrFollowingJump = ((UseCycle + DefCycle) <= 2);
+        }
+        if (DestMBB && DestMBB->getNumber() == SBB->getNumber()) {
+          // Count JMP instr itself as 1 cycle.
+          // However, if we are calculating distance for a JMP delay slot candidate
+          // then we won't count JMP instr because of the following:
+          //    The JMP is actually happening before the delay slot is executed,
+          //    and it is not part of the required distance.
+          DefCycle = (checking_jmp_delay_slot ? 0 : 1);
+          JumpTakenCase = true;
+        }
+      }
+
       if ((UseCycle + DefCycle) > TPC_MAX_LATENCY) {
         // Reached max latency, no need to process more instructions.
         break;
@@ -1215,9 +1348,25 @@ int TPCLatencyResolver::getRequiredBBDistance(MachineBasicBlock* PBB,
         lat = 0;
       }
       else {
-        lat = getRequiredDistance(DefMI, UseMI, UseCycle + DefCycle - 1);
+        lat = getRequiredDistance(DefMI, UseMI, UseCycle + DefCycle - 1, instrFollowingJump);
       }
 
+      // Doron1 PRM says:
+      //
+      // SMT1:
+      //   If the jmp is not taken - 0 HW bubbles (NOPs) will be inserted
+      //   (in addition to the JMP instruction itself and the delay-slot instruction).
+      //   If the jmp is taken - 5 HW bubbles will be inserted (in addition to the
+      //   delay-slot instruction).
+      //
+      if (Subtarget->hasDoron1ISA() && JumpTakenCase && UseTakenJumpBubbles) {
+        int lat_orig = lat;
+        if (lat_orig) {
+          lat = (lat_orig <= 5) ? 0 : (lat_orig - 5);
+          LLVM_DEBUG(dbgs() << "   Use 5 bubbles of taken JMP to hide latency " << lat_orig);
+          LLVM_DEBUG(dbgs() << ". Assuming distance required " << lat << "\n");
+        }
+      }
       if (lat > (UseCycle + DefCycle - 1)) {
         int numNops = lat - (UseCycle + DefCycle - 1);
         LLVM_DEBUG(dbgs() << "   Cycles(" << numNops << ") needed before MI(BB#"
@@ -1237,7 +1386,7 @@ int TPCLatencyResolver::getRequiredBBDistance(MachineBasicBlock* PBB,
 // getBBCycles ()
 // Returns the number of VLIW instructions in MBB.
 //
-int TPCLatencyResolver::getBBCycles(MachineBasicBlock* MBB, MachineBasicBlock* Succ, bool ignore_loop_instr)
+int TPCLatencyResolver::getBBCycles(MachineBasicBlock* MBB, MachineBasicBlock* Succ)
 {
   int Cycle = 0;
   for (MachineBasicBlock::iterator J = MBB->end(), PE = MBB->begin(); J != PE;) {
@@ -1249,7 +1398,10 @@ int TPCLatencyResolver::getBBCycles(MachineBasicBlock* MBB, MachineBasicBlock* S
     if (DefMI.getOpcode() != TPC::LOOPEND) {
       Cycle++;
     }
-    if (ignore_loop_instr && TPCII::isLoopInst(DefMI.getDesc()) && (DefMI.getOpcode() != TPC::LOOPEND)) {
+    if (checking_loop_delay_slot && TPCII::isLoopInst(DefMI.getDesc()) && (DefMI.getOpcode() != TPC::LOOPEND)) {
+      Cycle--;
+    }
+    if (checking_jmp_delay_slot && isJmpInstr(&DefMI)) {
       Cycle--;
     }
     if (Succ && isJmpInstr(&DefMI)) {
@@ -1300,7 +1452,6 @@ bool TPCLatencyResolver::resolveCrossBlockLatency(MachineBasicBlock& MBB,
                                                   bool deep,
                                                   int  distance,
                                                   bool check_only,
-                                                  bool ignore_loop_instr,
                                                   std::vector<const MachineBasicBlock*> ProcessedBB)
 {
   int lat = 0;
@@ -1340,7 +1491,7 @@ bool TPCLatencyResolver::resolveCrossBlockLatency(MachineBasicBlock& MBB,
     
     if (!Pred->empty()) {
       do {
-        lat = getRequiredBBDistance(PredBB, SuccBB, ignore_loop_instr);
+        lat = getRequiredBBDistance(PredBB, SuccBB);
         NumPreNops = lat - distance;
 
         // Insert NOPs
@@ -1371,7 +1522,7 @@ bool TPCLatencyResolver::resolveCrossBlockLatency(MachineBasicBlock& MBB,
       } while (NumPreNops > 0 && !check_only);
     }
     if (deep) {
-      NumCycles = distance + getBBCycles(Pred, &MBB, ignore_loop_instr);
+      NumCycles = distance + getBBCycles(Pred, &MBB);
       if (NumCycles < TPC_MAX_LATENCY) {
         //DEBUG(dbgs() << " - small BB#" << Pred->getNumber() << "("<< NumCycles << ")\n");
         bool alreadyProcessed = false;
@@ -1382,7 +1533,7 @@ bool TPCLatencyResolver::resolveCrossBlockLatency(MachineBasicBlock& MBB,
           }
         }
         if (!alreadyProcessed) {
-          changed |= resolveCrossBlockLatency(MBB, Pred, topdown, deep, NumCycles, check_only, ignore_loop_instr, ProcessedBB);
+          changed |= resolveCrossBlockLatency(MBB, Pred, topdown, deep, NumCycles, check_only, ProcessedBB);
         }
       }
     }
@@ -1397,14 +1548,13 @@ bool TPCLatencyResolver::resolveCrossBlockLatency(MachineBasicBlock& MBB,
 bool TPCLatencyResolver::resolveCrossBlockLatency(MachineBasicBlock& MBB,
                                                   bool topdown,
                                                   bool deep,
-                                                  bool check_only,
-                                                  bool ignore_loop_instr)
+                                                  bool check_only)
 {
   std::vector<const MachineBasicBlock*> ProcessedBB;
 
   LLVM_DEBUG(dbgs() << "Resolve Cross Block latencies for BB#" << MBB.getNumber() << "\n");
 
-  return resolveCrossBlockLatency(MBB, &MBB, topdown, deep, 0, check_only, ignore_loop_instr, ProcessedBB);
+  return resolveCrossBlockLatency(MBB, &MBB, topdown, deep, 0, check_only, ProcessedBB);
 }
 
 //
@@ -1418,6 +1568,8 @@ void TPCLatencyResolver::ensureLoopEndAndJmpLatency(MachineBasicBlock& MBB)
   MachineBasicBlock* JmpDestBB = nullptr;
   unsigned destBlkSize = 0;
   unsigned pcNum = 0;
+  
+  unsigned JmpDestLatency = 3;
 
   LLVM_DEBUG(dbgs() << " *** Fixing loop end and jmp (BB_" << MBB.getNumber() << ")\n");
 
@@ -1438,8 +1590,8 @@ void TPCLatencyResolver::ensureLoopEndAndJmpLatency(MachineBasicBlock& MBB)
           if (bMI.getOpcode() == TPC::LOOPEND) {
             LLVM_DEBUG(dbgs() << " * LOOPEND at(" << destBlkSize << ") in BB_" << JmpDestBB->getNumber() << "\n");
             destBlkSize--;
-            if (destBlkSize < 4) {
-              int pnops = 4 - destBlkSize;
+            if (destBlkSize <= JmpDestLatency) {
+              int pnops = JmpDestLatency + 1 - destBlkSize;
               for (int i=0; i<pnops; i++) {
                 TII->insertNoop(*JmpDestBB, MachineBasicBlock::iterator(bMI));
                 destBlkSize++;
@@ -1454,7 +1606,7 @@ void TPCLatencyResolver::ensureLoopEndAndJmpLatency(MachineBasicBlock& MBB)
       LLVM_DEBUG(dbgs() << "    - InstNum(" << destBlkSize << ") in BB_" << JmpDestBB->getNumber() << "\n");
       // If the number of instructions in the dest block > 3 then we have enough distance for
       // any LOOPEND in subsequent blocks.
-      if (destBlkSize > 3) {
+      if (destBlkSize > JmpDestLatency) {
         ++I;
         continue;
       }
@@ -1554,118 +1706,247 @@ static MachineBasicBlock *GetNextNonEmptyMBB(const MachineBasicBlock &MBB) {
     return GetNextNonEmptyMBB(*NextMBB);
 }
 
-void TPCLatencyResolver::fillLoopDelaySlot(MachineBasicBlock& MBB) {
-  MachineInstr * LoopMI = nullptr;
-  MachineInstr * CandMI = nullptr;
-  MachineBasicBlock::iterator LI;
-  MachineBasicBlock::const_instr_iterator MII;
-
-  
-  for (MachineBasicBlock::iterator I = MBB.end(), E = MBB.begin(); I != E;) {
-    --I;
-    MachineInstr &MI = *I;
-    
-    if (TPCII::isLoopInst(MI.getDesc()) && (MI.getOpcode() != TPC::LOOPEND)) {
-      LLVM_DEBUG(dbgs() << "Filling Loop Delay Slot in BB#" << MBB.getNumber() << "\n");
-      LoopMI = &*I;
-      if (I != MBB.begin()) {
-        --I;
-        CandMI = &*I;
-        if (isNopInstr(CandMI)) {
-          CandMI = nullptr;
-          break;
-        }
-        LI = I;
-        LLVM_DEBUG(dbgs() << "     Candidate:\n"; printMI(CandMI));
-      }
-    }
-  }
-  if (!LoopMI) {
-    return;
-  }
-  if (DisableDelaySlotUtilization) {
-    CandMI = nullptr;
-  }
-
-  if (!CandMI) {
-    goto fill_delay_slot;
-  }
-  
+static bool CheckDelayInstr(MachineInstr &MI, MachineInstr &LoopMI) {
+  if (isNopInstr(&MI))
+    return false;
 
   // LOOP delay slot can't contain a JMP* or a LOOP* instructions
   //
-  if (TPCII::isLoopInst(CandMI->getDesc()) || isJmpInstr(CandMI)) {
-    CandMI = nullptr;
-    goto fill_delay_slot;
-  }
+  if (TPCII::isLoopInst(MI.getDesc()) || isJmpInstr(&MI))
+    return false;
 
-  MII = CandMI->getIterator();
+  MachineBasicBlock &MBB = *MI.getParent();
+  MachineFunction &MF = *MI.getMF();
+  MachineBasicBlock::const_instr_iterator MII = MI.getIterator();
   for (++MII; MII != MBB.instr_end() && MII->isInsideBundle(); ++MII) {
     // PRM 0.9992 LOOP delay slot isn't allowed to contain LD_G/LD_L to SPRF.
     //
-    if (MF->getSubtarget<TPCSubtarget>().hasGoyaISA()) {
+    if (MF.getSubtarget<TPCSubtarget>().hasGoyaISA()) {
       if (MII->getOpcode() == TPC::LD_Lpsp ||
           MII->getOpcode() == TPC::LD_Lpip) {
-        CandMI = nullptr;
-        goto fill_delay_slot;
+        return false;
       }
       if (MII->getOpcode() == TPC::LD_Gpap) {
-        CandMI = nullptr;
-        goto fill_delay_slot;
+        return false;
       }
     }
 
-    if (!CandMI) {
-      goto fill_delay_slot;
+    // At least 1 instruction should separate between LD_TNSR in the delay-slot
+    // of LOOP, and LD_TNSR.PARTIAL coming afterwards.
+    // Only for GaudiB
+    if (TPCII::isLoadInst(MII->getDesc()) &&
+        TPCII::getSlotOpCode(MII->getDesc()) == TPCII::LD_TNSR &&
+        MF.getSubtarget<TPCSubtarget>().hasGaudiBISA()) {
+      MachineBasicBlock* LoopBody = GetNextNonEmptyMBB(MBB);
+      assert (LoopBody && "Can not be null");
+      MachineBasicBlock::const_iterator FirstInst = LoopBody->begin();
+      if (TPCII::isLoadInst(FirstInst->getDesc()) &&
+          TPCII::getSlotOpCode(FirstInst->getDesc()) == TPCII::LD_TNSR) {
+        unsigned Switch = getSwitches(*FirstInst);
+        if (Switch & TPCII::SW_PARTIAL) {
+          return false;
+        }
+      }
     }
+
+    // The LOOKUP* instruction cannot be part of a loop delay slot.
+    if (TPCII::isLookup(MII->getDesc()))
+      return false;
   }
 
   // Check that candidate does not define any reg used in LOOP inst
   //
-  for (unsigned i = 0, e = CandMI->getNumOperands(); i != e; ++i) {
-    const MachineOperand &MO = CandMI->getOperand(i);
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
+    const MachineOperand &MO = MI.getOperand(i);
     if (!MO.isReg()) continue;
     unsigned DR = MO.getReg();
-    for (unsigned j = 0, e = LoopMI->getNumOperands(); j != e; ++j) {
-      const MachineOperand &MO1 = LoopMI->getOperand(j);
+    for (unsigned j = 0, e = LoopMI.getNumOperands(); j != e; ++j) {
+      const MachineOperand &MO1 = LoopMI.getOperand(j);
       if (!MO1.isReg()) continue;
       unsigned UR = MO1.getReg();
       if (UR == DR ||
           TRI->isSubRegister(DR, UR) ||
           TRI->isSubRegister(UR, DR)) {
         LLVM_DEBUG(dbgs() << "     Candidate defines regs used in LOOP instr\n");
-        CandMI = nullptr;
-        goto fill_delay_slot;
+        return false;
       }
     }
   }
 
-  if (resolveBlockLatency(MBB, true, true)) {
-    CandMI = nullptr;
-    goto fill_delay_slot;
-  }
-  if (resolveCrossBlockLatency(MBB, true, true, true, true)) {
-    CandMI = nullptr;
-    goto fill_delay_slot;
-  }
-  if (resolveCrossBlockLatency(MBB, false, true, true, true)) {
-    CandMI = nullptr;
-    goto fill_delay_slot;
+  return true;
+}
+
+
+static bool CheckJmpDelayInstr(MachineInstr &MI, MachineInstr &JumpMI) {
+  if (isNopInstr(&MI))
+    return false;
+
+  // JMP delay slot can't contain a JMP* or a LOOP* instructions ???
+  //
+  if (TPCII::isLoopInst(MI.getDesc()) || isJmpInstr(&MI))
+    return false;
+
+  // Check that candidate does not define any reg used in JMP inst
+  //
+  MachineFunction &MF = *MI.getMF();
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
+    const MachineOperand &MO = MI.getOperand(i);
+    if (!MO.isReg()) continue;
+    unsigned DR = MO.getReg();
+    for (unsigned j = 0, e = JumpMI.getNumOperands(); j != e; ++j) {
+      const MachineOperand &MO1 = JumpMI.getOperand(j);
+      if (!MO1.isReg()) continue;
+      unsigned UR = MO1.getReg();
+      if (UR == DR ||
+          TRI->isSubRegister(DR, UR) ||
+          TRI->isSubRegister(UR, DR)) {
+        LLVM_DEBUG(dbgs() << "     Candidate defines regs used in JMP instr\n");
+        return false;
+      }
+    }
   }
 
-fill_delay_slot:
+  return true;
+}
+
+void TPCLatencyResolver::fillLoopDelaySlot(MachineBasicBlock& MBB) {
+  MachineInstr * LoopMI = nullptr;
+  MachineInstr * CandMI = nullptr;
+  // MachineBasicBlock::const_instr_iterator MII;
+
+  // Find Loop instruction
+  for (auto I = MBB.rbegin(); I != MBB.rend(); ++I) {
+    MachineInstr &MI = *I;
+    if (TPCII::isLoopInst(MI.getDesc()) && (MI.getOpcode() != TPC::LOOPEND)) {
+      LoopMI = &MI;
+    }
+  }
+
+  if (!LoopMI) {
+    return;
+  }
+  LLVM_DEBUG(dbgs() << "Filling Loop Delay Slot in BB#" << MBB.getNumber() << "\n");
+
+  // Find LoopDelay candidate
+  if (LoopMI->getIterator() != MBB.begin()) {
+    MachineBasicBlock::iterator LI = LoopMI->getIterator();
+    MachineInstr &MI = *(std::prev(LI));
+    CandMI = &MI;
+  }
+
+  if (DisableDelaySlotUtilization) {
+    CandMI = nullptr;
+  }
+
+  if (CandMI) {
+    LLVM_DEBUG(dbgs() << "     Candidate:\n"; printMI(CandMI));
+    if (!CheckDelayInstr(*CandMI, *LoopMI))
+      CandMI = nullptr;
+  }
+
+  if (CandMI) {
+    checking_loop_delay_slot = true;
+    if (resolveBlockLatency(MBB, true) ||
+        resolveCrossBlockLatency(MBB, true, true, true) ||
+        resolveCrossBlockLatency(MBB, false, true, true)) {
+      CandMI = nullptr;
+    }
+    checking_loop_delay_slot = false;
+  }
+
   if (!CandMI) {
     // Fill delay slot with a NOP
     //
     LLVM_DEBUG(dbgs() << "     NOP(" << 1 << ") after: "  << *LoopMI);
     LLVM_DEBUG(dbgs() << "        (LOOP delay slot)\n");
     TII->insertNoop(MBB, MBB.end());
-  }
-  else {
+  } else {
     // Moving the candidate into delay slot
     //
     LLVM_DEBUG(dbgs() << "     OK to use MI in delay slot:\n"; printMI(CandMI));
-    MBB.splice(MBB.end(), &MBB, LI);
+    MachineBasicBlock::iterator CandI = CandMI->getIterator();
+    MBB.splice(MBB.end(), &MBB, CandI);
+  }
+}
+
+void TPCLatencyResolver::fillJmpDelaySlot(MachineBasicBlock& MBB) {
+  MachineInstr * JumpMI = nullptr;
+  MachineInstr * CandMI = nullptr;
+
+  if (!Subtarget->hasDoron1ISA()) {
+    return;
+  }
+
+  // Find JMP instructions
+  for (auto I = MBB.rbegin(); I != MBB.rend(); ++I) {
+    MachineInstr &MI = *I;
+    if (isJmpInstr(&MI)) {
+      JumpMI = &MI;
+      LLVM_DEBUG(dbgs() << "Filling JMP Delay Slot in BB#" << MBB.getNumber() << "for "  << *JumpMI);
+
+      // Find a candidate
+      if (DisableJmpDelaySlotUtilization) {
+        CandMI = nullptr;
+      }
+      else {
+        if (JumpMI->getIterator() != MBB.begin()) {
+          MachineBasicBlock::iterator LI = JumpMI->getIterator();
+          MachineInstr &MI = *(std::prev(LI));
+          CandMI = &MI;
+        }
+      }
+
+      // Check if the candidate is already in a delay slot of another JMP,
+      // like this:
+      //   JMP 1
+      //   <candidate instr>
+      //   JMP 2
+      // In this case the candidate instr fills the dalay slot of JMP 1,
+      // so it can't be moved below JMP 2.
+      // The same is true for LOOP case, i.e. if the candidate is in
+      // a delay slot of LOOP instruction.
+      if (CandMI && CandMI->getIterator() != MBB.begin()) {
+        MachineBasicBlock::iterator LI = CandMI->getIterator();
+        MachineInstr &MI = *(std::prev(LI));
+        if (isJmpInstr(&MI) || TPCII::isLoopInst(MI.getDesc())) {
+          CandMI = nullptr;
+        }
+      }
+
+      if (CandMI) {
+        LLVM_DEBUG(dbgs() << "     Candidate:\n"; printMI(CandMI));
+        if (!CheckJmpDelayInstr(*CandMI, *JumpMI))
+          CandMI = nullptr;
+      }
+
+      if (CandMI) {
+        checking_jmp_delay_slot = true;
+        if (resolveBlockLatency(MBB, true) ||
+            resolveCrossBlockLatency(MBB, true, true, true) ||
+            resolveCrossBlockLatency(MBB, false, true, true)) {
+          CandMI = nullptr;
+        }
+        checking_jmp_delay_slot = false;
+      }
+
+      MachineBasicBlock::iterator JumpI = JumpMI->getIterator();
+      JumpI++;
+      if (!CandMI) {
+        // Fill delay slot with a NOP
+        //
+        LLVM_DEBUG(dbgs() << "     NOP(" << 1 << ") after: "  << *JumpMI);
+        LLVM_DEBUG(dbgs() << "        (JMP delay slot)\n");
+        TII->insertNoop(MBB, JumpI);
+      } else {
+        // Moving the candidate into delay slot
+        //
+        LLVM_DEBUG(dbgs() << "     OK to use MI in JMP delay slot:\n"; printMI(CandMI));
+        MachineBasicBlock::iterator CandI = CandMI->getIterator();
+        MBB.splice(JumpI, &MBB, CandI);
+      }
+    }
   }
 }
 
@@ -1697,4 +1978,31 @@ void TPCLatencyResolver::insertDebugNops(MachineBasicBlock& MBB, int numPreNops)
       TII->insertNoop(MBB, MBB.end());
     }
   }
+}
+
+void TPCLatencyResolver::AddNopsForLastLayoutBlock() {
+  // Finding the last layout BasicBlock
+  // According AsmPrinter::emitFunctionBody() MBBs emit in the same order as
+  // they store in the MF.
+  assert(MF->size() != 0 && "Expected non-empty MachineFunction");
+  MachineBasicBlock *LastBlock = &MF->back();
+  
+  // Finding a halt
+  for (auto MII = LastBlock->rbegin(); MII != LastBlock->rend(); ++MII) {
+    if (isHaltInstr(&(*MII)))
+      return; // Ok, nothing is needed
+  }
+  
+  // Counting noops
+  unsigned LastNoopsCount = 0;
+  for (auto MII = LastBlock->rbegin(); MII != LastBlock->rend(); ++MII) {
+    if (isNopInstr(&(*MII)))
+      ++LastNoopsCount;
+    else
+      break;
+  }
+  
+  // Inserting necessary noops
+  for (unsigned I = 0; I < 3 - LastNoopsCount; ++I)
+    TII->insertNoop(*LastBlock, LastBlock->end());
 }

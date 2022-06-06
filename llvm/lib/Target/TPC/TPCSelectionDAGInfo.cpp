@@ -1,8 +1,5 @@
 //===-- TPCSelectionDAGInfo.cpp ---- TPC SelectionDAG Info ----------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,7 +17,7 @@ using namespace llvm;
 
 SDValue TPCSelectionDAGInfo::EmitTargetCodeForMemset(
     SelectionDAG &DAG, const SDLoc &dl, SDValue Chain, SDValue Dst, SDValue Src,
-    SDValue Size, unsigned Align, bool isVolatile,
+    SDValue Size, Align Alignment, bool isVolatile,
     MachinePointerInfo DstPtrInfo) const {
   ConstantSDNode *V = dyn_cast<ConstantSDNode>(Src);
   assert(V && "Fill value of memset must be a compile time constant");
@@ -53,8 +50,8 @@ SDValue TPCSelectionDAGInfo::EmitTargetCodeForMemset(
   SmallVector<SDValue, 8> Chains;
   for (unsigned I = 0, SZ = Sz / UnitSz; I != SZ; ++I) {
     SDValue NewChain = DAG.getStore(Chain, dl, ZeroV,
-                                    DAG.getMemBasePlusOffset(Dst, DstOffs, dl),
-                                    DstPtrInfo.getWithOffset(DstOffs), Align);
+                                    DAG.getMemBasePlusOffset(Dst, TypeSize::Fixed(DstOffs), dl),
+                                    DstPtrInfo.getWithOffset(DstOffs), Alignment);
     Chains.push_back(NewChain);
     DstOffs += UnitSz;
   }
@@ -65,7 +62,7 @@ SDValue TPCSelectionDAGInfo::EmitTargetCodeForMemset(
 SDValue TPCSelectionDAGInfo::EmitTargetCodeForMemcpy(
     SelectionDAG &DAG, const SDLoc &dl, SDValue Chain,
     SDValue Dst, SDValue Src, SDValue Size,
-    unsigned Align, bool isVolatile, bool AlwaysInline,
+    Align Alignment, bool isVolatile, bool AlwaysInline,
     MachinePointerInfo DstPtrInfo, MachinePointerInfo SrcPtrInfo) const {
   // Prepare arguments making sanity checks.
   ConstantSDNode *SizeValue = dyn_cast<ConstantSDNode>(Size);
@@ -85,11 +82,11 @@ SDValue TPCSelectionDAGInfo::EmitTargetCodeForMemcpy(
   SmallVector<SDValue, 8> Chains;
   for (unsigned I = 0, SZ = Sz / UnitSz, Offs = 0; I != SZ; ++I, Offs += UnitSz) {
     SDValue Value = DAG.getLoad(VT, dl, Chain,
-                                DAG.getMemBasePlusOffset(Src, Offs, dl),
-                                SrcPtrInfo, Align);
+                                DAG.getMemBasePlusOffset(Src, TypeSize::Fixed(Offs), dl, SDNodeFlags()),
+                                SrcPtrInfo, Alignment);
     SDValue NewChain = DAG.getStore(Value.getValue(1), dl, Value,
-                                    DAG.getMemBasePlusOffset(Dst, Offs, dl),
-                                    DstPtrInfo.getWithOffset(Offs), Align);
+                                    DAG.getMemBasePlusOffset(Dst, TypeSize::Fixed(Offs), dl),
+                                    DstPtrInfo.getWithOffset(Offs), Alignment);
     Chains.push_back(NewChain);
   }
 

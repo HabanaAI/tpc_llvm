@@ -12,10 +12,10 @@ set(version_inc "${CMAKE_CURRENT_BINARY_DIR}/VCSVersion.inc")
 
 set(generate_vcs_version_script "${LLVM_CMAKE_PATH}/GenerateVersionFromVCS.cmake")
 
-if(llvm_vc)
+if(llvm_vc AND LLVM_APPEND_VC_REV)
   set(llvm_source_dir ${LLVM_MAIN_SRC_DIR})
 endif()
-if(clang_vc)
+if(clang_vc AND LLVM_APPEND_VC_REV)
   set(clang_source_dir ${CLANG_SOURCE_DIR})
 endif()
 
@@ -33,8 +33,10 @@ set_source_files_properties("${version_inc}"
   PROPERTIES GENERATED TRUE
              HEADER_FILE_ONLY TRUE)
 
-set_property(SOURCE Version.cpp APPEND PROPERTY
-             COMPILE_DEFINITIONS "HAVE_VCS_VERSION_INC")
+if(CLANG_VENDOR)
+  set_source_files_properties(Version.cpp
+    PROPERTIES COMPILE_DEFINITIONS "CLANG_VENDOR=\"${CLANG_VENDOR} \"")
+endif()
 
 # --- TPC ---
 # Location of source header file.
@@ -50,12 +52,19 @@ set(intrinsic_defs ${CMAKE_BINARY_DIR}/include/BuiltinsTPCAutogenNew.def)
 add_custom_command(
   OUTPUT ${intrinsic_defs}
   DEPENDS ${intrinsic_source} ${intrinsic_generator}
+  COMMENT "Building C/C++ intrinsics definitions"
   COMMAND
-    ${intrinsic_generator} "--def" "${intrinsic_source}" "${intrinsic_defs}"
+    ${Python3_EXECUTABLE} ${intrinsic_generator} "--def" "${intrinsic_source}" "${intrinsic_defs}"
 )
 set_source_files_properties("${intrinsic_defs}"
   PROPERTIES GENERATED TRUE
   HEADER_FILE_ONLY TRUE
+)
+add_custom_target(autodeps_gen
+  DEPENDS ${intrinsic_defs}
+)
+set_target_properties(autodeps_gen PROPERTIES
+  FOLDER "Misc"
 )
 # --- /TPC ---
 
@@ -68,22 +77,26 @@ add_clang_library(clangBasic
   Diagnostic.cpp
   DiagnosticIDs.cpp
   DiagnosticOptions.cpp
+  ExpressionTraits.cpp
+  FileEntry.cpp
   FileManager.cpp
   FileSystemStatCache.cpp
-  FixedPoint.cpp
   IdentifierTable.cpp
   LangOptions.cpp
   LangStandards.cpp
   Module.cpp
   ObjCRuntime.cpp
+  OpenCLOptions.cpp
   OpenMPKinds.cpp
   OperatorPrecedence.cpp
+  ProfileList.cpp
   SanitizerBlacklist.cpp
   SanitizerSpecialCaseList.cpp
   Sanitizers.cpp
   SourceLocation.cpp
   SourceManager.cpp
   Stack.cpp
+  TargetID.cpp
   TargetInfo.cpp
   Targets.cpp
   Targets/AArch64.cpp
@@ -107,10 +120,12 @@ add_clang_library(clangBasic
   Targets/SystemZ.cpp
   Targets/TCE.cpp
   Targets/TPC.cpp
+  Targets/VE.cpp
   Targets/WebAssembly.cpp
   Targets/X86.cpp
   Targets/XCore.cpp
   TokenKinds.cpp
+  TypeTraits.cpp
   Version.cpp
   Warnings.cpp
   XRayInstr.cpp
@@ -120,5 +135,9 @@ add_clang_library(clangBasic
   "${intrinsic_source}"
   "${intrinsic_defs}"
 # /TPC
+
+  DEPENDS
+  omp_gen
+  autodeps_gen
   )
 

@@ -1,24 +1,27 @@
-//===- TPCLoopData.cpp ----------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
-
 #include "TPCLoopData.h"
+
+#define GET_INSTRINFO_ENUM
+#include "TPCGenInstrInfo.inc"
+
+#include "MCTargetDesc/TPCMCInstrInfo.h"
+#include "TPCSubtarget.h"
+
+#include "llvm/ADT/Optional.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/IR/IntrinsicsTPC.h"
+#include "llvm/Support/ErrorHandling.h"
 
-static unsigned getUnrollCountFromMetadata(MDNode *LoopMD) {
-  if (!LoopMD || LoopMD->getNumOperands() == 0)
-    return 1;
+using namespace llvm;
 
-  MDNode *MD = nullptr;
+static bool isLoop(const MachineInstr &MI) {
+  return TPCII::isLoopInst(MI.getDesc()) && MI.getOpcode() != TPC::LOOPEND;
+}
 
-  for (unsigned i = 1, e = LoopMD->getNumOperands(); i < e; ++i) {
-    MD = dyn_cast<MDNode>(LoopMD->getOperand(i));
+static Optional<unsigned> findOptionMDIndex(const MDNode &LoopMD,
+                                            const StringRef Name) {
+  for (unsigned I = 1, E = LoopMD.getNumOperands(); I < E; ++I) {
+    MDNode *MD = dyn_cast<MDNode>(LoopMD.getOperand(I));
     if (!MD)
       continue;
 
@@ -26,18 +29,132 @@ static unsigned getUnrollCountFromMetadata(MDNode *LoopMD) {
     if (!S)
       continue;
 
-    if (S->getString().equals("llvm.loop.machine.unroll.count")) {
-      assert(MD->getNumOperands() == 2 &&
-             "Unroll hint metadata should have two operands.");
-      unsigned Count =
-          mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
-      assert(Count >= 1 && "Unroll count must be positive.");
-      return Count;
-    }
+    if (Name.equals(S->getString()))
+      return I;
   }
-
-  return 1;
+  return None;
 }
+
+static MachineOperand *getMachineLoopMDOperand(MachineInstr &LoopEndMI) {
+  assert(LoopEndMI.getOpcode() == TPC::LOOPEND);
+  for (MachineOperand &MO : LoopEndMI.operands()) {
+    if (MO.isMetadata())
+      return &MO;
+  }
+  return nullptr;
+}
+
+namespace llvm {
+
+bool hasLoopTakenMD(const MDNode &LoopMD) {
+  const Optional<unsigned> OpIx = findOptionMDIndex(LoopMD, "llvm.loop.taken");
+
+  if (!OpIx.hasValue())
+    return false;
+
+  MDNode &MD = *dyn_cast<MDNode>(LoopMD.getOperand(OpIx.getValue()));
+  assert(MD.getNumOperands() == 2); // requirement on llvm.loop.taken metadata
+  return !mdconst::extract<ConstantInt>(MD.getOperand(1))->isZero();
+}
+
+void removeLoopTakenMD(MachineInstr &LoopEndMI) {
+  MachineOperand *MO = getMachineLoopMDOperand(LoopEndMI);
+  if (!MO)
+    return;
+
+  const MDNode *LoopMD = MO->getMetadata();
+  if (!LoopMD)
+    return;
+
+  const Optional<unsigned> LoopTakenMDIndex =
+      findOptionMDIndex(*LoopMD, "llvm.loop.taken");
+  if (!LoopTakenMDIndex.hasValue())
+    return;
+
+  SmallVector<Metadata *, 8> MDs;
+  for (const auto& X : enumerate(LoopMD->operands())) {
+    MDNode *MD = dyn_cast<MDNode>(X.value());
+    if (MD && X.index() != LoopTakenMDIndex.getValue())
+      MDs.push_back(MD);
+  }
+  if (!MDs.empty())
+    MO->setMetadata(MDNode::get(LoopMD->getContext(), MDs));
+  else
+    MO->setMetadata(nullptr);
+}
+
+const MDNode *getMachineLoopMDNode(MachineInstr &LoopEndMI) {
+  MachineOperand *MO = getMachineLoopMDOperand(LoopEndMI);
+  return MO ? MO->getMetadata() : nullptr;
+}
+
+const MDNode *findOptionMDForLoopMD(const MDNode &LoopMD,
+                                    const StringRef Name) {
+  const Optional<unsigned> Ix = findOptionMDIndex(LoopMD, Name);
+  return Ix.hasValue() ? dyn_cast<MDNode>(LoopMD.getOperand(Ix.getValue()))
+                       : nullptr;
+}
+
+Optional<unsigned> getUnrollCountFromMetadata(const MDNode *LoopMD) {
+  if (!LoopMD)
+    return None;
+
+  const MDNode *MD =
+      findOptionMDForLoopMD(*LoopMD, "llvm.loop.machine.unroll.count");
+  if (!MD)
+    return None;
+
+  assert(MD->getNumOperands() == 2 &&
+         "Unroll hint metadata should have two operands.");
+  unsigned Count =
+      mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
+  assert(Count >= 1 && "Unroll count must be positive.");
+  return Count;
+}
+
+Register getCounterRegister(const MachineLoop& L) {
+  const TPCSubtarget &ST =
+      L.getHeader()->getParent()->getSubtarget<TPCSubtarget>();
+  const unsigned HWLoopStartReg = ST.getHWLoopStartReg().id();
+  const unsigned HWLoopFinalReg = ST.getHWLoopFinalReg().id();
+  assert(HWLoopStartReg <= HWLoopFinalReg);
+
+  unsigned Counter = HWLoopStartReg;
+  for (MachineLoop *Parent = L.getParentLoop();
+       Parent && Counter < HWLoopFinalReg; Parent = Parent->getParentLoop()) {
+    MachineBasicBlock *const ParentLatch = Parent->getLoopLatch();
+    MachineBasicBlock *const ParentHeader = Parent->getHeader();
+    if (!ParentLatch || !ParentHeader)
+      continue;
+
+    const auto PreHeaderIt = llvm::find_if(
+        ParentHeader->predecessors(),
+        [ParentLatch](MachineBasicBlock *BB) { return BB != ParentLatch; });
+    if (PreHeaderIt == ParentHeader->predecessors().end())
+      continue;
+
+    if (any_of((*PreHeaderIt)->instrs(), isLoop))
+      Counter++;
+  }
+  return Register(Counter);
+}
+
+Optional<HWLoopCounterInfo> getLoopCounterInfo(const MachineLoop &ML) {
+  MachineBasicBlock *const PredMBB = ML.getLoopPredecessor();
+  if (!PredMBB || PredMBB->empty())
+    return None;
+
+  MachineInstr &LoopInst = PredMBB->back();
+  if (!isLoop(LoopInst))
+    return None;
+
+  HWLoopCounterInfo Info;
+  Info.LoopInstr = &LoopInst;
+  Info.CounterReg = getCounterRegister(ML);
+  return Info;
+}
+
+} // namespace llvm
 
 // function fullmap gets root instruction (in instToExp) and fills a vector (fill Vector)
 // of all users of this root instruction.
@@ -197,7 +314,7 @@ void LoopData::findNumberOfIterations(BasicBlock *BB) {
 
 LoopData::LoopData(Loop *L, ScalarEvolution *SE, bool costModel)
     : p_LH(L), p_SEL(SE) {
-    m_backendUnroll = getUnrollCountFromMetadata(L->getLoopID());
+    m_backendUnroll = getUnrollCountFromMetadata(L->getLoopID()).getValueOr(1);
     p_Prev = L->getParentLoop();
     SmallVector<BasicBlock *, 8> Latches;
     L->getLoopLatches(Latches);

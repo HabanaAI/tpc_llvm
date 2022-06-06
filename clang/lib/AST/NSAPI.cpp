@@ -458,7 +458,6 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
 #ifdef LLVM_TPC_COMPILER
   case BuiltinType::Float8_143:
   case BuiltinType::Float8_152:
-  case BuiltinType::BFloat16:
 #endif
   case BuiltinType::Float128:
   case BuiltinType::NullPtr:
@@ -479,6 +478,9 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
 #define SVE_TYPE(Name, Id, SingletonId) \
   case BuiltinType::Id:
 #include "clang/Basic/AArch64SVEACLETypes.def"
+#define PPC_VECTOR_TYPE(Name, Id, Size) \
+  case BuiltinType::Id:
+#include "clang/Basic/PPCTypes.def"
   case BuiltinType::BoundMember:
   case BuiltinType::Dependent:
   case BuiltinType::Overload:
@@ -487,7 +489,11 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
   case BuiltinType::Half:
   case BuiltinType::PseudoObject:
   case BuiltinType::BuiltinFn:
+  case BuiltinType::IncompleteMatrixIdx:
   case BuiltinType::OMPArraySection:
+  case BuiltinType::OMPArrayShaping:
+  case BuiltinType::OMPIterator:
+  case BuiltinType::BFloat16:
     break;
   }
 

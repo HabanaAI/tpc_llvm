@@ -11,32 +11,54 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
-#include "llvm/Analysis/InstructionSimplify.h"
-#include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/Analysis/DomTreeUpdater.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
-#include "llvm/Analysis/LoopPass.h"
+#include "llvm/Analysis/MustExecute.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/Utils/Local.h"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/IntrinsicsTPC.h"
-#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Use.h"
+#include "llvm/IR/User.h"
+#include "llvm/IR/Value.h"
+#include "llvm/IR/ValueHandle.h"
+#include "llvm/IR/ValueMap.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/GenericDomTree.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
+#include <assert.h>
+#include <memory>
+#include <type_traits>
+#include <vector>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll-and-jam"
@@ -48,17 +70,14 @@ typedef SmallPtrSet<BasicBlock *, 4> BasicBlockSet;
 
 // Partition blocks in an outer/inner loop pair into blocks before and after
 // the loop
-static bool partitionOuterLoopBlocks(Loop *L, Loop *SubLoop,
-                                     BasicBlockSet &ForeBlocks,
-                                     BasicBlockSet &SubLoopBlocks,
-                                     BasicBlockSet &AftBlocks,
-                                     DominatorTree *DT) {
+static bool partitionLoopBlocks(Loop &L, BasicBlockSet &ForeBlocks,
+                                BasicBlockSet &AftBlocks, DominatorTree &DT) {
+  Loop *SubLoop = L.getSubLoops()[0];
   BasicBlock *SubLoopLatch = SubLoop->getLoopLatch();
-  SubLoopBlocks.insert(SubLoop->block_begin(), SubLoop->block_end());
 
-  for (BasicBlock *BB : L->blocks()) {
+  for (BasicBlock *BB : L.blocks()) {
     if (!SubLoop->contains(BB)) {
-      if (DT->dominates(SubLoopLatch, BB))
+      if (DT.dominates(SubLoopLatch, BB))
         AftBlocks.insert(BB);
       else
         ForeBlocks.insert(BB);
@@ -72,12 +91,42 @@ static bool partitionOuterLoopBlocks(Loop *L, Loop *SubLoop,
     if (BB == SubLoopPreHeader)
       continue;
     Instruction *TI = BB->getTerminator();
-    for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
-      if (!ForeBlocks.count(TI->getSuccessor(i)))
+    for (BasicBlock *Succ : successors(TI))
+      if (!ForeBlocks.count(Succ))
         return false;
   }
 
   return true;
+}
+
+/// Partition blocks in a loop nest into blocks before and after each inner
+/// loop.
+static bool partitionOuterLoopBlocks(
+    Loop &Root, Loop &JamLoop, BasicBlockSet &JamLoopBlocks,
+    DenseMap<Loop *, BasicBlockSet> &ForeBlocksMap,
+    DenseMap<Loop *, BasicBlockSet> &AftBlocksMap, DominatorTree &DT) {
+  JamLoopBlocks.insert(JamLoop.block_begin(), JamLoop.block_end());
+
+  for (Loop *L : Root.getLoopsInPreorder()) {
+    if (L == &JamLoop)
+      break;
+
+    if (!partitionLoopBlocks(*L, ForeBlocksMap[L], AftBlocksMap[L], DT))
+      return false;
+  }
+
+  return true;
+}
+
+// TODO Remove when UnrollAndJamLoop changed to support unroll and jamming more
+// than 2 levels loop.
+static bool partitionOuterLoopBlocks(Loop *L, Loop *SubLoop,
+                                     BasicBlockSet &ForeBlocks,
+                                     BasicBlockSet &SubLoopBlocks,
+                                     BasicBlockSet &AftBlocks,
+                                     DominatorTree *DT) {
+  SubLoopBlocks.insert(SubLoop->block_begin(), SubLoop->block_end());
+  return partitionLoopBlocks(*L, ForeBlocks, AftBlocks, *DT);
 }
 
 // Looks at the phi nodes in Header for values coming from Latch. For these
@@ -99,8 +148,7 @@ static bool processHeaderPhiOperands(BasicBlock *Header, BasicBlock *Latch,
   }
 
   while (!Worklist.empty()) {
-    Instruction *I = Worklist.back();
-    Worklist.pop_back();
+    Instruction *I = Worklist.pop_back_val();
     if (!Visit(I))
       return false;
 
@@ -174,8 +222,8 @@ LoopUnrollResult
 llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
                        unsigned TripMultiple, bool UnrollRemainder,
                        LoopInfo *LI, ScalarEvolution *SE, DominatorTree *DT,
-                       AssumptionCache *AC, OptimizationRemarkEmitter *ORE,
-                       bool IgnoreRemainder, Loop **EpilogueLoop) {
+                       AssumptionCache *AC, const TargetTransformInfo *TTI,
+                       OptimizationRemarkEmitter *ORE, Loop **EpilogueLoop) {
 
   // When we enter here we should have already checked that it is safe
   BasicBlock *Header = L->getHeader();
@@ -196,20 +244,12 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   // Are we eliminating the loop control altogether?
   bool CompletelyUnroll = (Count == TripCount);
 
-  LLVM_DEBUG(dbgs() << "option to ignore remainder loop is " << IgnoreRemainder
-                    << "\n");
-
   // We use the runtime remainder in cases where we don't know trip multiple
-  if (TripMultiple == 1 || (TripMultiple % Count != 0 && !IgnoreRemainder)) {
-#ifdef LLVM_TPC_COMPILER
-    bool UnjAllowExpensiveTripCount = true;
-#else
-    bool UnjAllowExpensiveTripCount = false;
-#endif
-    if (!UnrollRuntimeLoopRemainder(L, Count, UnjAllowExpensiveTripCount,
+  if (TripMultiple == 1 || TripMultiple % Count != 0) {
+    if (!UnrollRuntimeLoopRemainder(L, Count, /*AllowExpensiveTripCount*/ false,
                                     /*UseEpilogRemainder*/ true,
                                     UnrollRemainder, /*ForgetAllSCEV*/ false,
-                                    LI, SE, DT, AC, true, EpilogueLoop)) {
+                                    LI, SE, DT, AC, TTI, true, EpilogueLoop)) {
       LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; remainder loop could not be "
                            "generated when assuming runtime trip count\n");
       return LoopUnrollResult::Unmodified;
@@ -295,8 +335,7 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
 
   // Move any instructions from fore phi operands from AftBlocks into Fore.
   moveHeaderPhiOperandsToForeBlocks(
-      Header, LatchBlock, SubLoop->getLoopPreheader()->getTerminator(),
-      AftBlocks);
+      Header, LatchBlock, ForeBlocksLast[0]->getTerminator(), AftBlocks);
 
   // The current on-the-fly SSA update requires blocks to be processed in
   // reverse postorder so that LastValueMap contains the correct value at each
@@ -323,32 +362,32 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
 
   // Copy all blocks
   for (unsigned It = 1; It != Count; ++It) {
-    std::vector<BasicBlock *> NewBlocks;
+    SmallVector<BasicBlock *, 8> NewBlocks;
     // Maps Blocks[It] -> Blocks[It-1]
     DenseMap<Value *, Value *> PrevItValueMap;
+    SmallDenseMap<const Loop *, Loop *, 4> NewLoops;
+    NewLoops[L] = L;
+    NewLoops[SubLoop] = SubLoop;
 
     for (LoopBlocksDFS::RPOIterator BB = BlockBegin; BB != BlockEnd; ++BB) {
       ValueToValueMapTy VMap;
       BasicBlock *New = CloneBasicBlock(*BB, VMap, "." + Twine(It));
       Header->getParent()->getBasicBlockList().push_back(New);
 
-      if (ForeBlocks.count(*BB)) {
-        L->addBasicBlockToLoop(New, *LI);
+      // Tell LI about New.
+      addClonedBlockToLoopInfo(*BB, New, LI, NewLoops);
 
+      if (ForeBlocks.count(*BB)) {
         if (*BB == ForeBlocksFirst[0])
           ForeBlocksFirst.push_back(New);
         if (*BB == ForeBlocksLast[0])
           ForeBlocksLast.push_back(New);
       } else if (SubLoopBlocks.count(*BB)) {
-        SubLoop->addBasicBlockToLoop(New, *LI);
-
         if (*BB == SubLoopBlocksFirst[0])
           SubLoopBlocksFirst.push_back(New);
         if (*BB == SubLoopBlocksLast[0])
           SubLoopBlocksLast.push_back(New);
       } else if (AftBlocks.count(*BB)) {
-        L->addBasicBlockToLoop(New, *LI);
-
         if (*BB == AftBlocksFirst[0])
           AftBlocksFirst.push_back(New);
         if (*BB == AftBlocksLast[0])
@@ -390,9 +429,9 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     }
 
     // Remap all instructions in the most recent iteration
+    remapInstructionsInBlocks(NewBlocks, LastValueMap);
     for (BasicBlock *NewBlock : NewBlocks) {
       for (Instruction &I : *NewBlock) {
-        ::remapInstruction(&I, LastValueMap);
         if (auto *II = dyn_cast<IntrinsicInst>(&I))
           if (II->getIntrinsicID() == Intrinsic::assume)
             AC->registerAssumption(II);
@@ -419,14 +458,6 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   // finish up connecting the blocks and phi nodes. At this point LastValueMap
   // is the last unrolled iterations values.
 
-  // Update Phis in BB from OldBB to point to NewBB
-  auto updatePHIBlocks = [](BasicBlock *BB, BasicBlock *OldBB,
-                            BasicBlock *NewBB) {
-    for (PHINode &Phi : BB->phis()) {
-      int I = Phi.getBasicBlockIndex(OldBB);
-      Phi.setIncomingBlock(I, NewBB);
-    }
-  };
   // Update Phis in BB from OldBB to point to NewBB and use the latest value
   // from LastValueMap
   auto updatePHIBlocksAndValues = [](BasicBlock *BB, BasicBlock *OldBB,
@@ -458,8 +489,8 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   // Update ForeBlocks successors and phi nodes
   BranchInst *ForeTerm =
       cast<BranchInst>(ForeBlocksLast.back()->getTerminator());
-  BasicBlock *Dest = SubLoopBlocksFirst[0];
-  ForeTerm->setSuccessor(0, Dest);
+  assert(ForeTerm->getNumSuccessors() == 1 && "Expecting one successor");
+  ForeTerm->setSuccessor(0, SubLoopBlocksFirst[0]);
 
   if (CompletelyUnroll) {
     while (PHINode *Phi = dyn_cast<PHINode>(ForeBlocksFirst[0]->begin())) {
@@ -476,8 +507,8 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     // Remap ForeBlock successors from previous iteration to this
     BranchInst *ForeTerm =
         cast<BranchInst>(ForeBlocksLast[It - 1]->getTerminator());
-    BasicBlock *Dest = ForeBlocksFirst[It];
-    ForeTerm->setSuccessor(0, Dest);
+    assert(ForeTerm->getNumSuccessors() == 1 && "Expecting one successor");
+    ForeTerm->setSuccessor(0, ForeBlocksFirst[It]);
   }
 
   // Subloop successors and phis
@@ -485,10 +516,10 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
       cast<BranchInst>(SubLoopBlocksLast.back()->getTerminator());
   SubTerm->setSuccessor(!SubLoopContinueOnTrue, SubLoopBlocksFirst[0]);
   SubTerm->setSuccessor(SubLoopContinueOnTrue, AftBlocksFirst[0]);
-  updatePHIBlocks(SubLoopBlocksFirst[0], ForeBlocksLast[0],
-                  ForeBlocksLast.back());
-  updatePHIBlocks(SubLoopBlocksFirst[0], SubLoopBlocksLast[0],
-                  SubLoopBlocksLast.back());
+  SubLoopBlocksFirst[0]->replacePhiUsesWith(ForeBlocksLast[0],
+                                            ForeBlocksLast.back());
+  SubLoopBlocksFirst[0]->replacePhiUsesWith(SubLoopBlocksLast[0],
+                                            SubLoopBlocksLast.back());
 
   for (unsigned It = 1; It != Count; It++) {
     // Replace the conditional branch of the previous iteration subloop with an
@@ -498,23 +529,25 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     BranchInst::Create(SubLoopBlocksFirst[It], SubTerm);
     SubTerm->eraseFromParent();
 
-    updatePHIBlocks(SubLoopBlocksFirst[It], ForeBlocksLast[It],
-                    ForeBlocksLast.back());
-    updatePHIBlocks(SubLoopBlocksFirst[It], SubLoopBlocksLast[It],
-                    SubLoopBlocksLast.back());
+    SubLoopBlocksFirst[It]->replacePhiUsesWith(ForeBlocksLast[It],
+                                               ForeBlocksLast.back());
+    SubLoopBlocksFirst[It]->replacePhiUsesWith(SubLoopBlocksLast[It],
+                                               SubLoopBlocksLast.back());
     movePHIs(SubLoopBlocksFirst[It], SubLoopBlocksFirst[0]);
   }
 
   // Aft blocks successors and phis
-  BranchInst *Term = cast<BranchInst>(AftBlocksLast.back()->getTerminator());
+  BranchInst *AftTerm = cast<BranchInst>(AftBlocksLast.back()->getTerminator());
   if (CompletelyUnroll) {
-    BranchInst::Create(LoopExit, Term);
-    Term->eraseFromParent();
+    BranchInst::Create(LoopExit, AftTerm);
+    AftTerm->eraseFromParent();
   } else {
-    Term->setSuccessor(!ContinueOnTrue, ForeBlocksFirst[0]);
+    AftTerm->setSuccessor(!ContinueOnTrue, ForeBlocksFirst[0]);
+    assert(AftTerm->getSuccessor(ContinueOnTrue) == LoopExit &&
+           "Expecting the ContinueOnTrue successor of AftTerm to be LoopExit");
   }
-  updatePHIBlocks(AftBlocksFirst[0], SubLoopBlocksLast[0],
-                  SubLoopBlocksLast.back());
+  AftBlocksFirst[0]->replacePhiUsesWith(SubLoopBlocksLast[0],
+                                        SubLoopBlocksLast.back());
 
   for (unsigned It = 1; It != Count; It++) {
     // Replace the conditional branch of the previous iteration subloop with an
@@ -524,8 +557,8 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     BranchInst::Create(AftBlocksFirst[It], AftTerm);
     AftTerm->eraseFromParent();
 
-    updatePHIBlocks(AftBlocksFirst[It], SubLoopBlocksLast[It],
-                    SubLoopBlocksLast.back());
+    AftBlocksFirst[It]->replacePhiUsesWith(SubLoopBlocksLast[It],
+                                           SubLoopBlocksLast.back());
     movePHIs(AftBlocksFirst[It], AftBlocksFirst[0]);
   }
 
@@ -551,48 +584,41 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
   MergeBlocks.insert(ForeBlocksLast.begin(), ForeBlocksLast.end());
   MergeBlocks.insert(SubLoopBlocksLast.begin(), SubLoopBlocksLast.end());
   MergeBlocks.insert(AftBlocksLast.begin(), AftBlocksLast.end());
-  while (!MergeBlocks.empty()) {
-    BasicBlock *BB = *MergeBlocks.begin();
-    BranchInst *Term = dyn_cast<BranchInst>(BB->getTerminator());
-    if (Term && Term->isUnconditional() && L->contains(Term->getSuccessor(0))) {
-      BasicBlock *Dest = Term->getSuccessor(0);
-      BasicBlock *Fold = Dest->getUniquePredecessor();
-      if (MergeBlockIntoPredecessor(Dest, &DTU, LI)) {
-        // Don't remove BB and add Fold as they are the same BB
-        assert(Fold == BB);
-        (void)Fold;
-        MergeBlocks.erase(Dest);
-      } else
-        MergeBlocks.erase(BB);
-    } else
-      MergeBlocks.erase(BB);
-  }
+
+  MergeBlockSuccessorsIntoGivenBlocks(MergeBlocks, L, &DTU, LI);
+
   // Apply updates to the DomTree.
   DT = &DTU.getDomTree();
 
   // At this point, the code is well formed.  We now do a quick sweep over the
   // inserted code, doing constant propagation and dead code elimination as we
   // go.
-  simplifyLoopAfterUnroll(SubLoop, true, LI, SE, DT, AC);
-  simplifyLoopAfterUnroll(L, !CompletelyUnroll && Count > 1, LI, SE, DT, AC);
+  simplifyLoopAfterUnroll(SubLoop, true, LI, SE, DT, AC, TTI);
+  simplifyLoopAfterUnroll(L, !CompletelyUnroll && Count > 1, LI, SE, DT, AC,
+                          TTI);
 
   NumCompletelyUnrolledAndJammed += CompletelyUnroll;
   ++NumUnrolledAndJammed;
 
+  // Update LoopInfo if the loop is completely removed.
+  if (CompletelyUnroll)
+    LI->erase(L);
+
 #ifndef NDEBUG
   // We shouldn't have done anything to break loop simplify form or LCSSA.
-  Loop *OuterL = L->getParentLoop();
-  Loop *OutestLoop = OuterL ? OuterL : (!CompletelyUnroll ? L : SubLoop);
+  Loop *OutestLoop = SubLoop->getParentLoop()
+                         ? SubLoop->getParentLoop()->getParentLoop()
+                               ? SubLoop->getParentLoop()->getParentLoop()
+                               : SubLoop->getParentLoop()
+                         : SubLoop;
+  assert(DT->verify());
+  LI->verify(*DT);
   assert(OutestLoop->isRecursivelyLCSSAForm(*DT, *LI));
   if (!CompletelyUnroll)
     assert(L->isLoopSimplifyForm());
   assert(SubLoop->isLoopSimplifyForm());
-  assert(DT->verify());
+  SE->verify();
 #endif
-
-  // Update LoopInfo if the loop is completely removed.
-  if (CompletelyUnroll)
-    LI->erase(L);
 
   return CompletelyUnroll ? LoopUnrollResult::FullyUnrolled
                           : LoopUnrollResult::PartiallyUnrolled;
@@ -602,7 +628,7 @@ static bool isIntrinsicForTarget(const Instruction *I,
                                  const std::string &Target) {
   if (const IntrinsicInst *II = dyn_cast<const IntrinsicInst>(I)) {
     Function *F = II->getCalledFunction();
-    std::string Fname = F->getName();
+    std::string Fname = std::string(F->getName());
     size_t Found = Fname.find(Target);
     if (Found != std::string::npos) {
       return true;
@@ -612,7 +638,7 @@ static bool isIntrinsicForTarget(const Instruction *I,
 }
 
 static bool getLoadsAndStores(BasicBlockSet &Blocks,
-                              SmallVector<Value *, 4> &MemInstr) {
+                              SmallVector<Instruction *, 4> &MemInstr) {
   // Scan the BBs and collect legal loads and stores.
   // Returns false if non-simple loads/stores are found.
   for (BasicBlock *BB : Blocks) {
@@ -633,608 +659,238 @@ static bool getLoadsAndStores(BasicBlockSet &Blocks,
   return true;
 }
 
-static bool checkDependencies(SmallVector<Value *, 4> &Earlier,
-                              SmallVector<Value *, 4> &Later,
-                              unsigned LoopDepth, bool InnerLoop,
-                              DependenceInfo &DI) {
-  // Use DA to check for dependencies between loads and stores that make unroll
-  // and jam invalid
-  for (Value *I : Earlier) {
-    for (Value *J : Later) {
-      Instruction *Src = cast<Instruction>(I);
-      Instruction *Dst = cast<Instruction>(J);
-      if (Src == Dst)
-        continue;
-      // Ignore Input dependencies.
-      if (isa<LoadInst>(Src) && isa<LoadInst>(Dst))
-        continue;
+static bool preservesForwardDependence(Instruction *Src, Instruction *Dst,
+                                       unsigned UnrollLevel, unsigned JamLevel,
+                                       bool Sequentialized, Dependence *D) {
+  // UnrollLevel might carry the dependency Src --> Dst
+  // Does a different loop after unrolling?
+  for (unsigned CurLoopDepth = UnrollLevel + 1; CurLoopDepth <= JamLevel;
+       ++CurLoopDepth) {
+    auto JammedDir = D->getDirection(CurLoopDepth);
+    if (JammedDir == Dependence::DVEntry::LT)
+      return true;
       // TODO:revisit this to see if it can be made more generic.
       if (isIntrinsicForTarget(Src, "tpc") || isIntrinsicForTarget(Dst, "tpc"))
         return true;
-      // Track dependencies, and if we find them take a conservative approach
-      // by allowing only = or < (not >), altough some > would be safe
-      // (depending upon unroll width).
-      // For the inner loop, we need to disallow any (> <) dependencies
-      // FIXME: Allow > so long as distance is less than unroll width
-      if (auto D = DI.depends(Src, Dst, true)) {
-        assert(D->isOrdered() && "Expected an output, flow or anti dep.");
-
-        if (D->isConfused()) {
-          LLVM_DEBUG(dbgs() << "  Confused dependency between:\n"
-                            << "  " << *Src << "\n"
-                            << "  " << *Dst << "\n");
-          return false;
-        }
-        if (!InnerLoop) {
-          if (D->getDirection(LoopDepth) & Dependence::DVEntry::GT) {
-            LLVM_DEBUG(dbgs() << "  > dependency between:\n"
-                              << "  " << *Src << "\n"
-                              << "  " << *Dst << "\n");
-            return false;
-          }
-        } else {
-          assert(LoopDepth + 1 <= D->getLevels());
-          if (D->getDirection(LoopDepth) & Dependence::DVEntry::GT &&
-              D->getDirection(LoopDepth + 1) & Dependence::DVEntry::LT) {
-            LLVM_DEBUG(dbgs() << "  < > dependency between:\n"
-                              << "  " << *Src << "\n"
-                              << "  " << *Dst << "\n");
-            return false;
-          }
-        }
-      }
-    }
+    if (JammedDir & Dependence::DVEntry::GT)
+      return false;
   }
+
   return true;
 }
 
-static bool checkDependencies(Loop *L, BasicBlockSet &ForeBlocks,
-                              BasicBlockSet &SubLoopBlocks,
-                              BasicBlockSet &AftBlocks, DependenceInfo &DI) {
-  // Get all loads/store pairs for each blocks
-  SmallVector<Value *, 4> ForeMemInstr;
-  SmallVector<Value *, 4> SubLoopMemInstr;
-  SmallVector<Value *, 4> AftMemInstr;
-  if (!getLoadsAndStores(ForeBlocks, ForeMemInstr) ||
-      !getLoadsAndStores(SubLoopBlocks, SubLoopMemInstr) ||
-      !getLoadsAndStores(AftBlocks, AftMemInstr))
-    return false;
-
-  // Check for dependencies between any blocks that may change order
-  unsigned LoopDepth = L->getLoopDepth();
-  return checkDependencies(ForeMemInstr, SubLoopMemInstr, LoopDepth, false,
-                           DI) &&
-         checkDependencies(ForeMemInstr, AftMemInstr, LoopDepth, false, DI) &&
-         checkDependencies(SubLoopMemInstr, AftMemInstr, LoopDepth, false,
-                           DI) &&
-         checkDependencies(SubLoopMemInstr, SubLoopMemInstr, LoopDepth, true,
-                           DI);
-}
-
-namespace {
-
-class ReplaceInfo {
-private:
-  Instruction *Inst;
-  Instruction *NewInst;
-  PHINode *OldPhi;
-
-public:
-  ReplaceInfo(Instruction *I, Instruction *NI, PHINode *Phi = nullptr);
-  void removeOld();
-  void replace();
-};
-
-using ReplaceVec = std::vector<ReplaceInfo>;
-
-class FalseDependenceAnalyzer {
-private:
-  BasicBlock *Header;
-  BasicBlock *Latch;
-  ReplaceVec &RepVec;
-  FalseDependenceAnalyzer(const FalseDependenceAnalyzer &) = delete;
-  FalseDependenceAnalyzer &operator=(const FalseDependenceAnalyzer &) = delete;
-
-private:
-  Instruction *isAddMaskOr5x32InsertElement(Value *V);
-  IntrinsicInst *isAddMask(Value *V);
-  InsertElementInst *is5x32InsertElement(Value *V);
-  bool matchIndex(Instruction *FromSubLoop, Instruction *I);
-  bool getPhiOps(PHINode *Phi, Instruction *&FromSubLoop,
-                 Instruction *&FromHeader);
-
-  PHINode *collectPhi(Instruction *I);
-  bool analyzePhi(PHINode *Phi, InsertElementInst *II);
-
-  Value *getNonBackedgeValue(PHINode *HeaderPhi);
-  PHINode *collectHeaderPhi(Instruction *FromHeader);
-  bool analyzeInstruction(Value *UV, Instruction *FromHeader, PHINode *Phi);
-
-public:
-  FalseDependenceAnalyzer(BasicBlock *H, BasicBlock *L, ReplaceVec &RV);
-  bool analyzePhiFromAbove();
-  bool analyzePhiFromBelow();
-};
-
-class FalseDependenceProcessor {
-private:
-  BasicBlock *Header;
-  BasicBlock *Latch;
-  ReplaceVec RepVec;
-  FalseDependenceProcessor(const FalseDependenceProcessor &) = delete;
-  FalseDependenceProcessor &
-  operator=(const FalseDependenceProcessor &) = delete;
-
-private:
-  bool check(Loop *L);
-  bool analyzeDependence(BasicBlock *Header, BasicBlock *Latch);
-  inline void removeDependence();
-  void dumpLCSSA(Loop *L);
-
-public:
-  FalseDependenceProcessor();
-  bool run(Loop *L);
-};
-
-} // namespace
-
-ReplaceInfo::ReplaceInfo(Instruction *I, Instruction *NewI, PHINode *Phi)
-    : Inst(I), NewInst(NewI), OldPhi(Phi) {}
-
-void ReplaceInfo::removeOld() {
-  if (OldPhi == nullptr)
-    return;
-  for (int i = OldPhi->getNumOperands() - 1; i >= 0; --i) {
-    OldPhi->removeIncomingValue(i, true);
-  }
-}
-
-void ReplaceInfo::replace() {
-  removeOld();
-  return;
-}
-
-FalseDependenceAnalyzer::FalseDependenceAnalyzer(BasicBlock *H, BasicBlock *L,
-                                                 ReplaceVec &RV)
-    : Header(H), Latch(L), RepVec(RV) {}
-
-Instruction *FalseDependenceAnalyzer::isAddMaskOr5x32InsertElement(Value *V) {
-  Instruction *Ins = isAddMask(V);
-  if (Ins == nullptr) {
-    Ins = is5x32InsertElement(V);
-  }
-  return Ins;
-}
-
-IntrinsicInst *FalseDependenceAnalyzer::isAddMask(Value *V) {
-  IntrinsicInst *II = dyn_cast<IntrinsicInst>(V);
-  if (II && (II->getIntrinsicID() == Intrinsic::tpc_add_mask))
-    return II;
-  return nullptr;
-}
-
-InsertElementInst *FalseDependenceAnalyzer::is5x32InsertElement(Value *V) {
-  InsertElementInst *II = dyn_cast<InsertElementInst>(V);
-  if (II) {
-    static LLVMContext &C = Latch->getContext();
-    static Type *Int5Ty = VectorType::get(Type::getInt32Ty(C), 5);
-    if (Int5Ty == II->getType()) {
-      return II;
-    }
-  }
-  return nullptr;
-}
-
-bool FalseDependenceAnalyzer::matchIndex(Instruction *FromSubLoop,
-                                         Instruction *I) {
-  bool Ret = false;
-  if (auto *FromSubLoopInt = isAddMask(FromSubLoop)) {
-    Value *IV = I->getOperand(2);
-    int dimMask = dyn_cast<llvm::ConstantInt>(FromSubLoopInt->getOperand(2))
-                      ->getZExtValue();
-    unsigned index = Log2_32(dimMask);
-    ConstantInt *IValConst = dyn_cast<ConstantInt>(IV);
-    if (IValConst) {
-      APInt v1 = (IValConst->getUniqueInteger());
-      LLVM_DEBUG(dbgs() << "matchIndex for add_mask : " << *v1.getRawData()
-                        << ", " << index << "\n");
-      Ret = ((*v1.getRawData()) == index);
-    }
-  } else if (auto *FromSubLoopInt = is5x32InsertElement(FromSubLoop)) {
-    Value *IV = I->getOperand(2);
-    Value *SV = FromSubLoopInt->getOperand(2);
-    ConstantInt *IValConst = dyn_cast<ConstantInt>(IV);
-    ConstantInt *SValConst = dyn_cast<ConstantInt>(SV);
-    if (IValConst && SValConst) {
-      Ret = (IValConst->getValue() == SValConst->getValue());
-      LLVM_DEBUG(dbgs() << "matchIndex for insert_element : "
-                        << IValConst->getValue() << ", "
-                        << SValConst->getValue() << "\n");
-    }
-  }
-  return Ret;
-}
-
-static unsigned getAddMaskOpIdx(Instruction *I) {
-  Value *Op0 = I->getOperand(0);
-  Value *Op1 = I->getOperand(1);
-  assert(!(isa<Constant>(Op0) && isa<Constant>(Op1)) &&
-         "Operand-0 and Operand-1 both cannot be Constant Values");
-  assert((isa<Constant>(Op0) || isa<Constant>(Op1)) &&
-         "Either Operand-0 or Operand-1 must be a Constant Value");
-  return isa<Constant>(Op0) ? 1 : 0;
-}
-
-bool FalseDependenceAnalyzer::getPhiOps(PHINode *Phi, Instruction *&FromSubLoop,
-                                        Instruction *&FromHeader) {
-  if (Phi->getNumOperands() != 1)
-    return false;
-  // get lccssa Phi-node
-  LLVM_DEBUG(dbgs() << "getiPhiOps Phi node :"
-                    << "\n");
-  LLVM_DEBUG(Phi->dump());
-  Value *PV = Phi->getIncomingValue(0);
-  BasicBlock *PB = Phi->getIncomingBlock(0);
-  Instruction *II = isAddMaskOr5x32InsertElement(PV);
-  if (II == nullptr)
-    return false;
-  unsigned opIdx = 0;
-  if (Instruction *Ins = isAddMask(PV)) {
-    opIdx = getAddMaskOpIdx(Ins);
-  }
-  Value *Vec = II->getOperand(opIdx);
-  if (PHINode *FinalPhi = dyn_cast<PHINode>(Vec)) {
-    LLVM_DEBUG(dbgs() << "final Phi :");
-    LLVM_DEBUG(FinalPhi->dump());
-    // figure out the header and sub-loop ops
-    // trace and find the actual insert elements in header and sub-loops
-    Value *vHead = FinalPhi->getIncomingValueForBlock(Header);
-    if (Instruction *I = isAddMaskOr5x32InsertElement(vHead)) {
-      FromHeader = I;
-      LLVM_DEBUG(dbgs() << "instruction from header :");
-      LLVM_DEBUG(FromHeader->dump());
-    }
-    Value *vCurr = FinalPhi->getIncomingValueForBlock(PB);
-    if (Instruction *I = isAddMaskOr5x32InsertElement(vCurr)) {
-      FromSubLoop = I;
-      LLVM_DEBUG(dbgs() << "instruction from sub-loop :");
-      LLVM_DEBUG(FromSubLoop->dump());
-    }
-
-    PHINode *HeaderPhi;
-    if (!FromHeader && FromSubLoop && (HeaderPhi = dyn_cast<PHINode>(vHead))) {
-      FromHeader = HeaderPhi;
-      LLVM_DEBUG(dbgs() << "Couldn't get the coord-update in the Header\n");
-      LLVM_DEBUG(dbgs() << "Trying to fix: " << HeaderPhi->getName() << "\n");
-      return false; // not as per plan, but try fixing this Phi
-    }
-
-    if (FromHeader && FromSubLoop)
+static bool preservesBackwardDependence(Instruction *Src, Instruction *Dst,
+                                        unsigned UnrollLevel, unsigned JamLevel,
+                                        bool Sequentialized, Dependence *D) {
+  // UnrollLevel might carry the dependency Dst --> Src
+  for (unsigned CurLoopDepth = UnrollLevel + 1; CurLoopDepth <= JamLevel;
+       ++CurLoopDepth) {
+    auto JammedDir = D->getDirection(CurLoopDepth);
+    if (JammedDir == Dependence::DVEntry::GT)
       return true;
-  }
-  return false;
-}
 
-PHINode *FalseDependenceAnalyzer::collectHeaderPhi(Instruction *FromHeader) {
-  PHINode *HeaderPhi = nullptr;
-  Value *Vec = FromHeader->getOperand(0);
-  PHINode *P = dyn_cast<PHINode>(Vec);
-  if (P == nullptr) {
-    if (InsertElementInst *IE = dyn_cast<InsertElementInst>(Vec)) {
-      Vec = IE->getOperand(0);
-    }
-  }
-  if ((P = dyn_cast<PHINode>(Vec))) {
-    HeaderPhi = P;
-    LLVM_DEBUG(FromHeader->dump());
-    LLVM_DEBUG(dbgs() << "header Phi node in insert_element/add_mask :"
-                      << HeaderPhi->getName() << "\n");
-  }
-  return HeaderPhi;
-}
-
-Value *FalseDependenceAnalyzer::getNonBackedgeValue(PHINode *HeaderPhi) {
-  BasicBlock *upperBlock = HeaderPhi->getIncomingBlock(0);
-  if (upperBlock == Latch) {
-    upperBlock = HeaderPhi->getIncomingBlock(1);
-  }
-  Value *UV = HeaderPhi->getIncomingValueForBlock(upperBlock);
-  return UV;
-}
-
-bool FalseDependenceAnalyzer::analyzeInstruction(Value *UV,
-                                                 Instruction *FromHeader,
-                                                 PHINode *HeaderPhi) {
-  bool Ret = false;
-  Instruction *UVInst = isAddMaskOr5x32InsertElement(UV);
-  Value *UVVec = nullptr;
-
-  if (UVInst) {
-    if (matchIndex(FromHeader, UVInst))
+    if (JammedDir & Dependence::DVEntry::LT)
       return false;
-    UVVec = UVInst->getOperand(0);
-  } else {
-    UVInst = dyn_cast<PHINode>(UV);
-    if (!UVInst)
-      return false;
-    UVVec = UVInst;
   }
 
-  if (PHINode *LastPhi = dyn_cast<PHINode>(UVVec)) {
-    LLVM_DEBUG(dbgs() << "last Phi node in insert_element/add_mask :"
-                      << LastPhi->getName() << "\n");
-    if (PHINode *OldPhi = HeaderPhi) {
-      LLVM_DEBUG(dbgs() << "old Phi node in insert_element/add_mask :"
-                        << OldPhi->getName() << "\n");
-
-      LLVM_DEBUG(dbgs() << "Killing " << *OldPhi << "\n");
-
-      if (OldPhi->getNumIncomingValues() != 2)
-        return false;
-
-      // Check if there are uses of the OldPhi and update them before we kill
-      // it.
-      for (User *U : OldPhi->users()) {
-        LLVM_DEBUG(dbgs() << "Used by: " << *U << "\n");
-        auto UserInst = dyn_cast<Instruction>(U);
-        if (!UserInst)
-          break;
-
-        InsertElementInst *CoordInst = is5x32InsertElement(UserInst);
-        if (!CoordInst)
-          break;
-
-        Value *LatchInc = OldPhi->getIncomingValueForBlock(Latch);
-        if (!LatchInc)
-          return false;
-
-        PHINode *LCSSAPhi = dyn_cast<PHINode>(LatchInc);
-        if (!LCSSAPhi)
-          return false;
-
-        unsigned PreheaderIdx = 0;
-        if (OldPhi->getBasicBlockIndex(Latch) == 0)
-          PreheaderIdx = 1;
-
-        Value *PhiSubstitute = OldPhi->getIncomingValue(PreheaderIdx);
-        U->replaceUsesOfWith(OldPhi, PhiSubstitute);
-      }
-
-      ReplaceInfo ri(/* Inst */ FromHeader, /* NewInst */ UVInst, OldPhi);
-      RepVec.push_back(ri);
-      Ret = true;
-    }
-  }
-  return Ret;
+  // Backward dependencies are only preserved if not interleaved.
+  return Sequentialized;
 }
 
-bool FalseDependenceAnalyzer::analyzePhiFromAbove() {
-  bool Ret = false;
-  LLVM_DEBUG(dbgs() << "trying analyzeAndReplacePhiFromAbove."
-                    << "\n");
-  size_t NumCand = 0;
-  SmallVector<PHINode *, 4> RedundantPHIs;
+// Check whether it is semantically safe Src and Dst considering any potential
+// dependency between them.
+//
+// @param UnrollLevel The level of the loop being unrolled
+// @param JamLevel    The level of the loop being jammed; if Src and Dst are on
+// different levels, the outermost common loop counts as jammed level
+//
+// @return true if is safe and false if there is a dependency violation.
+static bool checkDependency(Instruction *Src, Instruction *Dst,
+                            unsigned UnrollLevel, unsigned JamLevel,
+                            bool Sequentialized, DependenceInfo &DI) {
+  assert(UnrollLevel <= JamLevel &&
+         "Expecting JamLevel to be at least UnrollLevel");
 
-  for (auto &HeadPhi : Header->phis()) {
-    Value *V = HeadPhi.getIncomingValueForBlock(Latch);
-    PHINode *LatchPhi = dyn_cast<PHINode>(V);
-    if (LatchPhi == nullptr)
-      continue;
-
-    ++NumCand;
-    LLVM_DEBUG(dbgs() << "latch Phi = " << LatchPhi->getName() << "\n");
-    Instruction *FromSubLoop = nullptr;
-    Instruction *FromHeader = nullptr;
-    bool succ = getPhiOps(LatchPhi, FromSubLoop, FromHeader);
-
-    if (!succ) {
-      PHINode *HeaderPhi = nullptr;
-      if (FromHeader && (HeaderPhi = dyn_cast<PHINode>(FromHeader)) &&
-          HeaderPhi->getNumIncomingValues() == 2) {
-        RedundantPHIs.push_back(HeaderPhi);
-        LLVM_DEBUG(
-            dbgs() << "getPhiOps failed since there's another level of PHI: "
-                   << HeaderPhi->getName() << "\n");
-        continue;
-      }
-
-      Ret = false;
-      break;
-    }
-    LLVM_DEBUG(dbgs() << "getPhiOps suceeded."
-                      << "\n");
-    PHINode *HeaderPhi = collectHeaderPhi(FromHeader);
-    if (HeaderPhi == nullptr) {
-      Ret = false;
-      break;
-    }
-    Value *UV = getNonBackedgeValue(HeaderPhi);
-    if (UV == nullptr) {
-      Ret = false;
-      break;
-    }
-    Ret = analyzeInstruction(UV, FromHeader, HeaderPhi);
-    if (!Ret) {
-      break;
-    }
-  }
-
-  for (PHINode *RedundantPHI : RedundantPHIs) {
-    unsigned PreheaderIdx = 0;
-    if (RedundantPHI->getBasicBlockIndex(Latch) == 0)
-      PreheaderIdx = 1;
-    LLVM_DEBUG(dbgs() << "Killing: " << *RedundantPHI << "\n");
-    RedundantPHI->replaceAllUsesWith(
-        RedundantPHI->getIncomingValue(PreheaderIdx));
-    for (int i = RedundantPHI->getNumOperands() - 1; i >= 0; --i) {
-      RedundantPHI->removeIncomingValue(i, true);
-    }
-  }
-
-  LLVM_DEBUG(dbgs() << "# candidates = " << NumCand << "\n");
-  LLVM_DEBUG(dbgs() << "# replacement = " << RepVec.size() << "\n");
-  LLVM_DEBUG(dbgs() << "analyzeAndReplacePhiFromAbove Ret = " << Ret << "\n");
-  return Ret;
-}
-
-PHINode *FalseDependenceAnalyzer::collectPhi(Instruction *I) {
-  PHINode *Phi = nullptr;
-  Value *Vec = I->getOperand(0);
-  if (PHINode *P = dyn_cast<PHINode>(Vec)) {
-    Phi = P;
-    LLVM_DEBUG(I->dump());
-    LLVM_DEBUG(dbgs() << "Phi node in insert_element/add_mask :"
-                      << Phi->getName() << "\n");
-  }
-  return Phi;
-}
-
-bool FalseDependenceAnalyzer::analyzePhi(PHINode *Phi, InsertElementInst *II) {
-  Instruction *FromSubLoop = nullptr;
-  Instruction *FromHeader = nullptr;
-  bool Succ = getPhiOps(Phi, FromSubLoop, FromHeader);
-  if (!Succ)
-    return false;
-  bool Match = matchIndex(FromSubLoop, II);
-  if (!Match) {
-    LLVM_DEBUG(dbgs() << "insert_element/add_mask target not matched. No "
-                         "transform will be done."
-                      << "\n");
-    return false;
-  }
-  LLVM_DEBUG(
-      dbgs() << "insert_element/add_mask target matched. Recording replacement."
-             << "\n");
-  ReplaceInfo ri(II, FromHeader);
-  RepVec.push_back(ri);
-  return true;
-}
-
-bool FalseDependenceAnalyzer::analyzePhiFromBelow() {
-  bool Ret = false;
-  LLVM_DEBUG(dbgs() << "trying analyzeAndReplacePhiFromBelow."
-                    << "\n");
-  size_t NumCand = 0;
-  for (auto &HeadPhi : Header->phis()) {
-    Value *V = HeadPhi.getIncomingValueForBlock(Latch);
-    InsertElementInst *II = is5x32InsertElement(V);
-    if (II == nullptr)
-      continue;
-    ++NumCand;
-    PHINode *Phi = collectPhi(II);
-    if (!Phi) {
-      LLVM_DEBUG(dbgs() << "Phi node in insert_element/add_mask not found."
-                        << "\n");
-      Ret = false;
-      break;
-    }
-    Ret = analyzePhi(Phi, II);
-    if (!Ret) {
-      break;
-    }
-  }
-
-  LLVM_DEBUG(dbgs() << "# candidates = " << NumCand << "\n");
-  LLVM_DEBUG(dbgs() << "# replacement = " << RepVec.size() << "\n");
-  LLVM_DEBUG(dbgs() << "analyzeAndReplacePhiFromBelow Ret = " << Ret << "\n");
-  return Ret;
-}
-
-FalseDependenceProcessor::FalseDependenceProcessor()
-    : Header(nullptr), Latch(nullptr) {}
-
-bool FalseDependenceProcessor::analyzeDependence(BasicBlock *Header,
-                                                 BasicBlock *Latch) {
-  FalseDependenceAnalyzer analyzer(Header, Latch, RepVec);
-  if (analyzer.analyzePhiFromBelow() || analyzer.analyzePhiFromAbove())
+  if (Src == Dst)
     return true;
-  return false;
-}
+  // Ignore Input dependencies.
+  if (isa<LoadInst>(Src) && isa<LoadInst>(Dst))
+    return true;
 
-void FalseDependenceProcessor::removeDependence() {
-  for (auto &r : RepVec) {
-    r.replace();
+  // Check whether unroll-and-jam may violate a dependency.
+  // By construction, every dependency will be lexicographically non-negative
+  // (if it was, it would violate the current execution order), such as
+  //   (0,0,>,*,*)
+  // Unroll-and-jam changes the GT execution of two executions to the same
+  // iteration of the chosen unroll level. That is, a GT dependence becomes a GE
+  // dependence (or EQ, if we fully unrolled the loop) at the loop's position:
+  //   (0,0,>=,*,*)
+  // Now, the dependency is not necessarily non-negative anymore, i.e.
+  // unroll-and-jam may violate correctness.
+  std::unique_ptr<Dependence> D = DI.depends(Src, Dst, true);
+  if (!D)
+    return true;
+  assert(D->isOrdered() && "Expected an output, flow or anti dep.");
+
+  if (D->isConfused()) {
+    LLVM_DEBUG(dbgs() << "  Confused dependency between:\n"
+                      << "  " << *Src << "\n"
+                      << "  " << *Dst << "\n");
+    return false;
   }
+
+  // If outer levels (levels enclosing the loop being unroll-and-jammed) have a
+  // non-equal direction, then the locations accessed in the inner levels cannot
+  // overlap in memory. We assumes the indexes never overlap into neighboring
+  // dimensions.
+  for (unsigned CurLoopDepth = 1; CurLoopDepth < UnrollLevel; ++CurLoopDepth)
+    if (!(D->getDirection(CurLoopDepth) & Dependence::DVEntry::EQ))
+      return true;
+
+  auto UnrollDirection = D->getDirection(UnrollLevel);
+
+  // If the distance carried by the unrolled loop is 0, then after unrolling
+  // that distance will become non-zero resulting in non-overlapping accesses in
+  // the inner loops.
+  if (UnrollDirection == Dependence::DVEntry::EQ)
+    return true;
+
+  if (UnrollDirection & Dependence::DVEntry::LT &&
+      !preservesForwardDependence(Src, Dst, UnrollLevel, JamLevel,
+                                  Sequentialized, D.get()))
+    return false;
+
+  if (UnrollDirection & Dependence::DVEntry::GT &&
+      !preservesBackwardDependence(Src, Dst, UnrollLevel, JamLevel,
+                                   Sequentialized, D.get()))
+    return false;
+
+  return true;
 }
 
-void FalseDependenceProcessor::dumpLCSSA(Loop *L) {
-  LLVM_DEBUG({
-    dbgs() << "Dump LCSSA... start"
-           << "\n";
-    for (BasicBlock *BB : L->getBlocks()) {
-      BB->dump();
+static bool
+checkDependencies(Loop &Root, const BasicBlockSet &SubLoopBlocks,
+                  const DenseMap<Loop *, BasicBlockSet> &ForeBlocksMap,
+                  const DenseMap<Loop *, BasicBlockSet> &AftBlocksMap,
+                  DependenceInfo &DI, LoopInfo &LI) {
+  SmallVector<BasicBlockSet, 8> AllBlocks;
+  for (Loop *L : Root.getLoopsInPreorder())
+    if (ForeBlocksMap.find(L) != ForeBlocksMap.end())
+      AllBlocks.push_back(ForeBlocksMap.lookup(L));
+  AllBlocks.push_back(SubLoopBlocks);
+  for (Loop *L : Root.getLoopsInPreorder())
+    if (AftBlocksMap.find(L) != AftBlocksMap.end())
+      AllBlocks.push_back(AftBlocksMap.lookup(L));
+
+  unsigned LoopDepth = Root.getLoopDepth();
+  SmallVector<Instruction *, 4> EarlierLoadsAndStores;
+  SmallVector<Instruction *, 4> CurrentLoadsAndStores;
+  for (BasicBlockSet &Blocks : AllBlocks) {
+    CurrentLoadsAndStores.clear();
+    if (!getLoadsAndStores(Blocks, CurrentLoadsAndStores))
+      return false;
+
+    Loop *CurLoop = LI.getLoopFor((*Blocks.begin())->front().getParent());
+    unsigned CurLoopDepth = CurLoop->getLoopDepth();
+
+    for (auto *Earlier : EarlierLoadsAndStores) {
+      Loop *EarlierLoop = LI.getLoopFor(Earlier->getParent());
+      unsigned EarlierDepth = EarlierLoop->getLoopDepth();
+      unsigned CommonLoopDepth = std::min(EarlierDepth, CurLoopDepth);
+      for (auto *Later : CurrentLoadsAndStores) {
+        if (!checkDependency(Earlier, Later, LoopDepth, CommonLoopDepth, false,
+                             DI))
+          return false;
+      }
     }
-    dbgs() << "Dump LCSSA... end"
-           << "\n";
-  });
+
+    size_t NumInsts = CurrentLoadsAndStores.size();
+    for (size_t I = 0; I < NumInsts; ++I) {
+      for (size_t J = I; J < NumInsts; ++J) {
+        if (!checkDependency(CurrentLoadsAndStores[I], CurrentLoadsAndStores[J],
+                             LoopDepth, CurLoopDepth, true, DI))
+          return false;
+      }
+    }
+
+    EarlierLoadsAndStores.append(CurrentLoadsAndStores.begin(),
+                                 CurrentLoadsAndStores.end());
+  }
+  return true;
 }
 
-bool FalseDependenceProcessor::check(Loop *L) {
-  if (!L->isLoopSimplifyForm() || L->getSubLoops().size() != 1)
-    return false;
-  Loop *SubLoop = L->getSubLoops()[0];
-  if (!SubLoop->isLoopSimplifyForm())
+static bool isEligibleLoopForm(const Loop &Root) {
+  // Root must have a child.
+  if (Root.getSubLoops().size() != 1)
     return false;
 
-  Header = L->getHeader();
-  Latch = L->getLoopLatch();
-  BasicBlock *Exit = L->getExitingBlock();
-  BasicBlock *SubLoopHeader = SubLoop->getHeader();
-  BasicBlock *SubLoopLatch = SubLoop->getLoopLatch();
-  BasicBlock *SubLoopExit = SubLoop->getExitingBlock();
+  const Loop *L = &Root;
+  do {
+    // All loops in Root need to be in simplify and rotated form.
+    if (!L->isLoopSimplifyForm())
+      return false;
 
-  if (Latch != Exit)
-    return false;
-  if (SubLoopLatch != SubLoopExit)
-    return false;
+    if (!L->isRotatedForm())
+      return false;
 
-  if (Header->hasAddressTaken() || SubLoopHeader->hasAddressTaken())
-    return false;
+    if (L->getHeader()->hasAddressTaken()) {
+      LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; Address taken\n");
+      return false;
+    }
+
+    unsigned SubLoopsSize = L->getSubLoops().size();
+    if (SubLoopsSize == 0)
+      return true;
+
+    // Only one child is allowed.
+    if (SubLoopsSize != 1)
+      return false;
+
+    L = L->getSubLoops()[0];
+  } while (L);
 
   return true;
 }
 
-bool FalseDependenceProcessor::run(Loop *L) {
-  bool Check = check(L);
-  if (!Check) {
-    LLVM_DEBUG(dbgs() << "Pre-requisite check before false dependence failed "
-                         "still trying unroll-and-jam\n");
-    return false;
-  }
-
-  dumpLCSSA(L);
-  bool Succ = analyzeDependence(Header, Latch);
-  if (!Succ) {
-    LLVM_DEBUG(dbgs() << "No false dependence fixed "
-                         "still trying unroll-and-jam\n");
-    return false;
-  }
-
-  removeDependence();
-  dumpLCSSA(L);
-  return true;
-}
-
-bool llvm::removeFalseDependence(Loop *L) {
-  FalseDependenceProcessor Proc;
-  return Proc.run(L);
+static Loop *getInnerMostLoop(Loop *L) {
+  while (!L->getSubLoops().empty())
+    L = L->getSubLoops()[0];
+  return L;
 }
 
 bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
-                                DependenceInfo &DI, bool AssumeSafety) {
+                                DependenceInfo &DI, LoopInfo &LI,
+                                bool AssumeSafety) {
+  if (!isEligibleLoopForm(*L)) {
+    LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; Ineligible loop form\n");
+    return false;
+  }
+
   /* We currently handle outer loops like this:
         |
-    ForeFirst    <----\    }
-     Blocks           |    } ForeBlocks
-    ForeLast          |    }
-        |             |
-    SubLoopFirst  <\  |    }
-     Blocks        |  |    } SubLoopBlocks
-    SubLoopLast   -/  |    }
-        |             |
-    AftFirst          |    }
-     Blocks           |    } AftBlocks
-    AftLast     ------/    }
+    ForeFirst    <------\   }
+     Blocks             |   } ForeBlocks of L
+    ForeLast            |   }
+        |               |
+       ...              |
+        |               |
+    ForeFirst    <----\ |   }
+     Blocks           | |   } ForeBlocks of a inner loop of L
+    ForeLast          | |   }
+        |             | |
+    JamLoopFirst  <\  | |   }
+     Blocks        |  | |   } JamLoopBlocks of the innermost loop
+    JamLoopLast   -/  | |   }
+        |             | |
+    AftFirst          | |   }
+     Blocks           | |   } AftBlocks of a inner loop of L
+    AftLast     ------/ |   }
+        |               |
+       ...              |
+        |               |
+    AftFirst            |   }
+     Blocks             |   } AftBlocks of L
+    AftLast     --------/   }
         |
 
     There are (theoretically) any number of blocks in ForeBlocks, SubLoopBlocks
@@ -1244,14 +900,16 @@ bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
     things further in the profitablility checks of the unroll and jam pass.
 
     Because of the way we rearrange basic blocks, we also require that
-    the Fore blocks on all unrolled iterations are safe to move before the
-    SubLoop blocks of all iterations. So we require that the phi node looping
-    operands of ForeHeader can be moved to at least the end of ForeEnd, so that
-    we can arrange cloned Fore Blocks before the subloop and match up Phi's
-    correctly.
+    the Fore blocks of L on all unrolled iterations are safe to move before the
+    blocks of the direct child of L of all iterations. So we require that the
+    phi node looping operands of ForeHeader can be moved to at least the end of
+    ForeEnd, so that we can arrange cloned Fore Blocks before the subloop and
+    match up Phi's correctly.
 
-    i.e. The old order of blocks used to be F1 S1_1 S1_2 A1 F2 S2_1 S2_2 A2.
-    It needs to be safe to tranform this to F1 F2 S1_1 S2_1 S1_2 S2_2 A1 A2.
+    i.e. The old order of blocks used to be
+           (F1)1 (F2)1 J1_1 J1_2 (A2)1 (A1)1 (F1)2 (F2)2 J2_1 J2_2 (A2)2 (A1)2.
+         It needs to be safe to transform this to
+           (F1)1 (F1)2 (F2)1 (F2)2 J1_1 J1_2 J2_1 J2_2 (A2)1 (A2)2 (A1)1 (A1)2.
 
     There are then a number of checks along the lines of no calls, no
     exceptions, inner loop IV is consistent, etc. Note that for loops requiring
@@ -1259,35 +917,13 @@ bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
     UnrollAndJamLoop if the trip count cannot be easily calculated.
   */
 
-  if (!L->isLoopSimplifyForm() || L->getSubLoops().size() != 1)
-    return false;
-  Loop *SubLoop = L->getSubLoops()[0];
-  if (!SubLoop->isLoopSimplifyForm())
-    return false;
-
-  BasicBlock *Header = L->getHeader();
-  BasicBlock *Latch = L->getLoopLatch();
-  BasicBlock *Exit = L->getExitingBlock();
-  BasicBlock *SubLoopHeader = SubLoop->getHeader();
-  BasicBlock *SubLoopLatch = SubLoop->getLoopLatch();
-  BasicBlock *SubLoopExit = SubLoop->getExitingBlock();
-
-  if (Latch != Exit)
-    return false;
-  if (SubLoopLatch != SubLoopExit)
-    return false;
-
-  if (Header->hasAddressTaken() || SubLoopHeader->hasAddressTaken()) {
-    LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; Address taken\n");
-    return false;
-  }
-
   // Split blocks into Fore/SubLoop/Aft based on dominators
+  Loop *JamLoop = getInnerMostLoop(L);
   BasicBlockSet SubLoopBlocks;
-  BasicBlockSet ForeBlocks;
-  BasicBlockSet AftBlocks;
-  if (!partitionOuterLoopBlocks(L, SubLoop, ForeBlocks, SubLoopBlocks,
-                                AftBlocks, &DT)) {
+  DenseMap<Loop *, BasicBlockSet> ForeBlocksMap;
+  DenseMap<Loop *, BasicBlockSet> AftBlocksMap;
+  if (!partitionOuterLoopBlocks(*L, *JamLoop, SubLoopBlocks, ForeBlocksMap,
+                                AftBlocksMap, DT)) {
     LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; Incompatible loop layout\n");
     return false;
   }
@@ -1295,7 +931,7 @@ bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
   // Aft blocks may need to move instructions to fore blocks, which becomes more
   // difficult if there are multiple (potentially conditionally executed)
   // blocks. For now we just exclude loops with multiple aft blocks.
-  if (AftBlocks.size() != 1) {
+  if (AftBlocksMap[L].size() != 1) {
     LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; Can't currently handle "
                          "multiple blocks after the loop\n");
     return false;
@@ -1303,12 +939,15 @@ bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
 
   // Check inner loop backedge count is consistent on all iterations of the
   // outer loop
-  if (!hasIterationCountInvariantInParent(SubLoop, SE)) {
+  if (any_of(L->getLoopsInPreorder(), [&SE](Loop *SubLoop) {
+        return !hasIterationCountInvariantInParent(SubLoop, SE);
+      })) {
     LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; Inner loop iteration count is "
                          "not consistent on each iteration\n");
     return false;
   }
 
+#if 1 // MERGE:
   // Check the loop safety info for exceptions.
   if (!AssumeSafety) {
     SimpleLoopSafetyInfo LSI;
@@ -1318,6 +957,7 @@ bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
       return false;
     }
   }
+#endif
 
   // We've ruled out the easy stuff and now need to check that there are no
   // interdependencies which may prevent us from moving the:
@@ -1326,6 +966,10 @@ bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
   //  ForeBlock phi operands before the subloop
 
   // Make sure we can move all instructions we need to before the subloop
+  BasicBlock *Header = L->getHeader();
+  BasicBlock *Latch = L->getLoopLatch();
+  BasicBlockSet AftBlocks = AftBlocksMap[L];
+  Loop *SubLoop = L->getSubLoops()[0];
   if (!processHeaderPhiOperands(
           Header, Latch, AftBlocks, [&AftBlocks, &SubLoop](Instruction *I) {
             if (SubLoop->contains(I->getParent()))
@@ -1351,7 +995,8 @@ bool llvm::isSafeToUnrollAndJam(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
   // Check for memory dependencies which prohibit the unrolling we are doing.
   // Because of the way we are unrolling Fore/Sub/Aft blocks, we need to check
   // there are no dependencies between Fore-Sub, Fore-Aft, Sub-Aft and Sub-Sub.
-  if (!checkDependencies(L, ForeBlocks, SubLoopBlocks, AftBlocks, DI)) {
+  if (!checkDependencies(*L, SubLoopBlocks, ForeBlocksMap, AftBlocksMap, DI,
+                         LI)) {
     LLVM_DEBUG(dbgs() << "Won't unroll-and-jam; failed dependency check\n");
     return false;
   }

@@ -29,6 +29,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -68,7 +69,7 @@ static cl::opt<unsigned> UpdateLimit("aarch64-update-scan-limit", cl::init(100),
 
 // Enable register renaming to find additional store pairing opportunities.
 static cl::opt<bool> EnableRenaming("aarch64-load-store-renaming",
-                                    cl::init(false), cl::Hidden);
+                                    cl::init(true), cl::Hidden);
 
 #define AARCH64_LOAD_STORE_OPT_NAME "AArch64 load / store optimization pass"
 
@@ -677,14 +678,14 @@ AArch64LoadStoreOpt::mergeNarrowZeroStores(MachineBasicBlock::iterator I,
   assert(isPromotableZeroStoreInst(*I) && isPromotableZeroStoreInst(*MergeMI) &&
          "Expected promotable zero stores.");
 
-  MachineBasicBlock::iterator NextI = I;
-  ++NextI;
+  MachineBasicBlock::iterator E = I->getParent()->end();
+  MachineBasicBlock::iterator NextI = next_nodbg(I, E);
   // If NextI is the second of the two instructions to be merged, we need
   // to skip one further. Either way we merge will invalidate the iterator,
   // and we don't need to scan the new instruction, as it's a pairwise
   // instruction, which we're not considering for further action anyway.
   if (NextI == MergeMI)
-    ++NextI;
+    NextI = next_nodbg(NextI, E);
 
   unsigned Opc = I->getOpcode();
   bool IsScaled = !TII->isUnscaledLdSt(Opc);
@@ -747,18 +748,17 @@ static bool forAllMIsUntilDef(MachineInstr &MI, MCPhysReg DefReg,
                               const TargetRegisterInfo *TRI, unsigned Limit,
                               std::function<bool(MachineInstr &, bool)> &Fn) {
   auto MBB = MI.getParent();
-  for (MachineBasicBlock::reverse_iterator I = MI.getReverseIterator(),
-                                           E = MBB->rend();
-       I != E; I++) {
+  for (MachineInstr &I :
+       instructionsWithoutDebug(MI.getReverseIterator(), MBB->instr_rend())) {
     if (!Limit)
       return false;
     --Limit;
 
-    bool isDef = any_of(I->operands(), [DefReg, TRI](MachineOperand &MOP) {
+    bool isDef = any_of(I.operands(), [DefReg, TRI](MachineOperand &MOP) {
       return MOP.isReg() && MOP.isDef() && !MOP.isDebug() && MOP.getReg() &&
              TRI->regsOverlap(MOP.getReg(), DefReg);
     });
-    if (!Fn(*I, isDef))
+    if (!Fn(I, isDef))
       return false;
     if (isDef)
       break;
@@ -782,14 +782,14 @@ MachineBasicBlock::iterator
 AArch64LoadStoreOpt::mergePairedInsns(MachineBasicBlock::iterator I,
                                       MachineBasicBlock::iterator Paired,
                                       const LdStPairFlags &Flags) {
-  MachineBasicBlock::iterator NextI = I;
-  ++NextI;
+  MachineBasicBlock::iterator E = I->getParent()->end();
+  MachineBasicBlock::iterator NextI = next_nodbg(I, E);
   // If NextI is the second of the two instructions to be merged, we need
   // to skip one further. Either way we merge will invalidate the iterator,
   // and we don't need to scan the new instruction, as it's a pairwise
   // instruction, which we're not considering for further action anyway.
   if (NextI == Paired)
-    ++NextI;
+    NextI = next_nodbg(NextI, E);
 
   int SExtIdx = Flags.getSExtIdx();
   unsigned Opc =
@@ -1008,8 +1008,8 @@ AArch64LoadStoreOpt::mergePairedInsns(MachineBasicBlock::iterator I,
 MachineBasicBlock::iterator
 AArch64LoadStoreOpt::promoteLoadFromStore(MachineBasicBlock::iterator LoadI,
                                           MachineBasicBlock::iterator StoreI) {
-  MachineBasicBlock::iterator NextI = LoadI;
-  ++NextI;
+  MachineBasicBlock::iterator NextI =
+      next_nodbg(LoadI, LoadI->getParent()->end());
 
   int LoadSize = TII->getMemScale(*LoadI);
   int StoreSize = TII->getMemScale(*StoreI);
@@ -1144,24 +1144,11 @@ static int alignTo(int Num, int PowOf2) {
   return (Num + PowOf2 - 1) & ~(PowOf2 - 1);
 }
 
-static bool mayAlias(MachineInstr &MIa, MachineInstr &MIb,
-                     AliasAnalysis *AA) {
-  // One of the instructions must modify memory.
-  if (!MIa.mayStore() && !MIb.mayStore())
-    return false;
-
-  // Both instructions must be memory operations.
-  if (!MIa.mayLoadOrStore() && !MIb.mayLoadOrStore())
-    return false;
-
-  return MIa.mayAlias(AA, MIb, /*UseTBAA*/false);
-}
-
 static bool mayAlias(MachineInstr &MIa,
                      SmallVectorImpl<MachineInstr *> &MemInsns,
                      AliasAnalysis *AA) {
   for (MachineInstr *MIb : MemInsns)
-    if (mayAlias(MIa, *MIb, AA))
+    if (MIa.mayAlias(AA, *MIb, /*UseTBAA*/ false))
       return true;
 
   return false;
@@ -1187,7 +1174,7 @@ bool AArch64LoadStoreOpt::findMatchingStore(
 
   unsigned Count = 0;
   do {
-    --MBBI;
+    MBBI = prev_nodbg(MBBI, B);
     MachineInstr &MI = *MBBI;
 
     // Don't count transient instructions towards the search limit since there
@@ -1199,8 +1186,10 @@ bool AArch64LoadStoreOpt::findMatchingStore(
     // store instruction writes and the stored value is not modified, we can
     // promote the load. Since we do not handle stores with pre-/post-index,
     // it's unnecessary to check if BaseReg is modified by the store itself.
+    // Also we can't handle stores without an immediate offset operand,
+    // while the operand might be the address for a global variable.
     if (MI.mayStore() && isMatchingStore(LoadMI, MI) &&
-        BaseReg == getLdStBaseOp(MI).getReg() &&
+        BaseReg == getLdStBaseOp(MI).getReg() && getLdStOffsetOp(MI).isImm() &&
         isLdOffsetInRangeOfSt(LoadMI, MI, TII) &&
         ModifiedRegUnits.available(getLdStRegOp(MI).getReg())) {
       StoreI = MBBI;
@@ -1219,7 +1208,7 @@ bool AArch64LoadStoreOpt::findMatchingStore(
       return false;
 
     // If we encounter a store aliased with the load, return early.
-    if (MI.mayStore() && mayAlias(LoadMI, MI, AA))
+    if (MI.mayStore() && LoadMI.mayAlias(AA, MI, /*UseTBAA*/ false))
       return false;
   } while (MBBI != B && Count < Limit);
   return false;
@@ -1300,7 +1289,23 @@ canRenameUpToDef(MachineInstr &FirstMI, LiveRegUnits &UsedInBetween,
     LLVM_DEBUG(dbgs() << "  Operand not killed at " << FirstMI << "\n");
     return false;
   }
-  auto canRenameMOP = [](const MachineOperand &MOP) {
+  auto canRenameMOP = [TRI](const MachineOperand &MOP) {
+    if (MOP.isReg()) {
+      auto *RegClass = TRI->getMinimalPhysRegClass(MOP.getReg());
+      // Renaming registers with multiple disjunct sub-registers (e.g. the
+      // result of a LD3) means that all sub-registers are renamed, potentially
+      // impacting other instructions we did not check. Bail out.
+      // Note that this relies on the structure of the AArch64 register file. In
+      // particular, a subregister cannot be written without overwriting the
+      // whole register.
+      if (RegClass->HasDisjunctSubRegs) {
+        LLVM_DEBUG(
+            dbgs()
+            << "  Cannot rename operands with multiple disjunct subregisters ("
+            << MOP << ")\n");
+        return false;
+      }
+    }
     return MOP.isImplicit() ||
            (MOP.isRenamable() && !MOP.isEarlyClobber() && !MOP.isTied());
   };
@@ -1439,7 +1444,7 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
   MachineBasicBlock::iterator MBBI = I;
   MachineBasicBlock::iterator MBBIWithRenameReg;
   MachineInstr &FirstMI = *I;
-  ++MBBI;
+  MBBI = next_nodbg(MBBI, E);
 
   bool MayLoad = FirstMI.mayLoad();
   bool IsUnscaled = TII->isUnscaledLdSt(FirstMI);
@@ -1467,7 +1472,8 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
   // Remember any instructions that read/write memory between FirstMI and MI.
   SmallVector<MachineInstr *, 4> MemInsns;
 
-  for (unsigned Count = 0; MBBI != E && Count < Limit; ++MBBI) {
+  for (unsigned Count = 0; MBBI != E && Count < Limit;
+       MBBI = next_nodbg(MBBI, E)) {
     MachineInstr &MI = *MBBI;
 
     UsedInBetween.accumulate(MI);
@@ -1546,15 +1552,26 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
             continue;
           }
         }
-        // If the destination register of the loads is the same register, bail
-        // and keep looking. A load-pair instruction with both destination
-        // registers the same is UNPREDICTABLE and will result in an exception.
-        if (MayLoad && Reg == getLdStRegOp(MI).getReg()) {
+        // If the destination register of one load is the same register or a
+        // sub/super register of the other load, bail and keep looking. A
+        // load-pair instruction with both destination registers the same is
+        // UNPREDICTABLE and will result in an exception.
+        if (MayLoad &&
+            TRI->isSuperOrSubRegisterEq(Reg, getLdStRegOp(MI).getReg())) {
           LiveRegUnits::accumulateUsedDefed(MI, ModifiedRegUnits, UsedRegUnits,
                                             TRI);
           MemInsns.push_back(&MI);
           continue;
         }
+
+        // If the BaseReg has been modified, then we cannot do the optimization.
+        // For example, in the following pattern
+        //   ldr x1 [x2]
+        //   ldr x2 [x3]
+        //   ldr x4 [x2, #8],
+        // the first and third ldr cannot be converted to ldp x1, x4, [x2]
+        if (!ModifiedRegUnits.available(BaseReg))
+          return E;
 
         // If the Rt of the second instruction was not modified or used between
         // the two instructions and none of the instructions between the second
@@ -1636,12 +1653,13 @@ AArch64LoadStoreOpt::mergeUpdateInsn(MachineBasicBlock::iterator I,
   assert((Update->getOpcode() == AArch64::ADDXri ||
           Update->getOpcode() == AArch64::SUBXri) &&
          "Unexpected base register update instruction to merge!");
-  MachineBasicBlock::iterator NextI = I;
+  MachineBasicBlock::iterator E = I->getParent()->end();
+  MachineBasicBlock::iterator NextI = next_nodbg(I, E);
   // Return the instruction following the merged instruction, which is
   // the instruction following our unmerged load. Unless that's the add/sub
   // instruction we're merging, in which case it's the one after that.
-  if (++NextI == Update)
-    ++NextI;
+  if (NextI == Update)
+    NextI = next_nodbg(NextI, E);
 
   int Value = Update->getOperand(2).getImm();
   assert(AArch64_AM::getShiftValue(Update->getOperand(3).getImm()) == 0 &&
@@ -1745,6 +1763,11 @@ bool AArch64LoadStoreOpt::isMatchingUpdateInsn(MachineInstr &MemMI,
   return false;
 }
 
+static bool needsWinCFI(const MachineFunction *MF) {
+  return MF->getTarget().getMCAsmInfo()->usesWindowsCFI() &&
+         MF->getFunction().needsUnwindTableEntry();
+}
+
 MachineBasicBlock::iterator AArch64LoadStoreOpt::findMatchingUpdateInsnForward(
     MachineBasicBlock::iterator I, int UnscaledOffset, unsigned Limit) {
   MachineBasicBlock::iterator E = I->getParent()->end();
@@ -1779,8 +1802,21 @@ MachineBasicBlock::iterator AArch64LoadStoreOpt::findMatchingUpdateInsnForward(
   // insn (inclusive) and the second insn.
   ModifiedRegUnits.clear();
   UsedRegUnits.clear();
-  ++MBBI;
-  for (unsigned Count = 0; MBBI != E && Count < Limit; ++MBBI) {
+  MBBI = next_nodbg(MBBI, E);
+
+  // We can't post-increment the stack pointer if any instruction between
+  // the memory access (I) and the increment (MBBI) can access the memory
+  // region defined by [SP, MBBI].
+  const bool BaseRegSP = BaseReg == AArch64::SP;
+  if (BaseRegSP && needsWinCFI(I->getMF())) {
+    // FIXME: For now, we always block the optimization over SP in windows
+    // targets as it requires to adjust the unwind/debug info, messing up
+    // the unwind info can actually cause a miscompile.
+    return E;
+  }
+
+  for (unsigned Count = 0; MBBI != E && Count < Limit;
+       MBBI = next_nodbg(MBBI, E)) {
     MachineInstr &MI = *MBBI;
 
     // Don't count transient instructions towards the search limit since there
@@ -1797,8 +1833,11 @@ MachineBasicBlock::iterator AArch64LoadStoreOpt::findMatchingUpdateInsnForward(
 
     // Otherwise, if the base register is used or modified, we have no match, so
     // return early.
+    // If we are optimizing SP, do not allow instructions that may load or store
+    // in between the load and the optimized value update.
     if (!ModifiedRegUnits.available(BaseReg) ||
-        !UsedRegUnits.available(BaseReg))
+        !UsedRegUnits.available(BaseReg) ||
+        (BaseRegSP && MBBI->mayLoadOrStore()))
       return E;
   }
   return E;
@@ -1829,13 +1868,21 @@ MachineBasicBlock::iterator AArch64LoadStoreOpt::findMatchingUpdateInsnBackward(
     }
   }
 
+  const bool BaseRegSP = BaseReg == AArch64::SP;
+  if (BaseRegSP && needsWinCFI(I->getMF())) {
+    // FIXME: For now, we always block the optimization over SP in windows
+    // targets as it requires to adjust the unwind/debug info, messing up
+    // the unwind info can actually cause a miscompile.
+    return E;
+  }
+
   // Track which register units have been modified and used between the first
   // insn (inclusive) and the second insn.
   ModifiedRegUnits.clear();
   UsedRegUnits.clear();
   unsigned Count = 0;
   do {
-    --MBBI;
+    MBBI = prev_nodbg(MBBI, B);
     MachineInstr &MI = *MBBI;
 
     // Don't count transient instructions towards the search limit since there

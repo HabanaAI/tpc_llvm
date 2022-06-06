@@ -44,9 +44,10 @@ else
 fi
 
 echo "Generation of encoding tests from $1 to $2"
-mkdir $2/goya $2/gaudi
+mkdir $2/goya $2/gaudi $2/goya2
 
 TestGeneration goya  $1 $2
 TestGeneration gaudi $1 $2
+TestGeneration goya2 $1 $2
 
 echo "Done !!!"

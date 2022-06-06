@@ -86,16 +86,16 @@ void sort4Step(char256 unsorted[K], uchar256_char256_pair_t sorted[K], int k)
     sorted[k].v2 = unsorted[0];
 
     //FIXME LOOP this
-    sorted[k] = v_i8_u8_sel2_grt_v_v_v_v(unsorted[1], sorted[k].v2, 1, sorted[k].v1);
-    sorted[k] = v_i8_u8_sel2_grt_v_v_v_v(unsorted[2], sorted[k].v2, 2, sorted[k].v1);
-    sorted[k] = v_i8_u8_sel2_grt_v_v_v_v(unsorted[3], sorted[k].v2, 3, sorted[k].v1);
+    sorted[k] = v_u8_sel2_grt_i8_b(unsorted[1], sorted[k].v2, 1, sorted[k].v1, 0, (uchar256_char256_pair_t){0}, 1, 0);
+    sorted[k] = v_u8_sel2_grt_i8_b(unsorted[2], sorted[k].v2, 2, sorted[k].v1, 0, (uchar256_char256_pair_t){0}, 1, 0);
+    sorted[k] = v_u8_sel2_grt_i8_b(unsorted[3], sorted[k].v2, 3, sorted[k].v1, 0, (uchar256_char256_pair_t){0}, 1, 0);
 
     //minimize maximum value
     //FIXME LOOP this
-    unsorted[0] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 0, -128, unsorted[0]);
-    unsorted[1] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 1, -128, unsorted[1]);
-    unsorted[2] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 2, -128, unsorted[2]);
-    unsorted[3] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 3, -128, unsorted[3]);
+    unsorted[0] = v_i8_sel_eq_u8_b(sorted[k].v1, 0, -128, unsorted[0], 0, 0, 1, 0);
+    unsorted[1] = v_i8_sel_eq_u8_b(sorted[k].v1, 1, -128, unsorted[1], 0, 0, 1, 0);
+    unsorted[2] = v_i8_sel_eq_u8_b(sorted[k].v1, 2, -128, unsorted[2], 0, 0, 1, 0);
+    unsorted[3] = v_i8_sel_eq_u8_b(sorted[k].v1, 3, -128, unsorted[3], 0, 0, 1, 0);
 }
 
 
@@ -135,30 +135,30 @@ void ld4VectorsFromMemoryAndSort(uchar256_char256_pair_t sorted8[K], int5 ifmCor
     char256 tmpChar256; 
     ushort128 tmpUshort128;
 
-    unsorted[0] = v_i8_ld_tnsr_i(ifmCord,0);
+    unsorted[0] = v_i8_ld_tnsr_b(ifmCord, 0, 0, 0, 1, 0);
     ifmCord[0]++;
 
-    unsorted[1] = v_i8_ld_tnsr_i(ifmCord,0);
+    unsorted[1] = v_i8_ld_tnsr_b(ifmCord, 0, 0, 0, 1, 0);
     ifmCord[0]++;
 
-    unsorted[2] = v_i8_ld_tnsr_i(ifmCord,0);
+    unsorted[2] = v_i8_ld_tnsr_b(ifmCord, 0, 0, 0, 1, 0);
     ifmCord[0]++;
 
-    unsorted[3] = v_i8_ld_tnsr_i(ifmCord,0);
+    unsorted[3] = v_i8_ld_tnsr_b(ifmCord, 0, 0, 0, 1, 0);
     ifmCord[0]++;
 
     sort4(unsorted, sorted8);
 
     for (int i=0; i<K; i++) {
     // Comment back in the following piece of code once compiler is fixed
-    //	l_sorted16[0][i].v1 = v_convert_i8_to_i16_v(sorted8[i].v1, 0, 0); //why 3 arguments. FIXME compiler
-    //	l_sorted16[0][i].v2 = v_u16_and_v_s((ushort128)sorted8[i].v2, 0xFFFF);
+    //	l_sorted16[0][i].v1 = v_convert_i8_to_i16_b(sorted8[i].v1, 0, 0, 1, 0); //why 3 arguments. FIXME compiler
+    //	l_sorted16[0][i].v2 = v_u16_and_b((ushort128)sorted8[i].v2, 0xFFFF, 0, 0, 1, 0);
 	//
-    //	tmpChar256 = (char256)v_i16_shr_v_s((short128)sorted8[i].v1, 8); 
-   	//	l_sorted16[1][i].v1 = v_convert_i8_to_i16_v(tmpChar256, 0, 0);
+    //	tmpChar256 = (char256)v_i16_shr_b((short128)sorted8[i].v1, 8, 0, 0, 1, 0); 
+   	//	l_sorted16[1][i].v1 = v_convert_i8_to_i16_b(tmpChar256, 0, 0, 1, 0);
     //
-    //  tmpUshort128 =  v_u16_shr_v_s((ushort128)sorted8[i].v2, 8);
-	//  l_sorted16[1][i].v2 = v_u16_and_v_s(tmpUshort128, 0xFFFF);
+    //  tmpUshort128 =  v_u16_shr_b((ushort128)sorted8[i].v2, 8, 0, 0, 1, 0);
+	//  l_sorted16[1][i].v2 = v_u16_and_b(tmpUshort128, 0xFFFF, 0, 0, 1, 0);
     }
 }
 
@@ -168,19 +168,19 @@ void insertSort(uchar256_char256_pair_t sorted8[K], char256 vecToAdd, uint8_t id
 	bool256 biggerThenSorted8[K];
 
 	//the vector which is bigger then minimal values can just change them.
-	sorted8[0] = v_i8_u8_sel2_grt_v_v_v_v(vecToAdd, sorted8[0].v2, idx, sorted8[0].v1);
+	sorted8[0] = v_u8_sel2_grt_i8_b(vecToAdd, sorted8[0].v2, idx, sorted8[0].v1, 0, (uchar256_char256_pair_t){0}, 1, 0);
 
 	//starting from 2nd index as the 1st one was covered
 	for (int i=2; i<K; i++) 
 	{
-		biggerThenSorted8[i] =  bv_i8_cmp_grt_v_v(sorted8[i].v2, vecToAdd);
-		char256 tmpForSwap = v_i8_mov_v_vb(sorted8[i].v2, tmpForSwap, biggerThenSorted8[i], 0);
-		sorted8[i-1].v2    = v_i8_mov_v_vb(sorted8[i].v2, tmpForSwap, biggerThenSorted8[i], 0);
-		sorted8[i].v2      = v_i8_mov_v_vb(sorted8[i-1].v2, tmpForSwap, biggerThenSorted8[i], 0);
+		biggerThenSorted8[i] =  v_i8_cmp_grt_b(sorted8[i].v2, vecToAdd, 0, (bool256){0}, 1, 0);
+		char256 tmpForSwap = v_i8_mov_vb(sorted8[i].v2, 0, tmpForSwap, biggerThenSorted8[i], 0);
+		sorted8[i-1].v2    = v_i8_mov_vb(sorted8[i].v2, 0, tmpForSwap, biggerThenSorted8[i], 0);
+		sorted8[i].v2      = v_i8_mov_vb(sorted8[i-1].v2, 0, tmpForSwap, biggerThenSorted8[i], 0);
 
-		uchar256 utmpForSwap = v_u8_mov_v_vb(sorted8[i].v1, utmpForSwap, biggerThenSorted8[i], 0);
-		sorted8[i-1].v1     = v_u8_mov_v_vb(sorted8[i].v1, utmpForSwap, biggerThenSorted8[i], 0);
-		sorted8[i].v1       = v_u8_mov_v_vb(sorted8[i-1].v1, utmpForSwap, biggerThenSorted8[i], 0);
+		uchar256 utmpForSwap = v_u8_mov_vb(sorted8[i].v1, 0, utmpForSwap, biggerThenSorted8[i], 0);
+		sorted8[i-1].v1     = v_u8_mov_vb(sorted8[i].v1, 0, utmpForSwap, biggerThenSorted8[i], 0);
+		sorted8[i].v1       = v_u8_mov_vb(sorted8[i-1].v1, 0, utmpForSwap, biggerThenSorted8[i], 0);
 	}
 }
 
@@ -206,7 +206,7 @@ void main(tensor ifm, tensor ofm_val, tensor ofm_index, char firstActivation, ch
 
     for (uint16_t h = ifmCord[0]; h<index_space_end[0]; h++)
     {
-        char256 vecToAdd = v_i8_ld_tnsr_i(ifmCord,ifm);
+        char256 vecToAdd = v_i8_ld_tnsr_b(ifmCord, ifm, 0, 0, 1, 0);
         insertSort(sorted8, vecToAdd, indexU8);
     }
 

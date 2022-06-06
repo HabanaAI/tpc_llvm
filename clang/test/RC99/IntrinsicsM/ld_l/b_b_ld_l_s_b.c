@@ -1,20 +1,20 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -bfloat16 -target-cpu gaudi %s -o - | FileCheck %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -bfloat16 -target-cpu goya2 %s -o - | FileCheck %s
 //XFAIL: *
 void main(unsigned addr, int dest, _Bool pred) {
   int __local *dptr = (int __local *)dest;
 
-  _Bool result = b_b_ld_l_s_b(addr, 0, 0, pred, 0);
+  _Bool result = s_i1_ld_l(addr, 0, 0, pred, 0);
   *dptr++ = result;
   
-  result = b_b_ld_l_s_b(addr, 0, 1, pred, 1);
+  result = s_i1_ld_l(addr, 1, 0, pred, 1);
   *dptr++ = result;
   
-  result = b_b_ld_l_s_b(0x20, 0, 0, pred, 1);
+  result = s_i1_ld_l(0x20, 0, 0, pred, 1);
   *dptr++ = result;
   
-  result = b_b_ld_l_s_b(0x20, 0, 1, pred, 0);
+  result = s_i1_ld_l(0x20, 1, 0, pred, 0);
   *dptr = result;
 }
 

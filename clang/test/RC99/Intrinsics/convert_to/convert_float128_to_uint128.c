@@ -8,5 +8,5 @@ void main(int src, int dest) {
   *dptr = convert_float128_to_uint128(src_val, SW_RD);
 }
 
-// CHECK-IR: fptoui <128 x float> {{.*}} to <128 x i32>
+// CHECK-IR: call <128 x i32> @llvm.tpc.convert.v128i32.v128f32.i1(<128 x float> {{.*}}, i8 0, i32 66304, <128 x i32> undef, i1 true, i1 false)
 // CHECK-IR: call <128 x i32> @llvm.tpc.convert.v128i32.v128f32.i1(<128 x float> {{.*}}, i8 0, i32 197376, <128 x i32> undef, i1 true, i1 false)

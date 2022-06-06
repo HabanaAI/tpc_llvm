@@ -1,8 +1,5 @@
 //===- TPCRegisterInfo.td - Describe the TPC Register File --*- tablegen -*-==//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -67,6 +64,35 @@ def S32 : TPCReg<"S32", 32>, DwarfRegNum<[32]>;
 def S33 : TPCReg<"S33", 33>, DwarfRegNum<[33]>;
 def S34 : TPCReg<"S34", 34>, DwarfRegNum<[34]>;
 def S35 : TPCReg<"S35", 35>, DwarfRegNum<[35]>;
+def S36 : TPCReg<"S36", 36>, DwarfRegNum<[246]>;
+def S37 : TPCReg<"S37", 37>, DwarfRegNum<[247]>;
+def S38 : TPCReg<"S38", 38>, DwarfRegNum<[248]>;
+def S39 : TPCReg<"S39", 39>, DwarfRegNum<[249]>;
+// TODO: the same encoding as LSFR, isn't this a problem?
+def S40 : TPCReg<"S40", 40>, DwarfRegNum<[250]>;
+def S41 : TPCReg<"S41", 41>, DwarfRegNum<[251]>;
+def S42 : TPCReg<"S42", 42>, DwarfRegNum<[252]>;
+def S43 : TPCReg<"S43", 43>, DwarfRegNum<[253]>;
+def S44 : TPCReg<"S44", 44>, DwarfRegNum<[254]>;
+def S45 : TPCReg<"S45", 45>, DwarfRegNum<[255]>;
+def S46 : TPCReg<"S46", 46>, DwarfRegNum<[256]>;
+def S47 : TPCReg<"S47", 47>, DwarfRegNum<[257]>;
+def S48 : TPCReg<"S48", 48>, DwarfRegNum<[258]>;
+def S49 : TPCReg<"S49", 49>, DwarfRegNum<[259]>;
+def S50 : TPCReg<"S50", 50>, DwarfRegNum<[260]>;
+def S51 : TPCReg<"S51", 51>, DwarfRegNum<[261]>;
+def S52 : TPCReg<"S52", 52>, DwarfRegNum<[262]>;
+def S53 : TPCReg<"S53", 53>, DwarfRegNum<[263]>;
+def S54 : TPCReg<"S54", 54>, DwarfRegNum<[264]>;
+def S55 : TPCReg<"S55", 55>, DwarfRegNum<[265]>;
+def S56 : TPCReg<"S56", 56>, DwarfRegNum<[266]>;
+def S57 : TPCReg<"S57", 57>, DwarfRegNum<[267]>;
+def S58 : TPCReg<"S58", 58>, DwarfRegNum<[268]>;
+def S59 : TPCReg<"S59", 59>, DwarfRegNum<[269]>;
+def S60 : TPCReg<"S60", 60>, DwarfRegNum<[270]>;
+def S61 : TPCReg<"S61", 61>, DwarfRegNum<[271]>;
+def S62 : TPCReg<"S62", 62>, DwarfRegNum<[272]>;
+def S63 : TPCReg<"S63", 63>, DwarfRegNum<[273]>;
 def S_LFSR           : TPCReg<"S_LFSR"          , 40>, DwarfRegNum<[40]>;
 def S_LFSR_NO_CHANGE : TPCReg<"S_LFSR_NO_CHANGE", 41>, DwarfRegNum<[41]>;
 
@@ -153,6 +179,38 @@ def I28 : TPCReg<"I28", 28>, DwarfRegNum<[156]>;
 def I29 : TPCReg<"I29", 29>, DwarfRegNum<[157]>;
 def I30 : TPCReg<"I30", 30>, DwarfRegNum<[158]>;
 def I31 : TPCReg<"I31", 31>, DwarfRegNum<[159]>;
+def I32 : TPCReg<"I32", 32>, DwarfRegNum<[274]>;
+def I33 : TPCReg<"I33", 33>, DwarfRegNum<[275]>;
+def I34 : TPCReg<"I34", 34>, DwarfRegNum<[276]>;
+def I35 : TPCReg<"I35", 35>, DwarfRegNum<[277]>;
+def I36 : TPCReg<"I36", 36>, DwarfRegNum<[278]>;
+def I37 : TPCReg<"I37", 37>, DwarfRegNum<[279]>;
+def I38 : TPCReg<"I38", 38>, DwarfRegNum<[280]>;
+def I39 : TPCReg<"I39", 39>, DwarfRegNum<[290]>;
+def I40 : TPCReg<"I40", 40>, DwarfRegNum<[291]>;
+def I41 : TPCReg<"I41", 41>, DwarfRegNum<[292]>;
+def I42 : TPCReg<"I42", 42>, DwarfRegNum<[293]>;
+def I43 : TPCReg<"I43", 43>, DwarfRegNum<[294]>;
+def I44 : TPCReg<"I44", 44>, DwarfRegNum<[295]>;
+def I45 : TPCReg<"I45", 45>, DwarfRegNum<[296]>;
+def I46 : TPCReg<"I46", 46>, DwarfRegNum<[297]>;
+def I47 : TPCReg<"I47", 47>, DwarfRegNum<[298]>;
+def I48 : TPCReg<"I48", 48>, DwarfRegNum<[299]>;
+def I49 : TPCReg<"I49", 49>, DwarfRegNum<[300]>;
+def I50 : TPCReg<"I50", 50>, DwarfRegNum<[301]>;
+def I51 : TPCReg<"I51", 51>, DwarfRegNum<[302]>;
+def I52 : TPCReg<"I52", 52>, DwarfRegNum<[303]>;
+def I53 : TPCReg<"I53", 53>, DwarfRegNum<[304]>;
+def I54 : TPCReg<"I54", 54>, DwarfRegNum<[305]>;
+def I55 : TPCReg<"I55", 55>, DwarfRegNum<[306]>;
+def I56 : TPCReg<"I56", 56>, DwarfRegNum<[307]>;
+def I57 : TPCReg<"I57", 57>, DwarfRegNum<[308]>;
+def I58 : TPCReg<"I58", 58>, DwarfRegNum<[309]>;
+def I59 : TPCReg<"I59", 59>, DwarfRegNum<[310]>;
+def I60 : TPCReg<"I60", 60>, DwarfRegNum<[311]>;
+def I61 : TPCReg<"I61", 61>, DwarfRegNum<[312]>;
+def I62 : TPCReg<"I62", 62>, DwarfRegNum<[313]>;
+def I63 : TPCReg<"I63", 63>, DwarfRegNum<[314]>;
 
 
 // SPRF Registers
@@ -194,14 +252,22 @@ def VP15  : TPCReg<"VP15", 15>, DwarfRegNum<[191]>;
 
 
 // ADRF Registers
-def AD0 : TPCReg<"AD0", 0>, DwarfRegNum<[192]>;
-def AD1 : TPCReg<"AD1", 1>, DwarfRegNum<[193]>;
-def AD2 : TPCReg<"AD2", 2>, DwarfRegNum<[194]>;
-def AD3 : TPCReg<"AD3", 3>, DwarfRegNum<[195]>;
-def AD4 : TPCReg<"AD4", 4>, DwarfRegNum<[196]>;
-def AD5 : TPCReg<"AD5", 5>, DwarfRegNum<[197]>;
-def AD6 : TPCReg<"AD6", 6>, DwarfRegNum<[198]>;
-def AD7 : TPCReg<"AD7", 7>, DwarfRegNum<[199]>;
+def AD0  : TPCReg<"AD0",  0>,  DwarfRegNum<[192]>;
+def AD1  : TPCReg<"AD1",  1>,  DwarfRegNum<[193]>;
+def AD2  : TPCReg<"AD2",  2>,  DwarfRegNum<[194]>;
+def AD3  : TPCReg<"AD3",  3>,  DwarfRegNum<[195]>;
+def AD4  : TPCReg<"AD4",  4>,  DwarfRegNum<[196]>;
+def AD5  : TPCReg<"AD5",  5>,  DwarfRegNum<[197]>;
+def AD6  : TPCReg<"AD6",  6>,  DwarfRegNum<[198]>;
+def AD7  : TPCReg<"AD7",  7>,  DwarfRegNum<[199]>;
+def AD8  : TPCReg<"AD8",  8>,  DwarfRegNum<[315]>;
+def AD9  : TPCReg<"AD9",  9>,  DwarfRegNum<[316]>;
+def AD10 : TPCReg<"AD10", 10>, DwarfRegNum<[317]>;
+def AD11 : TPCReg<"AD11", 11>, DwarfRegNum<[318]>;
+def AD12 : TPCReg<"AD12", 12>, DwarfRegNum<[319]>;
+def AD13 : TPCReg<"AD13", 13>, DwarfRegNum<[320]>;
+def AD14 : TPCReg<"AD14", 14>, DwarfRegNum<[321]>;
+def AD15 : TPCReg<"AD15", 15>, DwarfRegNum<[322]>;
 
 
 // ZRF registers. Fictious registers for implementing pairs.
@@ -224,6 +290,20 @@ def Z28 : TPCReg<"Z28", 28, [S28, S29]>;
 def Z30 : TPCReg<"Z30", 30, [S30, S31]>;
 def Z32 : TPCReg<"Z32", 32, [S32, S33]>;
 def Z34 : TPCReg<"Z34", 34, [S34, S35]>;
+def Z36 : TPCReg<"Z36", 36, [S36, S37]>;
+def Z38 : TPCReg<"Z38", 38, [S38, S39]>;
+def Z40 : TPCReg<"Z40", 40, [S40, S41]>;
+def Z42 : TPCReg<"Z42", 42, [S42, S43]>;
+def Z44 : TPCReg<"Z44", 44, [S44, S45]>;
+def Z46 : TPCReg<"Z46", 46, [S46, S47]>;
+def Z48 : TPCReg<"Z48", 48, [S48, S49]>;
+def Z50 : TPCReg<"Z50", 50, [S50, S51]>;
+def Z52 : TPCReg<"Z52", 52, [S52, S53]>;
+def Z54 : TPCReg<"Z54", 54, [S54, S55]>;
+def Z56 : TPCReg<"Z56", 56, [S56, S57]>;
+def Z58 : TPCReg<"Z58", 58, [S58, S59]>;
+def Z60 : TPCReg<"Z60", 60, [S60, S61]>;
+def Z62 : TPCReg<"Z62", 62, [S62, S63]>;
 }
 
 // DRF registers. Fictious registers for implementing pairs.
@@ -268,7 +348,64 @@ def A36 : TPCReg<"A36", 36, [V36, V37, V38, V39]>;
 
 // HW registers.
 def PC             : TPCReg<"PC"            , 0 >, DwarfRegNum<[208]>;
+let AltNames=["STEP_REG"] in {
+def DIV_STEP       : TPCReg<"DIV_STEP"      , 1>,  DwarfRegNum<[209]>;
+}
 def S_CARRY        : TPCReg<"S_CARRY"       , 2>,  DwarfRegNum<[210]>;
+def V_CARRY        : TPCReg<"V_CARRY"       , 3>,  DwarfRegNum<[211]>;
+def M0             : TPCReg<"M0"            , 4>,  DwarfRegNum<[212]>;
+def M1             : TPCReg<"M1"            , 5>,  DwarfRegNum<[213]>;
+def M2             : TPCReg<"M2"            , 6>,  DwarfRegNum<[214]>;
+def M3             : TPCReg<"M3"            , 7>,  DwarfRegNum<[215]>;
+def LD_TNSR_ID_REG : TPCReg<"LD_TNSR_ID_REG", 8>,  DwarfRegNum<[216]>;
+def ST_TNSR_ID_REG : TPCReg<"ST_TNSR_ID_REG", 9>,  DwarfRegNum<[217]>;
+def ST_RMW_REG     : TPCReg<"ST_RMW_REG"    , 10>, DwarfRegNum<[218]>;
+def LD_PARTIAL_REG : TPCReg<"LD_PARTIAL_REG", 11>, DwarfRegNum<[219]>;
+def ST_PARTIAL_REG : TPCReg<"ST_PARTIAL_REG", 12>, DwarfRegNum<[220]>;
+def ZP_REG         : TPCReg<"ZP_REG"        , 13>, DwarfRegNum<[221]>;
+
+def SQZ_CNTR0_LO   : TPCReg<"SQZ_CNTR0_LO"  , 16>, DwarfRegNum<[222]>;
+def SQZ_CNTR0_HI   : TPCReg<"SQZ_CNTR0_HI"  , 17>, DwarfRegNum<[223]>;
+def SQZ_CNTR1_LO   : TPCReg<"SQZ_CNTR1_LO"  , 18>, DwarfRegNum<[224]>;
+def SQZ_CNTR1_HI   : TPCReg<"SQZ_CNTR1_HI"  , 19>, DwarfRegNum<[225]>;
+def SQZ_CNTR2_LO   : TPCReg<"SQZ_CNTR2_LO"  , 20>, DwarfRegNum<[226]>;
+def SQZ_CNTR2_HI   : TPCReg<"SQZ_CNTR2_HI"  , 21>, DwarfRegNum<[227]>;
+def SQZ_CNTR3_LO   : TPCReg<"SQZ_CNTR3_LO"  , 22>, DwarfRegNum<[228]>;
+def SQZ_CNTR3_HI   : TPCReg<"SQZ_CNTR3_HI"  , 23>, DwarfRegNum<[229]>;
+def SQZ_CNTR4_LO   : TPCReg<"SQZ_CNTR4_LO"  , 24>, DwarfRegNum<[230]>;
+def SQZ_CNTR4_HI   : TPCReg<"SQZ_CNTR4_HI"  , 25>, DwarfRegNum<[231]>;
+def SQZ_CNTR5_LO   : TPCReg<"SQZ_CNTR5_LO"  , 26>, DwarfRegNum<[232]>;
+def SQZ_CNTR5_HI   : TPCReg<"SQZ_CNTR5_HI"  , 27>, DwarfRegNum<[233]>;
+def SQZ_CNTR6_LO   : TPCReg<"SQZ_CNTR6_LO"  , 28>, DwarfRegNum<[234]>;
+def SQZ_CNTR6_HI   : TPCReg<"SQZ_CNTR6_HI"  , 29>, DwarfRegNum<[235]>;
+def SQZ_CNTR7_LO   : TPCReg<"SQZ_CNTR7_LO"  , 30>, DwarfRegNum<[236]>;
+def SQZ_CNTR7_HI   : TPCReg<"SQZ_CNTR7_HI"  , 31>, DwarfRegNum<[237]>;
+
+let SubRegIndices = [sub_0, sub_1], CoveredBySubRegs = 1 in {
+def SQZ_CNTR0      : TPCReg<"SQZ_CNTR0", 0, [SQZ_CNTR0_LO, SQZ_CNTR0_HI]>, DwarfRegNum<[238]>;
+def SQZ_CNTR1      : TPCReg<"SQZ_CNTR1", 1, [SQZ_CNTR1_LO, SQZ_CNTR1_HI]>, DwarfRegNum<[239]>;
+def SQZ_CNTR2      : TPCReg<"SQZ_CNTR2", 2, [SQZ_CNTR2_LO, SQZ_CNTR2_HI]>, DwarfRegNum<[240]>;
+def SQZ_CNTR3      : TPCReg<"SQZ_CNTR3", 3, [SQZ_CNTR3_LO, SQZ_CNTR3_HI]>, DwarfRegNum<[241]>;
+def SQZ_CNTR4      : TPCReg<"SQZ_CNTR4", 4, [SQZ_CNTR4_LO, SQZ_CNTR4_HI]>, DwarfRegNum<[242]>;
+def SQZ_CNTR5      : TPCReg<"SQZ_CNTR5", 5, [SQZ_CNTR5_LO, SQZ_CNTR5_HI]>, DwarfRegNum<[243]>;
+def SQZ_CNTR6      : TPCReg<"SQZ_CNTR6", 6, [SQZ_CNTR6_LO, SQZ_CNTR6_HI]>, DwarfRegNum<[244]>;
+def SQZ_CNTR7      : TPCReg<"SQZ_CNTR7", 7, [SQZ_CNTR7_LO, SQZ_CNTR7_HI]>, DwarfRegNum<[245]>;
+}
+
+def VPU_LFSR       : TPCReg<"VPU_LFSR"      , 16>, DwarfRegNum<[246]>;
+def SPU_LFSR       : TPCReg<"SPU_LFSR"      , 17>, DwarfRegNum<[247]>;
+def VPU_LFSR_RO    : TPCReg<"VPU_LFSR_RO"   , 18>, DwarfRegNum<[248]>;
+def SPU_LFSR_RO    : TPCReg<"SPU_LFSR_RO"   , 19>, DwarfRegNum<[249]>;
+def LANE_ID_4B     : TPCReg<"LANE_ID_4B"    , 20>, DwarfRegNum<[250]>;
+def LANE_ID_2B     : TPCReg<"LANE_ID_2B"    , 21>, DwarfRegNum<[251]>;
+def LANE_ID_1B     : TPCReg<"LANE_ID_1B"    , 22>, DwarfRegNum<[251]>;
+def THREAD_ID      : TPCReg<"THREAD_ID"     , 23>, DwarfRegNum<[252]>;
+def INC_LD_DIM_REG : TPCReg<"INC_LD_DIM_REG", 14>, DwarfRegNum<[253]>;
+def INC_ST_DIM_REG : TPCReg<"INC_ST_DIM_REG", 15>, DwarfRegNum<[254]>;
+
+// The fake registers
+def SPRF_TRUE      : TPCReg<"SPRF_TRUE"     , 16>;
+def VPRF_TRUE      : TPCReg<"VPRF_TRUE"     , 16>;
 
 // Register classes
 
@@ -291,18 +428,22 @@ def DRF  : RegisterClass<"TPC", [v128i32, v128f32, v256i16, v512f8_143, v512f8_1
   let AllocationPriority = 1;
 }
 
-def VPRF : RegisterClass<"TPC", [v256i1], 2048, (sequence "VP%u", 0, 15)> {
+def VPRF : RegisterClass<"TPC", [v256i1, v128i1, v64i1], 2048,
+                         (add (sequence "VP%u", 0, 15), VPRF_TRUE)> {
   let Size = 2048;
 }
 
-def SPRF : RegisterClass<"TPC", [i1], 32, (sequence "SP%u", 0, 15)> {
+def SPRF : RegisterClass<"TPC", [i1], 32, (add (sequence "SP%u", 0, 15),
+                                               SPRF_TRUE)> {
   let Size = 32;
 }
 
 def SRF : RegisterClass<"TPC", [f32, f16, bf16, f8_143, f8_152, i32, i16, i8], 32,
                         (add S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15,
                              S16, S17, S18, S19, S20, S21, S22, S23, S24, S25, S26, S27, S28, S29, S30, S31,
-                             S32, S33, S34, S35,
+                             S32, S33, S34, S35, S36, S37, S38, S39, S40, S41, S42, S43, S44, S45, S46,
+                             S47, S48, S49, S50, S51, S52, S53, S54, S55, S56, S57, S58, S59, S60, S61,
+                             S62, S63,
                              S_LFSR, S_LFSR_NO_CHANGE)>;
 
 // SRF subclasses for registers that can keep tensor number.
@@ -319,22 +460,119 @@ def RMWReg : RegisterClass<"TPC", [i32], 8, (add S29)>;
 
 def ZRF  : RegisterClass<"TPC", [v2i32, v2i16, v2i8], 32,
                         (add Z0, Z2, Z4, Z6, Z8, Z10, Z12, Z14, Z16, Z18, Z20,
-                             Z22, Z24, Z26, Z28, Z30, Z32, Z34)> {
+                             Z22, Z24, Z26, Z28, Z30, Z32, Z34, Z36, Z38, Z40,
+                             Z42, Z44, Z46, Z48, Z50, Z52, Z54, Z56, Z58, Z60,
+                             Z62)> {
   let CopyCost = 2;
   let AllocationPriority = 1;
 }
 
-def IRF  : RegisterClass<"TPC", [v5i32], 32, (sequence "I%u", 0, 31)>;
+def IRF  : RegisterClass<"TPC", [v5i32], 32, (sequence "I%u", 0, 63)>;
 
 // A hack to avoid introducing 92bit type
-def ADRF : RegisterClass <"TPC", [i64], 64, (sequence "AD%u", 0, 7)>;
+def ADRF : RegisterClass <"TPC", [i64], 64, (sequence "AD%u", 0, 15)>;
 
 
 // HW register classes.
+def HWSqzCntrSub    : RegisterClass<"TPC", [i32], 32,
+                                    (add SQZ_CNTR0_LO, SQZ_CNTR0_HI,
+                                         SQZ_CNTR1_LO, SQZ_CNTR1_HI,
+                                         SQZ_CNTR2_LO, SQZ_CNTR2_HI,
+                                         SQZ_CNTR3_LO, SQZ_CNTR3_HI,
+                                         SQZ_CNTR4_LO, SQZ_CNTR4_HI,
+                                         SQZ_CNTR5_LO, SQZ_CNTR5_HI,
+                                         SQZ_CNTR6_LO, SQZ_CNTR6_HI,
+                                         SQZ_CNTR7_LO, SQZ_CNTR7_HI)> {
+  let CopyCost = -1;
+  let AllocationPriority = 1;
+}
+def HWSqzCntr       : RegisterClass<"TPC", [i64], 64,
+                                    (add SQZ_CNTR0, SQZ_CNTR1,
+                                         SQZ_CNTR2, SQZ_CNTR3,
+                                         SQZ_CNTR4, SQZ_CNTR5,
+                                         SQZ_CNTR6, SQZ_CNTR7)> {
+  let CopyCost = 4;
+  let AllocationPriority = 1;
+}
+
 let CopyCost = -1 in {
   def HWPC            : RegisterClass<"TPC", [i32],    32,   (add PC)>;
-  def HSRF            : RegisterClass<"TPC", [i8, i32],  32, (add PC)>;
-  def HSPRF           : RegisterClass<"TPC", [i1],       32, (add S_CARRY)>;
+  def MRF             : RegisterClass<"TPC", [i32],    32,   (add M0, M1, M2, M3)>;
+  def HWTnsrRegLd     : RegisterClass<"TPC", [i8],     32,   (add LD_TNSR_ID_REG)>;
+  def HWTnsrRegSt     : RegisterClass<"TPC", [i8],     32,   (add ST_TNSR_ID_REG)>;
+  def HWOffsSizeRegLd : RegisterClass<"TPC", [i32],    32,   (add LD_PARTIAL_REG)>;
+  def HWOffsSizeRegSt : RegisterClass<"TPC", [i32],    32,   (add ST_PARTIAL_REG)>;
+  def HWRMWReg        : RegisterClass<"TPC", [i32],    32,   (add ST_RMW_REG)>;
+  def HWDivStep       : RegisterClass<"TPC", [i32],    32,   (add DIV_STEP)>;
+  def HWSCarry        : RegisterClass<"TPC", [i1],     32,   (add S_CARRY)>;
+  def HWVCarry        : RegisterClass<"TPC", [v256i1], 2048, (add V_CARRY)>;
+  def HWZPReg         : RegisterClass<"TPC", [v256i8], 2048, (add ZP_REG)>;
+  def HVRF            : RegisterClass<"TPC", [v256i8, v128i16, v64i32,
+                                              v256f8_143, v256f8_152, v128f16,
+                                              v128bf16, v64f32], 2048,
+                                      (add ZP_REG, VPU_LFSR, VPU_LFSR_RO,
+                                           LANE_ID_4B, LANE_ID_2B, LANE_ID_1B)>;
+  def HVRFPriorDoron1   : RegisterClass<"TPC", [v256i8], 2048,
+                                      (sub HVRF,
+                                           VPU_LFSR, VPU_LFSR_RO,
+                                           LANE_ID_4B, LANE_ID_2B, LANE_ID_1B)>;
+  def HVRFDoron1    : RegisterClass<"TPC", [v256i8, v128i16, v64i32,
+                                              v256f8_143, v256f8_152, v128f16,
+                                              v128bf16, v64f32], 2048,
+                                      (add HVRF)>;
+  // Registers available for reading and writing
+  def HVRFDoron1RW  : RegisterClass<"TPC", [v256i8, v128i16, v64i32,
+                                              v256f8_143, v256f8_152,
+                                              v128f16, v128bf16, v64f32], 2048,
+                                      (sub HVRFDoron1, VPU_LFSR_RO,
+                                           LANE_ID_4B, LANE_ID_2B, LANE_ID_1B)>;
+  def HVPRF           : RegisterClass<"TPC", [v256i1], 2048, (add V_CARRY)>;
+  def HSRF            : RegisterClass<"TPC", [f32, f16, bf16, f8_143, f8_152,
+                                              i32, i16, i8],  32,
+                                      (add PC, DIV_STEP, M0, M1, M2, M3,
+                                           LD_TNSR_ID_REG, ST_TNSR_ID_REG,
+                                           ST_RMW_REG,
+                                           LD_PARTIAL_REG, ST_PARTIAL_REG,
+                                           (sequence "SQZ_CNTR%u_LO", 0, 7),
+                                           (sequence "SQZ_CNTR%u_HI", 0, 7),
+                                           INC_LD_DIM_REG, INC_ST_DIM_REG,
+                                           SPU_LFSR, SPU_LFSR_RO,
+                                           THREAD_ID)>;
+ def HSRFPriorDoron1    : RegisterClass<"TPC", [i8, i32],  32,
+                                      (sub HSRF,
+                                           INC_LD_DIM_REG, INC_ST_DIM_REG,
+                                           SPU_LFSR, SPU_LFSR_RO, THREAD_ID)>;
+ def HSRFDoron1     : RegisterClass<"TPC", [f32, f16, bf16, f8_143, f8_152,
+                                              i32, i16, i8],  32,
+                                      (sub HSRF, DIV_STEP)>;
+ // Registers available for reading and writing
+ def HSRFDoron1RW   : RegisterClass<"TPC", [f32, f16, bf16, f8_143, f8_152,
+                                              i32, i16, i8],  32,
+                                      (sub HSRFDoron1,
+                                           SPU_LFSR_RO, THREAD_ID)>;
+
+  def HSPRF           : RegisterClass<"TPC", [i1],     32,   (add S_CARRY)>;
+  def HWVpuLFSR       : RegisterClass<"TPC", [v256i8, v128i16, v64i32,
+                                              v256f8_143, v256f8_152, v128f16,
+                                              v128bf16, v64f32], 2048,
+                                      (add VPU_LFSR)>;
+  def HWVpuLFSRRo     : RegisterClass<"TPC", [v256i8, v128i16, v64i32,
+                                              v256f8_143, v256f8_152, v128f16,
+                                              v128bf16, v64f32], 2048,
+                                      (add VPU_LFSR_RO)>;
+  def HWSpuLFSR       : RegisterClass<"TPC", [f32, f16, bf16, f8_143, f8_152,
+                                              i32, i16, i8], 32,
+                                      (add SPU_LFSR)>;
+  def HWSpuLFSRRo     : RegisterClass<"TPC", [f32, f16, bf16, f8_143, f8_152,
+                                              i32, i16, i8], 32,
+                                      (add SPU_LFSR_RO)>;
+  def HWLaneId        : RegisterClass<"TPC", [v256i8, v128i16, v64i32], 2048,
+                                      (add LANE_ID_4B, LANE_ID_2B, LANE_ID_1B)>;
+  def HWThreadId      : RegisterClass<"TPC", [i32], 32, (add THREAD_ID)>;
+  
+  def HWIncDimRegLD   : RegisterClass<"TPC", [i32], 32, (add INC_LD_DIM_REG)>;
+  
+  def HWIncDimRegST   : RegisterClass<"TPC", [i32], 32, (add INC_ST_DIM_REG)>;
 }
 
 
@@ -345,6 +583,7 @@ def CSR_AllRegs : CalleeSavedRegs<(add (sequence "V%u", 0, 39),
                                        (sequence "I%u", 0, 31),
                                        (sequence "AD%u", 0, 7),
                                        (sequence "SP%u", 0, 15),
-                                       (sequence "VP%u", 0, 15))>;
+                                       (sequence "VP%u", 0, 15),
+                                       (sequence "M%u", 0, 3))>;
 
 def CSR_NoRegs : CalleeSavedRegs<(add)>;

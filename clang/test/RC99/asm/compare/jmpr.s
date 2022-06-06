@@ -1,10 +1,13 @@
-// RUN: %clang -cc1as -triple tpc-none-none -filetype obj %s -o %t.o
-// RUN: %disasm %t.o | FileCheck %s
-// RUN: %clang -cc1as -triple tpc-none-none -filetype obj -target-cpu gaudi %s -o %t.o
-// RUN: %disasm -mcpu gaudi %t.o | FileCheck %s
-
-
-
+// RUN1: %clang -cc1as -triple tpc-none-none -filetype obj %s -o %t.o
+// RUN1: %disasm %t.o | FileCheck %s
+// RUN1: %clang -cc1as -triple tpc-none-none -filetype obj -target-cpu gaudi %s -o %t.o
+// RUN1: %disasm --mcpu gaudi %t.o | FileCheck %s
+// RUN1: %clang -cc1as -triple tpc-none-none -filetype obj -target-cpu goya2 %s -o %t.o
+// RUN1: %disasm --mcpu goya2 %t.o | FileCheck %s
+// RUN1: %clang -cc1as -triple tpc-none-none -filetype obj -target-cpu gaudi2 %s -o %t.o
+// RUN1: %disasm --mcpu gaudi2 %t.o | FileCheck %s
+// RUN: %clang -cc1as -triple tpc-none-none -filetype obj -target-cpu doron1 %s -o %t.o
+// RUN: %disasm --mcpu doron1 %t.o | FileCheck %s
 
 L00:
 nop;jmpr L0, SP1; nop; nop
@@ -50,3 +53,7 @@ nop; jmpr S20, !SP1; nop; nop
 // CHECK: nop; jmpr S20, SP1; nop; nop
 // CHECK: nop; jmpr S20, !SP1; nop; nop
 
+L6:
+nop;jmpr L6; nop; nop
+// CHECK: L6:
+// CHECK: nop; jmpr L6; nop; nop

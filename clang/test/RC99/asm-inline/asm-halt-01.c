@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -emit-obj -triple tpc-none-none -std=rc99 -O1 %s -o %t.o
-// RUN: llvm-objdump -s -j .text %t.o | FileCheck %s
+// RUN: %llvm-objdump --triple tpc -s -j .text %t.o | FileCheck %s
 
 void main(int x) {
   __asm volatile ("nop; halt; halt" :::);

@@ -1,9 +1,5 @@
 //===- GlobalResolver.cpp - makes Global Variables Locals ---- ------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // This pass transforms global variables into constant addresses.
@@ -151,14 +147,24 @@ struct GlobalResolver : public ModulePass {
     }
 
     // Store sizes of local memories in the module.
-    NamedMDNode *SizeMD = M.getOrInsertNamedMetadata("llvm.tpc.scalar_data");
-    assert(SizeMD->getNumOperands() == 0 && "Already set?");
+    //
+    // The metadata representing the memory size may already be present. It
+    // happens when compiling IR file obtained from C file. If the metadata
+    // exists, delete it, as GlobalResolver already calculated actual size.
+    NamedMDNode *SizeMD = M.getNamedMetadata("llvm.tpc.scalar_data");
+    if (SizeMD)
+      M.eraseNamedMetadata(SizeMD);
+    SizeMD = M.getOrInsertNamedMetadata("llvm.tpc.scalar_data");
+    assert(SizeMD->getNumOperands() == 0 && "Invalid metadata format");
     Constant *Sz = ConstantInt::get(Type::getInt32Ty(C), ScalarAddress);
     MDNode *N = MDNode::get(C, ConstantAsMetadata::get(Sz));
     SizeMD->addOperand(N);
 
+    SizeMD = M.getNamedMetadata("llvm.tpc.vector_data");
+    if (SizeMD)
+      M.eraseNamedMetadata(SizeMD);
     SizeMD = M.getOrInsertNamedMetadata("llvm.tpc.vector_data");
-    assert(SizeMD->getNumOperands() == 0 && "Already set?");
+    assert(SizeMD->getNumOperands() == 0 && "Invalid metadata format");
     Sz = ConstantInt::get(Type::getInt32Ty(C), VectorAddress);
     N = MDNode::get(C, ConstantAsMetadata::get(Sz));
     SizeMD->addOperand(N);

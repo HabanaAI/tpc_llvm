@@ -22,7 +22,7 @@ class LitConfig(object):
 
     def __init__(self, progname, path, quiet,
                  useValgrind, valgrindLeakCheck, valgrindArgs,
-                 noExecute, debug, isWindows,
+                 noExecute, skipXFAIL, debug, isWindows,
                  params, config_prefix = None,
                  maxIndividualTestTime = 0,
 # LLVM_TPC_COMPILER
@@ -39,6 +39,7 @@ class LitConfig(object):
         self.valgrindLeakCheck = bool(valgrindLeakCheck)
         self.valgrindUserArgs = list(valgrindArgs)
         self.noExecute = noExecute
+        self.skipXFAIL = skipXFAIL
         self.debug = debug
         self.isWindows = bool(isWindows)
         self.params = dict(params)
@@ -172,11 +173,10 @@ class LitConfig(object):
         f = inspect.currentframe()
         # Step out of _write_message, and then out of wrapper.
         f = f.f_back.f_back
-        file,line,_,_,_ = inspect.getframeinfo(f)
-        location = '%s:%d' % (file, line)
-
-        sys.stderr.write('%s: %s: %s: %s\n' % (self.progname, location,
-                                               kind, message))
+        file = os.path.abspath(inspect.getsourcefile(f))
+        line = inspect.getlineno(f)
+        sys.stderr.write('%s: %s:%d: %s: %s\n' % (self.progname, file, line,
+                                                  kind, message))
 
     def note(self, message):
         if not self.quiet:

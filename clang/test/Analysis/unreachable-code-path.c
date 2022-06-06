@@ -1,5 +1,5 @@
 // RUN: %clang_analyze_cc1 -analyzer-checker=core,deadcode.DeadStores,alpha.deadcode.UnreachableCode -verify -analyzer-opt-analyze-nested-blocks -Wno-unused-value %s
-// XFAIL:*
+
 extern void foo(int a);
 
 // The first few tests are non-path specific - we should be able to find them

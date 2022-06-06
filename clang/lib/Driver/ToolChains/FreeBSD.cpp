@@ -42,6 +42,7 @@ void freebsd::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("--32");
     break;
   case llvm::Triple::ppc:
+  case llvm::Triple::ppcle:
     CmdArgs.push_back("-a32");
     break;
   case llvm::Triple::mips:
@@ -128,7 +129,9 @@ void freebsd::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(II.getFilename());
 
   const char *Exec = Args.MakeArgString(getToolChain().GetProgramPath("as"));
-  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, *this,
+                                         ResponseFileSupport::AtFileCurCP(),
+                                         Exec, CmdArgs, Inputs, Output));
 }
 
 void freebsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
@@ -189,6 +192,11 @@ void freebsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   case llvm::Triple::ppc:
     CmdArgs.push_back("-m");
     CmdArgs.push_back("elf32ppc_fbsd");
+    break;
+  case llvm::Triple::ppcle:
+    CmdArgs.push_back("-m");
+    // Use generic -- only usage is for freestanding.
+    CmdArgs.push_back("elf32lppc");
     break;
   case llvm::Triple::mips:
     CmdArgs.push_back("-m");
@@ -276,7 +284,7 @@ void freebsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (D.isUsingLTO()) {
     assert(!Inputs.empty() && "Must have at least one input.");
-    AddGoldPlugin(ToolChain, Args, CmdArgs, Output, Inputs[0],
+    addLTOOptions(ToolChain, Args, CmdArgs, Output, Inputs[0],
                   D.getLTOMode() == LTOK_Thin);
   }
 
@@ -358,7 +366,9 @@ void freebsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   ToolChain.addProfileRTLibs(Args, CmdArgs);
 
   const char *Exec = Args.MakeArgString(getToolChain().GetLinkerPath());
-  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, *this,
+                                         ResponseFileSupport::AtFileCurCP(),
+                                         Exec, CmdArgs, Inputs, Output));
 }
 
 /// FreeBSD - FreeBSD tool chain which can call as(1) and ld(1) directly.
@@ -370,7 +380,7 @@ FreeBSD::FreeBSD(const Driver &D, const llvm::Triple &Triple,
   // When targeting 32-bit platforms, look for '/usr/lib32/crt1.o' and fall
   // back to '/usr/lib' if it doesn't exist.
   if ((Triple.getArch() == llvm::Triple::x86 || Triple.isMIPS32() ||
-       Triple.getArch() == llvm::Triple::ppc) &&
+       Triple.isPPC32()) &&
       D.getVFS().exists(getDriver().SysRoot + "/usr/lib32/crt1.o"))
     getFilePaths().push_back(getDriver().SysRoot + "/usr/lib32");
   else
@@ -421,6 +431,11 @@ void FreeBSD::AddCXXStdlibLibArgs(const ArgList &Args,
 void FreeBSD::AddCudaIncludeArgs(const ArgList &DriverArgs,
                                  ArgStringList &CC1Args) const {
   CudaInstallation.AddCudaIncludeArgs(DriverArgs, CC1Args);
+}
+
+void FreeBSD::AddHIPIncludeArgs(const ArgList &DriverArgs,
+                                ArgStringList &CC1Args) const {
+  RocmInstallation.AddHIPIncludeArgs(DriverArgs, CC1Args);
 }
 
 Tool *FreeBSD::buildAssembler() const {

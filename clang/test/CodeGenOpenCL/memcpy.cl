@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 %s -ffake-address-space-map -emit-llvm -o - | FileCheck %s
-// XFAIL: *
+
 // CHECK-LABEL: @test
 // CHECK-NOT: addrspacecast
 // CHECK: call void @llvm.memcpy.p1i8.p2i8

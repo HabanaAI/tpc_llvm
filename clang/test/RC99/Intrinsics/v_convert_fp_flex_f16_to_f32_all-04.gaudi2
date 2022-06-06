@@ -1,0 +1,187 @@
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 %s -o - | FileCheck %s
+
+void main(int dest, int src1, int src2, int vpredp, _Bool pred) {
+  float64 __local *dest_ptr = (float64 __local *)dest;
+  half128 __local *src1_ptr = (half128 __local *)src1;
+  ushort128 __local *src2_ptr = (ushort128 __local *)src2;
+  bool128 __local *vpred_ptr = (bool128 __local *)vpredp;
+
+  half128 x0 = *src1_ptr++;
+  ushort128 x1 = *src2_ptr++;
+  bool128 vpred = *vpred_ptr++;
+  float64 income = *dest_ptr;
+
+  //Scalar
+  {
+    float64 res = income;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_RHNE, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_RZ, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rz %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_RU, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 ru %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_RD, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rd %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_SR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_CSR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_RHAZ, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhaz %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_SR_RNE, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr_rne %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, 0x07be, SW_CSR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default %V{{[0-9]+}}, %V{{[0-9]+}}, 0x7be, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_CLIP_FP | SW_CSR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_LANE_1 | SW_CSR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, src2, SW_LANE_1 | SW_CSR | SW_CLIP_FP, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+  }
+
+  {
+    float64 res = income;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_RHNE, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_RZ, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rz %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_RU, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 ru %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_RD, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rd %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_SR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_CSR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_RHAZ, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhaz %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_SR_RNE, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr_rne %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, 0x07be, SW_CSR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default %V{{[0-9]+}}, %V{{[0-9]+}}, 0x7be, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_CLIP_FP | SW_CSR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_LANE_1 | SW_CSR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, src2, SW_LANE_1 | SW_CSR | SW_CLIP_FP, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %S{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+  }
+
+  //Vector
+  {
+    float64 res = income;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_RHNE, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_RZ, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rz %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_RU, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 ru %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_RD, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rd %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_SR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_CSR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_RHAZ, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhaz %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_SR_RNE, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr_rne %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_CLIP_FP | SW_CSR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_LANE_1 | SW_CSR, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_b(x0, x1, SW_LANE_1 | SW_CSR | SW_CLIP_FP, res, pred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+    *dest_ptr++ = res;
+  }
+
+  {
+    float64 res = income;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_RHNE, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_RZ, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rz %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_RU, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 ru %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_RD, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rd %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_SR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_CSR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_RHAZ, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 rhaz %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_SR_RNE, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 sr_rne %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_CLIP_FP | SW_CSR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=0 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_LANE_1 | SW_CSR, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+
+    res = v_convert_fp_flex_f16_to_f32_vb(x0, x1, SW_LANE_1 | SW_CSR | SW_CLIP_FP, res, vpred, 0);
+    // CHECK-DAG: convert_fp_flex.f32 lane_sel=1 default clip_fp %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
+    *dest_ptr++ = res;
+  }
+}

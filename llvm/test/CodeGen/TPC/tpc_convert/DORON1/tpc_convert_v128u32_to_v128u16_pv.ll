@@ -1,0 +1,39 @@
+
+; RUN: llc -mcpu greco %s -o - | FileCheck --check-prefixes=CHECK,GRECO %s
+; RUN: llc -mcpu gaudi2 %s -o - | FileCheck --check-prefixes=CHECK,GAUDIX %s
+; RUN: llc -mcpu doron1 %s -o - | FileCheck --check-prefixes=CHECK,GAUDIX %s
+
+
+
+
+target triple = "tpc"
+
+define void @main() {
+entry:
+  %0 = insertelement <5 x i32> <i32 undef, i32 0, i32 0, i32 0, i32 0>, i32 0, i32 0
+  %1 = insertelement <5 x i32> <i32 undef, i32 0, i32 0, i32 0, i32 0>, i32 64, i32 0
+  %2 = tail call < 64 x i32 > @llvm.tpc.ld.tnsr.v64u32.i1(<5 x i32> %0, i8 0, i32 0, < 64 x i32 > undef, i1 true, i1 false)
+  %3 = tail call < 64 x i32 > @llvm.tpc.ld.tnsr.v64u32.i1(<5 x i32> %1, i8 0, i32 0, < 64 x i32 > undef, i1 true, i1 false)
+  %4 = shufflevector < 64 x i32 > %2, < 64 x i32 > %3, < 128 x i32 > < i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15, i32 16, i32 17, i32 18, i32 19, i32 20, i32 21, i32 22, i32 23, i32 24, i32 25, i32 26, i32 27, i32 28, i32 29, i32 30, i32 31, i32 32, i32 33, i32 34, i32 35, i32 36, i32 37, i32 38, i32 39, i32 40, i32 41, i32 42, i32 43, i32 44, i32 45, i32 46, i32 47, i32 48, i32 49, i32 50, i32 51, i32 52, i32 53, i32 54, i32 55, i32 56, i32 57, i32 58, i32 59, i32 60, i32 61, i32 62, i32 63, i32 64, i32 65, i32 66, i32 67, i32 68, i32 69, i32 70, i32 71, i32 72, i32 73, i32 74, i32 75, i32 76, i32 77, i32 78, i32 79, i32 80, i32 81, i32 82, i32 83, i32 84, i32 85, i32 86, i32 87, i32 88, i32 89, i32 90, i32 91, i32 92, i32 93, i32 94, i32 95, i32 96, i32 97, i32 98, i32 99, i32 100, i32 101, i32 102, i32 103, i32 104, i32 105, i32 106, i32 107, i32 108, i32 109, i32 110, i32 111, i32 112, i32 113, i32 114, i32 115, i32 116, i32 117, i32 118, i32 119, i32 120, i32 121, i32 122, i32 123, i32 124, i32 125, i32 126, i32 127 >
+  %5 = tail call <256 x i1> @llvm.tpc.ld.tnsr.v256i1.i1(<5 x i32> zeroinitializer, i8 2, i32 0, <256 x i1> zeroinitializer, i1 true, i1 false)
+  %6 = call < 128 x i16 > @llvm.tpc.convert.v128i16.v128u32.v256i1(< 128 x i32 > %4, i8 3, i32 1792, < 128 x i16 > undef, < 256 x i1 > %5, i1 false)
+  %7 = insertelement <5 x i32> <i32 undef, i32 0, i32 0, i32 0, i32 0>, i32 0, i32 0
+  call void @llvm.tpc.st.tnsr.v128i16(<5 x i32> %7, i8 1, < 128 x i16 > %6, i32 0, i1 true, i1 false)
+  ret void
+}
+
+declare < 64 x i32 > @llvm.tpc.ld.tnsr.v64u32.i1(<5 x i32>, i8, i32, < 64 x i32 >, i1, i1)
+
+
+declare <256 x i1> @llvm.tpc.ld.tnsr.v256i1.i1(<5 x i32>, i8, i32, <256 x i1>, i1, i1)
+
+
+declare void @llvm.tpc.st.tnsr.v128i16(<5 x i32>, i8, < 128 x i16 >, i32, i1, i1)
+
+declare < 128 x i16 > @llvm.tpc.convert.v128i16.v128u32.v256i1(< 128 x i32 >, i8, i32, < 128 x i16 >, < 256 x i1 >, i1)
+
+
+; GRECO:     convert_uint32 all_lanes rhne to_16 [[VRF:%V[0-9]+]], %D{{[0-9]+}}
+; GAUDIX:    convert.u32 all_lanes target_type=int16 rhne [[VRF:%V[0-9]+]]
+; CHECK-DAG: st_tnsr 0x1, %I{{[0-9]+}}, [[VRF]]
+

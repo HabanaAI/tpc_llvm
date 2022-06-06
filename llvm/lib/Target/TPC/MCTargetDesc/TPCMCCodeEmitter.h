@@ -50,6 +50,10 @@ public:
   bool hasSPU;
   bool hasLD;
   bool hasST;
+  unsigned SPUPredicated;
+  unsigned VPUPredicated;
+  unsigned StorePredicated;
+  unsigned LoadPredicated;
   bool doNotCompress;
   const MCInst* MI;
 public:
@@ -63,6 +67,10 @@ public:
     hasLD = false;
     hasST = false;
     doNotCompress = false;
+    SPUPredicated = 0;
+    VPUPredicated = 0;
+    StorePredicated = 0;
+    LoadPredicated = 0;
   }
 
   ~TPCInstrBits() {}
@@ -88,6 +96,11 @@ public:
     compress = 0;
     inited = false;
     doNotCompress = false;
+
+    SPUPredicated = 0;
+    VPUPredicated = 0;
+    StorePredicated = 0;
+    LoadPredicated = 0;
   }
 };
 
@@ -143,6 +156,9 @@ public:
   unsigned getRrMemoryOpValue(const MCInst &Inst, unsigned OpNo,
                               SmallVectorImpl<MCFixup> &Fixups,
                               const MCSubtargetInfo &SubtargetInfo) const;
+  unsigned getRiMemoryOpValue(const MCInst &Inst, unsigned OpNo,
+                              SmallVectorImpl<MCFixup> &Fixups,
+                              const MCSubtargetInfo &SubtargetInfo) const;
   unsigned encodePredicate(const MCInst &Inst, unsigned OpNo,
                            SmallVectorImpl<MCFixup> &Fixups,
                            const MCSubtargetInfo &SubtargetInfo) const;
@@ -163,6 +179,9 @@ public:
   unsigned encodeTPCImm(const MCInst &Inst, unsigned OpNo,
                            SmallVectorImpl<MCFixup> &Fixups,
                            const MCSubtargetInfo &SubtargetInfo) const;
+  bool mayCompress(const MCSubtargetInfo &STI) const;
+  bool isGoya2(const MCSubtargetInfo &STI) const;
+  bool isGaudi2(const MCSubtargetInfo &STI) const;
   
 }; // class TPCMCCodeEmitter
 } // namespace llvm.

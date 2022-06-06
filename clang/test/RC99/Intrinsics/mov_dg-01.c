@@ -1,7 +1,8 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi %s -o -  | FileCheck --check-prefixes=CHECK,G2P %s
-
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 %s -o -  | FileCheck --check-prefixes=CHECK,G2P,G3 %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 %s -o - | FileCheck --check-prefixes=CHECK,G2P,G3 %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu doron1 %s -o - | FileCheck --check-prefixes=CHECK,G2P,G3 %s
 
 void main(int dest, int src, int vpredp, _Bool pred) {
   float64 __local *dest_ptr = (float64 __local *)dest;

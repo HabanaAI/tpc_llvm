@@ -1,8 +1,9 @@
 //===---------------- TPCSetSpillBase.cpp - initializes spill base register ------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -94,7 +95,7 @@ bool TPCSetSpillBase::runOnMachineFunction(MachineFunction &MF) {
       .addImm(TPCII::OpType::INT32) // Data type
       .addImm(0)                    // Switch
       .addReg(ZR, RegState::Undef)  // income
-      .addReg(TPC::SP0)             // Pred
+      .addReg(TPC::SPRF_TRUE)             // Pred
       .addImm(0);                   // Polarity
     return true;
   }

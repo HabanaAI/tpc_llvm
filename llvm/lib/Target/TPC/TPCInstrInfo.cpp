@@ -1,8 +1,9 @@
 //===-- TPCInstrInfo.cpp - TPC Instruction Information ----------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,21 +12,26 @@
 //===----------------------------------------------------------------------===//
 
 #include "TPCInstrInfo.h"
-#include "TPCSubtarget.h"
-#include "TPCMachineScheduler.h"
-#include "MCTargetDesc/TPCMCTargetDesc.h"
+#include "MCTargetDesc/InstructionDB.h"
 #include "MCTargetDesc/TPCMCInstrInfo.h"
+#include "MCTargetDesc/TPCMCTargetDesc.h"
+#include "TPCMachineScheduler.h"
+#include "TPCSubtarget.h"
+#include "TPCTargetMachine.h"
+#include "latencies.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/Register.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
-#include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TargetRegistry.h"
-#include "latencies.h"
 
 using namespace llvm;
 
@@ -39,13 +45,42 @@ using namespace llvm;
 static cl::opt<int> TPCDefaultLatency("tpc-default-latency",
     cl::Hidden, cl::ZeroOrMore, cl::init(7));
 
+// This flag is used to enable/disable x2 combine at Machine IR
+static cl::opt<bool> TPCEnableX2("tpc-enable-x2",
+                                 cl::desc("Enable x2 combine at Machine IR"),
+                                 cl::Hidden, cl::ZeroOrMore, cl::init(true));
+
+// This flag is used to enable aggressive x2 combine at Machine IR
+static cl::opt<bool>
+    AggressiveX2Combine("aggressive-x2-combine",
+                        cl::desc("Enable aggressive x2 combine at machine IR"),
+                        cl::Hidden, cl::ZeroOrMore, cl::init(false));
+
+// This flag is used to consider register pressure while combining for x2
+static cl::opt<bool> CheckRegPressureX2(
+    "x2-check-regpressure",
+    cl::desc("Consider register pressure while combining for x2"), cl::Hidden,
+    cl::ZeroOrMore, cl::init(true));
+
+// This flag is used to allow x2 combine only if candidate MI regs are packed in
+// a DRF
+static cl::opt<bool> CheckVRegsPartOfOneDRFX2(
+    "x2-check-drf",
+    cl::desc("Combine for x2 only if candidate MI regs are packed in a DRF"),
+    cl::Hidden, cl::ZeroOrMore, cl::init(true));
+
+// This flag is used to allow reordering while combining for x2
+static cl::opt<bool> AllowReorderForX2(
+    "x2-allow-reorder",
+    cl::desc("Allow instruction reorder while combining for x2"), cl::Hidden,
+    cl::ZeroOrMore, cl::init(false));
+
 // Pin the vtable to this file.
 void TPCInstrInfo::anchor() {}
 
 // TODO: What is the register in InstrInfo constructor for?
 TPCInstrInfo::TPCInstrInfo(TPCSubtarget &ST)
-    : TPCGenInstrInfo(), RI(),
-      Subtarget(ST) {
+    : TPCGenInstrInfo(), RI(), Subtarget(ST), m_tpcx2Util() {
   TPCLatencyEvaluation::setDefaultLatency(TPCDefaultLatency);
 }
 
@@ -64,6 +99,7 @@ unsigned TPCInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
   case TPC::SPILL_IRF_RESTORE:
   case TPC::SPILL_SRF_RESTORE:
   case TPC::SPILL_ZRF_RESTORE:
+  case TPC::SPILL_ADRF_RESTORE:
   case TPC::SPILL_SPRF_RESTORE:
     FrameIndex = MI.getOperand(1).getIndex();
     return MI.getOperand(0).getReg();
@@ -86,6 +122,7 @@ unsigned TPCInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
   case TPC::SPILL_IRF_SAVE:
   case TPC::SPILL_SRF_SAVE:
   case TPC::SPILL_ZRF_SAVE:
+  case TPC::SPILL_ADRF_SAVE:
   case TPC::SPILL_SPRF_SAVE:
     FrameIndex = MI.getOperand(0).getIndex();
     return MI.getOperand(1).getReg();
@@ -106,21 +143,21 @@ static bool isUnconditionalBranch(const MachineInstr &MI) {
   if (MI.getOpcode() == TPC::JMPR_u)
     return true;
   return (MI.getOpcode() == TPC::JMPR || MI.getOpcode() == TPC::JMPA) &&
-         MI.getOperand(1).getReg() == TPC::SP0 &&
+         MI.getOperand(1).getReg() == TPC::SPRF_TRUE &&
          MI.getOperand(2).getImm() == 0;
 }
 
 
 static bool isDeadBranch(const MachineInstr &MI) {
   return (MI.getOpcode() == TPC::JMPR || MI.getOpcode() == TPC::JMPA) &&
-         MI.getOperand(1).getReg() == TPC::SP0 &&
+         MI.getOperand(1).getReg() == TPC::SPRF_TRUE &&
          MI.getOperand(2).getImm() != 0;
 }
 
 
 static bool isConditionalBranch(const MachineInstr &MI) {
   return (MI.getOpcode() == TPC::JMPR || MI.getOpcode() == TPC::JMPA) &&
-         MI.getOperand(1).getReg() != TPC::SP0;
+         MI.getOperand(1).getReg() != TPC::SPRF_TRUE;
 }
 
 
@@ -401,6 +438,34 @@ bool TPCInstrInfo::reverseBranchCondition(
   return false;
 }
 
+unsigned TPCInstrInfo::convertHWRegToMemAddress(unsigned HWReg) const {
+  unsigned RegAddress = ~0U;
+  if (Subtarget.hasDoron1ISA()) {
+    switch (HWReg) {
+    case TPC::SQZ_CNTR0_LO:
+    case TPC::SQZ_CNTR0_HI:
+    case TPC::SQZ_CNTR1_LO:
+    case TPC::SQZ_CNTR1_HI:
+    case TPC::SQZ_CNTR2_LO:
+    case TPC::SQZ_CNTR2_HI:
+    case TPC::SQZ_CNTR3_LO:
+    case TPC::SQZ_CNTR3_HI:
+    case TPC::SQZ_CNTR4_LO:
+    case TPC::SQZ_CNTR4_HI:
+    case TPC::SQZ_CNTR5_LO:
+    case TPC::SQZ_CNTR5_HI:
+    case TPC::SQZ_CNTR6_LO:
+    case TPC::SQZ_CNTR6_HI:
+    case TPC::SQZ_CNTR7_LO:
+    case TPC::SQZ_CNTR7_HI:
+      RegAddress = 0; // TODO: use actual address from PRM
+      break;
+    }
+  }
+  return RegAddress;
+}
+
+
 void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator I,
                                const DebugLoc &DL, MCRegister DestReg,
@@ -413,7 +478,7 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       .addImm(TPCII::OpType::FP32)
       .addImm(0)  // Switches
       .addReg(DestReg, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   };
 
@@ -425,7 +490,7 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       .addImm(TPCII::OpType::FP32)
       .addImm(0)  // Switches
       .addReg(DestReg, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   };
 
@@ -434,7 +499,7 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       .addReg(SrcReg, getKillRegState(KillSrc))
       .addImm(0)  // Switches
       .addReg(DestReg, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   };
 
@@ -445,7 +510,7 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       .addReg(SrcSubReg, getKillRegState(KillSrc))
       .addImm(0)  // Switches
       .addReg(DestReg, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   };
 
@@ -459,6 +524,8 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   bool DstDRF = TPC::DRFRegClass.contains(DestReg);
   bool DstADRF = TPC::ADRFRegClass.contains(DestReg);
   bool DstHSRF = TPC::HSRFRegClass.contains(DestReg);
+  bool DstHVRF = TPC::HVRFRegClass.contains(DestReg);
+  bool DstSQZ = TPC::HWSqzCntrRegClass.contains(DestReg);
 
   bool SrcVRF = TPC::VRFRegClass.contains(SrcReg);
   bool SrcSRF = TPC::SRFRegClass.contains(SrcReg);
@@ -469,6 +536,8 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   bool SrcARF = TPC::ARFRegClass.contains(SrcReg);
   bool SrcDRF = TPC::DRFRegClass.contains(SrcReg);
   bool SrcADRF = TPC::ADRFRegClass.contains(SrcReg);
+  bool SrcHSRF = TPC::HSRFRegClass.contains(SrcReg);
+  bool SrcSQZ = TPC::HWSqzCntrRegClass.contains(SrcReg);
 
   if (SrcSRF && DstSRF) {
     CopyRegWithDataType(TPC::MOVssp);
@@ -485,7 +554,7 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       .addImm(31) // Mask
       .addImm(0)  // Switches
       .addReg(DestReg, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
     return;
   }
@@ -494,8 +563,68 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     return;
   }
 
+  if (SrcSRF && DstHSRF) {
+    // On some architectures a hardware register can be mapped to memory. It is
+    // considered as a hardware register but is manipulated as memory locations.
+    // Copying to such register is realized as a memory write. 
+    unsigned RegAddress = convertHWRegToMemAddress(DestReg);
+    if (RegAddress != ~0U) {
+      MachineInstr *MI = BuildMI(MBB, I, DL, get(TPC::ST_Lisp))
+        .addImm(RegAddress)
+        .addReg(SrcReg, getKillRegState(KillSrc))
+        .addImm(TPCII::SW_MMIO)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0)
+        .getInstr();
+      MI->addRegisterDefined(DestReg);
+      return;
+    }
+
+    if (!Subtarget.hasGrecoISA() && !Subtarget.hasGaudi2ISA() &&
+        !Subtarget.hasDoron1ISA())
+      report_fatal_error("Cannot copy HWReg on this platform");
+    CopyReg(TPC::MOV_ld_hsp);
+    return;
+  }
+
+  if (SrcHSRF && DstSRF) {
+    unsigned RegAddress = convertHWRegToMemAddress(SrcReg);
+    if (RegAddress != ~0U) {
+      MachineInstr *MI = BuildMI(MBB, I, DL, get(TPC::LD_Lsip))
+        .addImm(RegAddress)
+        .addImm(TPCII::SW_MMIO)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0)
+        .getInstr();
+      MI->addRegisterDefined(DestReg);
+      return;
+    }
+  }
+  
+  if (SrcVRF && DstHVRF) {
+    if (!Subtarget.hasGrecoISA() && !Subtarget.hasGaudi2ISA() &&
+        !Subtarget.hasDoron1ISA())
+      report_fatal_error("Cannot copy HWReg on this platform");
+    CopyReg(TPC::MOV_ld_hvp);
+    return;
+  }
+
+  if (SrcADRF && DstADRF) {
+    if (!Subtarget.hasADRFMov())
+      report_fatal_error("Cannot copy ADRF on this platform");
+    CopyReg(TPC::MOVaap);
+    return;
+  }
+
   if (SrcVPRF && DstVPRF) {
     CopyReg(TPC::MOVmmp);
+    return;
+  }
+  if (SrcVRF && DstVPRF) {
+    if (!Subtarget.hasGrecoISA() && !Subtarget.hasGaudi2ISA() &&
+        !Subtarget.hasDoron1ISA())
+      report_fatal_error("Cannot copy VRF to VPRF on this platform");
+    CopyReg(TPC::MOVmvm);
     return;
   }
   if (SrcVRF && DstVRF) {
@@ -519,6 +648,10 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     CopyRegWithDataType(TPC::MOVvsp);
     return;
   }
+  if (SrcSRF && DstSPRF) {
+    CopyReg(TPC::MOV_ld_psp);
+    return;
+  }
 
   RegScavenger RS;
   RS.enterBasicBlock(MBB);
@@ -526,13 +659,99 @@ void TPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
 
   MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
 
+  if (SrcSQZ && DstSQZ) {
+    Register Src1 = RS.scavengeRegister(&TPC::SRFRegClass, 0);
+    RS.setRegUsed(Src1);
+    Register Src2 = RS.scavengeRegister(&TPC::SRFRegClass, 0);
+    RS.setRegUsed(Src2);
+    
+    Register SrcSub1 = TRI.getSubReg(SrcReg, TPC::sub_0);
+    Register SrcSub2 = TRI.getSubReg(SrcReg, TPC::sub_1);
+    
+    Register DstSub1 = TRI.getSubReg(DestReg, TPC::sub_0);
+    Register DstSub2 = TRI.getSubReg(DestReg, TPC::sub_1);
+    
+    BuildMI(MBB, I, DL, get(TPC::MOVshp), Src1)
+      .addReg(SrcSub1)
+      .addImm(1) // Switch
+      .addReg(SrcSub1, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+    
+    BuildMI(MBB, I, DL, get(TPC::MOVshp), Src2)
+      .addReg(SrcSub2)
+      .addImm(1) // Switch
+      .addReg(SrcSub2, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+    
+    BuildMI(MBB, I, DL, get(TPC::MOVhsp), DstSub1)
+      .addReg(Src1, RegState::Kill)
+      .addImm(1) // Switch
+      .addReg(DstSub1, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+    
+    BuildMI(MBB, I, DL, get(TPC::MOVhsp), DstSub2)
+      .addReg(Src2, RegState::Kill)
+      .addImm(1) // Switch
+      .addReg(DstSub2, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+    
+    return;
+  }
+  if (SrcSRF && DstSQZ) {
+    Register DstSub1 = TRI.getSubReg(DestReg, TPC::sub_0);
+    Register DstSub2 = TRI.getSubReg(DestReg, TPC::sub_1);
+
+    BuildMI(MBB, I, DL, get(TPC::MOVhsp), DstSub1)
+      .addReg(SrcReg)
+      .addImm(1) // Switch
+      .addReg(DstSub1, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+
+    Register SRFTemp = RS.scavengeRegister(&TPC::SRFRegClass, 0);
+    RS.setRegUsed(SRFTemp);
+
+    BuildMI(MBB, I, DL, get(TPC::MOVsip), SRFTemp)
+      .addImm(0)
+      .addImm(TPCII::OpType::INT32)
+      .addImm(0) // Switch
+      .addReg(SRFTemp, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+
+    BuildMI(MBB, I, DL, get(TPC::MOVhsp), DstSub2)
+      .addReg(SRFTemp, RegState::Kill)
+      .addImm(1) // Switch
+      .addReg(DstSub2, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+
+    return;
+  }
+  if (SrcSQZ && DstSRF) {
+    Register SrcSub1 = MRI.getTargetRegisterInfo()->getSubReg(SrcReg, TPC::sub_0);
+
+    BuildMI(MBB, I, DL, get(TPC::MOVshp), DestReg)
+      .addReg(SrcSub1)
+      .addImm(1) // Switch
+      .addReg(SrcSub1, RegState::Undef)
+      .addReg(TPC::SPRF_TRUE)
+      .addImm(0);
+
+    return;
+  }
+
   assert(false && "Incorrect register combination in COPY");
   report_fatal_error("Cannot copy phys reg");
 }
 
 void TPCInstrInfo::
 storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
-                    unsigned SrcReg, bool isKill, int FrameIndex,
+                    Register SrcReg, bool isKill, int FrameIndex,
                     const TargetRegisterClass *RC,
                     const TargetRegisterInfo *TRI) const {
   DebugLoc DL = MBB.findDebugLoc(I);
@@ -568,6 +787,13 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
       report_fatal_error("IRF registers are not spillable if -long-irf is specified");
     StoreOpCode = TPC::SPILL_IRF_SAVE;
     StackID = TPCStackID::SLM_SPILL;
+  } else if (TPC::ADRFRegClass.hasSubClassEq(RC)) {
+    if (Subtarget.hasADRFMov()) {
+      StoreOpCode = TPC::SPILL_ADRF_SAVE;
+      StackID = TPCStackID::SLM_SPILL;
+    } else {
+      report_fatal_error("ADRF registers are not spillable on this processor");
+    }
   } else {
     report_fatal_error("Unsupported register class in StoreToStack");
   }
@@ -580,7 +806,7 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
 
 void TPCInstrInfo::
 loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
-                     unsigned DestReg, int FrameIndex,
+                     Register DestReg, int FrameIndex,
                      const TargetRegisterClass *RC,
                      const TargetRegisterInfo *TRI) const {
   DebugLoc DL = MBB.findDebugLoc(I);
@@ -616,6 +842,13 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
       report_fatal_error("IRF registers are not spillable if -long-irf is specified");
     LoadOpCode = TPC::SPILL_IRF_RESTORE;
     StackID = TPCStackID::SLM_SPILL;
+  } else if (TPC::ADRFRegClass.hasSubClassEq(RC)) {
+    if (Subtarget.hasADRFMov()) {
+      LoadOpCode = TPC::SPILL_ADRF_RESTORE;
+      StackID = TPCStackID::SLM_SPILL;
+    } else {
+      report_fatal_error("ADRF registers are not spillable on this processor");
+    }
   } else {
     report_fatal_error("Unsupported register class in loadFromStack");
   }
@@ -661,6 +894,7 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   MachineBasicBlock &MBB = *MI.getParent();
   const TargetRegisterInfo &TRI = getRegisterInfo();
   DebugLoc DL = MI.getDebugLoc();
+  unsigned ZeroReg = Subtarget.getTargetLowering()->getZeroReg(); 
 
   switch (MI.getOpcode()) {
   default:
@@ -674,7 +908,7 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         .addImm(Offset)
         .addImm(0)
         .addReg(DestReg, RegState::Undef)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     MBB.erase(MI);
     return true;
@@ -685,7 +919,7 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         .addImm(Offset)
         .addImm(0)
         .addReg(MI.getOperand(0).getReg(), RegState::Undef)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     MBB.erase(MI);
     return true;
@@ -716,14 +950,14 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addImm(Offset + k*4)
           .addImm(0)
           .addReg(sRegs[k], RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       BuildMI(MBB, MI, DL, get(TPC::SET_INDX_spu_rp), DestReg)
           .addReg(DestReg, (k == 0) ? RegState::Undef : 0)
           .addReg(sRegs[k], RegState::Kill)
           .addImm(1LL << k)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     }
     MBB.erase(MI);
@@ -736,38 +970,70 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addImm(MI.getOperand(1).getImm())
           .addImm(0)
           .addReg(DestReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
       unsigned DestReg = MI.getOperand(0).getReg();
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vmsip), DestReg)
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(MI.getOperand(1).getImm())
         .addImm(0)
         .addReg(DestReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
+      if (!MBB.isLiveIn(ZeroReg)) {
+        MBB.addLiveIn(ZeroReg);
+      }
     }
     MBB.erase(MI);
     return true;
   case TPC::SPILL_VRF_RESTORE: {
     unsigned DestReg = MI.getOperand(0).getReg();
     unsigned Offset = MI.getOperand(1).getImm();
-    if (Subtarget.hasAddr1()) {
-      BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvip), DestReg)
+    if (TPC::HVRFRegClass.contains(DestReg)) {
+      BitVector Available = findAvailableVRF(MI);
+      unsigned vReg;
+      signed reg = Available.find_first();
+      if (reg != -1) {
+        vReg = reg;
+      }
+      else  {
+        llvm_unreachable("Cannot load HWReg");
+      }
+      unsigned DestReg = MI.getOperand(0).getReg();
+      unsigned Offset = MI.getOperand(1).getImm();
+      BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvip), vReg)
           .addImm(Offset)
           .addImm(0)
+          .addReg(vReg, RegState::Undef)
+          .addReg(TPC::SPRF_TRUE)
+          .addImm(0);
+      BuildMI(MBB, MI, DL, get(TPC::MOV_ld_hvp), DestReg)
+          .addReg(vReg, 0)
+          .addImm(1)
           .addReg(DestReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
-      BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), MI.getOperand(0).getReg())
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
-          .addImm(Offset)
-          .addImm(0)
-          .addReg(DestReg, RegState::Undef)
-          .addReg(TPC::SP0)
-          .addImm(0);
+      if (Subtarget.hasAddr1()) {
+        BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvip), DestReg)
+            .addImm(Offset)
+            .addImm(0)
+            .addReg(DestReg, RegState::Undef)
+            .addReg(TPC::SPRF_TRUE)
+            .addImm(0);
+      } else {
+        BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), MI.getOperand(0).getReg())
+            .addReg(ZeroReg)
+            .addImm(Offset)
+            .addImm(0)
+            .addReg(DestReg, RegState::Undef)
+            .addReg(TPC::SPRF_TRUE)
+            .addImm(0);
+        if (!MBB.isLiveIn(ZeroReg)) {
+          MBB.addLiveIn(ZeroReg);
+        }
+      }
     }
     MBB.erase(MI);
     return true;
@@ -780,15 +1046,44 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         .addImm(Offset)
         .addImm(0)
         .addReg(SubReg, RegState::Undef)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     SubReg = TRI.getSubReg(DestReg, TPC::sub_s1);
     BuildMI(MBB, MI, DL, get(TPC::LD_Lsip), SubReg)
         .addImm(Offset + 4)
         .addImm(0)
         .addReg(SubReg, RegState::Undef)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
+    MBB.erase(MI);
+    return true;
+  }
+  case TPC::SPILL_ADRF_RESTORE: {
+    unsigned Offset = MI.getOperand(1).getImm();
+    unsigned DestReg = MI.getOperand(0).getReg();
+
+    unsigned SubReg = TRI.getSubReg(TPC::Z30, TPC::sub_s0);
+    BuildMI(MBB, MI, DL, get(TPC::LD_Lsip), SubReg)
+        .addImm(Offset)
+        .addImm(0)
+        .addReg(SubReg, RegState::Undef)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0);
+    SubReg = TRI.getSubReg(TPC::Z30, TPC::sub_s1);
+    BuildMI(MBB, MI, DL, get(TPC::LD_Lsip), SubReg)
+        .addImm(Offset + 4)
+        .addImm(0)
+        .addReg(SubReg, RegState::Undef)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0);
+
+    BuildMI(MBB, MI, DL, get(TPC::MOVazp), DestReg)
+        .addReg(TPC::Z30)
+        .addImm(0)
+        .addReg(DestReg, RegState::Undef)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0);
+
     MBB.erase(MI);
     return true;
   }
@@ -801,31 +1096,34 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addImm(Offset)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvip), SubReg)
           .addImm(Offset + 256)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), SubReg)
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), SubReg)
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset + 256)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
+      if (!MBB.isLiveIn(ZeroReg)) {
+        MBB.addLiveIn(ZeroReg);
+      }
     }
     MBB.erase(MI);
     return true;
@@ -839,61 +1137,64 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addImm(Offset)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvip), SubReg)
           .addImm(Offset + 256)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_2);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvip), SubReg)
           .addImm(Offset + 512)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_3);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvip), SubReg)
           .addImm(Offset + 768)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), SubReg)
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), SubReg)
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset + 256)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_2);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), SubReg)
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset + 512)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(DestReg, TPC::sub_3);
       BuildMI(MBB, MI, DL, get(TPC::LD_L_Vvsip), SubReg)
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset + 768)
           .addImm(0)
           .addReg(SubReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
+      if (!MBB.isLiveIn(ZeroReg)) {
+        MBB.addLiveIn(ZeroReg);
+      }
     }
     MBB.erase(MI);
     return true;
@@ -907,7 +1208,7 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         .addReg(MI.getOperand(1).getReg(),
                 MI.getOperand(1).isKill() ? RegState::Kill : 0)
         .addImm(0)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     MBB.erase(MI);
     return true;
@@ -919,7 +1220,7 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         .addReg(MI.getOperand(1).getReg(),
                 MI.getOperand(1).isKill() ? RegState::Kill : 0)
         .addImm(0)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     MBB.erase(MI);
     return true;
@@ -950,13 +1251,13 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addImm(k) // DIM
           .addImm(0) // SW
           .addReg(sRegs[k], RegState::Undef) // income
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       BuildMI(MBB, MI, DL, get(TPC::ST_Lisp))
           .addImm(Offset + k*4)
           .addReg(sRegs[k], RegState::Kill)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     }
     MBB.erase(MI);
@@ -969,17 +1270,20 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addReg(MI.getOperand(1).getReg(),
                   MI.getOperand(1).isKill() ? RegState::Kill : 0)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsimp))
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(MI.getOperand(0).getImm())
           .addReg(MI.getOperand(1).getReg(),
                   MI.getOperand(1).isKill() ? RegState::Kill : 0)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
+      if (!MBB.isLiveIn(ZeroReg)) {
+        MBB.addLiveIn(ZeroReg);
+      }
     }
     MBB.erase(MI);
     return true;
@@ -991,17 +1295,20 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addReg(MI.getOperand(1).getReg(),
                   MI.getOperand(1).isKill() ? RegState::Kill : 0)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsivp))
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset)
           .addReg(MI.getOperand(1).getReg(),
                   MI.getOperand(1).isKill() ? RegState::Kill : 0)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
+      if (!MBB.isLiveIn(ZeroReg)) {
+        MBB.addLiveIn(ZeroReg);
+      }
     }
     MBB.erase(MI);
     return true;
@@ -1015,12 +1322,41 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         .addImm(Offset)
         .addReg(SubReg, Flags)
         .addImm(0)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     SubReg = TRI.getSubReg(SrcReg, TPC::sub_s1);
     BuildMI(MBB, MI, DL, get(TPC::ST_Lisp))
         .addImm(Offset + 4)
         .addReg(SubReg, Flags);
+    MBB.erase(MI);
+    return true;
+  }
+  case TPC::SPILL_ADRF_SAVE: {
+    unsigned Offset = MI.getOperand(0).getImm();
+    unsigned Flags = MI.getOperand(1).isKill() ? RegState::Kill : 0;
+    unsigned SrcReg = MI.getOperand(1).getReg();
+
+    BuildMI(MBB, MI, DL, get(TPC::MOVzap), TPC::Z30)
+        .addReg(SrcReg, Flags)
+        .addImm(0)
+        .addReg(TPC::Z30, RegState::Undef)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0);
+
+    unsigned SubReg = TRI.getSubReg(TPC::Z30, TPC::sub_s0);
+    BuildMI(MBB, MI, DL, get(TPC::ST_Lisp))
+        .addImm(Offset)
+        .addReg(SubReg)
+        .addImm(0)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0);
+    SubReg = TRI.getSubReg(TPC::Z30, TPC::sub_s1);
+    BuildMI(MBB, MI, DL, get(TPC::ST_Lisp))
+        .addImm(Offset + 4)
+        .addReg(SubReg)
+        .addImm(0)
+        .addReg(TPC::SPRF_TRUE)
+        .addImm(0);
     MBB.erase(MI);
     return true;
   }
@@ -1034,31 +1370,34 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addImm(Offset)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vivp))
         .addImm(Offset + 256)
         .addReg(SubReg, Flags)
         .addImm(0)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     } else {
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsivp))
-        .addReg(Subtarget.getTargetLowering()->getZeroReg())
+        .addReg(ZeroReg)
         .addImm(Offset)
         .addReg(SubReg, Flags)
         .addImm(0)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsivp))
-        .addReg(Subtarget.getTargetLowering()->getZeroReg())
+        .addReg(ZeroReg)
         .addImm(Offset + 256)
         .addReg(SubReg, Flags)
         .addImm(0)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
+      if (!MBB.isLiveIn(ZeroReg)) {
+        MBB.addLiveIn(ZeroReg);
+      }
     }
     MBB.erase(MI);
     return true;
@@ -1073,61 +1412,64 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
           .addImm(Offset)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vivp))
           .addImm(Offset + 256)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_2);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vivp))
           .addImm(Offset + 512)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_3);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vivp))
           .addImm(Offset + 768)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsivp))
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_1);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsivp))
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset + 256)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_2);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsivp))
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset + 512)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       SubReg = TRI.getSubReg(SrcReg, TPC::sub_3);
       BuildMI(MBB, MI, DL, get(TPC::ST_L_Vsivp))
-          .addReg(Subtarget.getTargetLowering()->getZeroReg())
+          .addReg(ZeroReg)
           .addImm(Offset + 768)
           .addReg(SubReg, Flags)
           .addImm(0)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
+      if (!MBB.isLiveIn(ZeroReg)) {
+        MBB.addLiveIn(ZeroReg);
+      }
     }
     MBB.erase(MI);
     return true;
@@ -1183,7 +1525,10 @@ static TPCLatencyEvaluation::RegisterFile convertReg(const TargetRegisterClass *
 static bool isFloatData(TPCII::OpType X) {
   switch (X) {
   case TPCII::OpType::BF16:
+  case TPCII::OpType::FP16:
   case TPCII::OpType::FP32:
+  case TPCII::OpType::FP8_143:
+  case TPCII::OpType::FP8_152:
     return true;
   default:
     return false;
@@ -1313,6 +1658,13 @@ static TPCLatencyEvaluation::OperandID getOperandId(const TPCSubtarget &Subtarge
     return TPCLatencyEvaluation::OperandID::e_src_a;
 
   case 1:
+    // The second operand duplicate the first operand
+    if (MC.getOpcode() == TPC::LD_CALC_FP_SPECIALOneArgvvp ||
+        MC.getOpcode() == TPC::LD_CALC_FP_SPECIALOneArgvvm ||
+        MC.getOpcode() == TPC::CALC_FP_SPECIALOneArgvvp ||
+        MC.getOpcode() == TPC::CALC_FP_SPECIALOneArgvvm)
+      return TPCLatencyEvaluation::OperandID::e_src_a;
+
     // Usually the second input is in SRC_B, but in some cases it is not so.
     if (TPCII::isStoreInst(MC)) {
       switch (TPCII::getSlotOpCode(MC)) {
@@ -1328,18 +1680,20 @@ static TPCLatencyEvaluation::OperandID getOperandId(const TPCSubtarget &Subtarge
           // SET_INDX in store slot keeps DIM_MASK in SRC_B.
           return TPCLatencyEvaluation::OperandID::e_src_c;
         }
-        if (MC.getOpcode() == TPC::GEN_ADDR_st) {
+        if (MC.getOpcode() == TPC::GEN_ADDR_st || MC.getOpcode() == TPC::GEN_ADDR_stT) {
           return TPCLatencyEvaluation::OperandID::e_src_a;
         }
         // Check for Gaudi's ST_TNSR, where the second operand is hidden
-        if (Subtarget.hasGaudiISA()) {
+        if (Subtarget.hasGaudiISA() || Subtarget.hasGaudiBISA() ||
+            Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA() ||
+            Subtarget.hasDoron1ISA()) {
           if (TPCII::getSlotOpCode(MC) == 11 ||
               TPCII::getSlotOpCode(MC) == 12 ||
               TPCII::getSlotOpCode(MC) == 13) {
               return TPCLatencyEvaluation::OperandID::e_src_c;
           }
-                if (TPCII::getSlotOpCode(MC) == TPCII::ST_L_V) {
-              return TPCLatencyEvaluation::OperandID::e_src_c;
+          if (TPCII::getSlotOpCode(MC) == TPCII::ST_L_V) {
+            return TPCLatencyEvaluation::OperandID::e_src_c;
           }
         }
         break;
@@ -1354,17 +1708,84 @@ static TPCLatencyEvaluation::OperandID getOperandId(const TPCSubtarget &Subtarge
         MC.getOpcode() == TPC::SET_INDX_ld_ip ||
         MC.getOpcode() == TPC::SET_INDX_spu_rp ||
         MC.getOpcode() == TPC::SET_INDX_spu_ip ||
-        MC.getOpcode() == TPC::GEN_ADDR_ld) {
+        MC.getOpcode() == TPC::GEN_ADDR_ld ||
+        MC.getOpcode() == TPC::GEN_ADDR_ldT) {
       return TPCLatencyEvaluation::OperandID::e_src_a;
     }
     return TPCLatencyEvaluation::OperandID::e_src_b;
 
   case 2:
+    if (MC.getOpcode() == TPC::MOVsqz)
+      return TPCLatencyEvaluation::OperandID::e_src_a;
     if (MC.getOpcode() == TPC::SET_INDX_st_rp ||
         MC.getOpcode() == TPC::SET_INDX_st_ip)
       return TPCLatencyEvaluation::OperandID::e_src_a;
+    if (MC.getOpcode() == TPC::FCLASS_LIMITvvvvp ||
+        MC.getOpcode() == TPC::FCLASS_LIMITvsvvp ||
+        MC.getOpcode() == TPC::FCLASS_LIMITvvsvp ||
+        MC.getOpcode() == TPC::FCLASS_LIMITvvvsp ||
+        MC.getOpcode() == TPC::FCLASS_LIMITvvvvm ||
+        MC.getOpcode() == TPC::FCLASS_LIMITvsvvm ||
+        MC.getOpcode() == TPC::FCLASS_LIMITvvsvm ||
+        MC.getOpcode() == TPC::FCLASS_LIMITvvvsm)
+      return TPCLatencyEvaluation::OperandID::e_src_d;
+    if (MC.getOpcode() == TPC::MULx2f32vvvp ||
+        MC.getOpcode() == TPC::MULx2f32svvp ||
+        MC.getOpcode() == TPC::MULx2f32vsvp ||
+        MC.getOpcode() == TPC::MULx2f32vvsp ||
+        MC.getOpcode() == TPC::MULx2f32vssp ||
+        MC.getOpcode() == TPC::MULx2f32ivvp ||
+        MC.getOpcode() == TPC::MULx2f32vivp ||
+        MC.getOpcode() == TPC::MULx2f32vvip ||
+        MC.getOpcode() == TPC::MULx2f32viip ||
+        
+        MC.getOpcode() == TPC::MULx2f32vvvm ||
+        MC.getOpcode() == TPC::MULx2f32svvm ||
+        MC.getOpcode() == TPC::MULx2f32vsvm ||
+        MC.getOpcode() == TPC::MULx2f32vvsm ||
+        MC.getOpcode() == TPC::MULx2f32vssm ||
+        MC.getOpcode() == TPC::MULx2f32ivvm ||
+        MC.getOpcode() == TPC::MULx2f32vivm ||
+        MC.getOpcode() == TPC::MULx2f32vvim ||
+        MC.getOpcode() == TPC::MULx2f32viim)
+      return TPCLatencyEvaluation::OperandID::e_src_d;
+    if (MC.getOpcode() == TPC::ADDx2vvvp ||
+        MC.getOpcode() == TPC::ADDx2vsvp ||
+        MC.getOpcode() == TPC::ADDx2vvsp ||
+        MC.getOpcode() == TPC::ADDx2vssp ||
+        MC.getOpcode() == TPC::ADDx2vivp ||
+        MC.getOpcode() == TPC::ADDx2vvip ||
+        MC.getOpcode() == TPC::ADDx2viip ||
+        
+        MC.getOpcode() == TPC::ADDx2vvvm ||
+        MC.getOpcode() == TPC::ADDx2vsvm ||
+        MC.getOpcode() == TPC::ADDx2vvsm ||
+        MC.getOpcode() == TPC::ADDx2vssm ||
+        MC.getOpcode() == TPC::ADDx2vivm ||
+        MC.getOpcode() == TPC::ADDx2vvim ||
+        MC.getOpcode() == TPC::ADDx2viim)
+    return TPCLatencyEvaluation::OperandID::e_src_d;
+    if (MC.getOpcode() == TPC::SUBx2vvvp ||
+        MC.getOpcode() == TPC::SUBx2vsvp ||
+        MC.getOpcode() == TPC::SUBx2vvsp ||
+        MC.getOpcode() == TPC::SUBx2vssp ||
+        MC.getOpcode() == TPC::SUBx2vivp ||
+        MC.getOpcode() == TPC::SUBx2vvip ||
+        MC.getOpcode() == TPC::SUBx2viip ||
+        
+        MC.getOpcode() == TPC::SUBx2vvvm ||
+        MC.getOpcode() == TPC::SUBx2vsvm ||
+        MC.getOpcode() == TPC::SUBx2vvsm ||
+        MC.getOpcode() == TPC::SUBx2vssm ||
+        MC.getOpcode() == TPC::SUBx2vivm ||
+        MC.getOpcode() == TPC::SUBx2vvim ||
+        MC.getOpcode() == TPC::SUBx2viim)
+      return TPCLatencyEvaluation::OperandID::e_src_d;
+
     return TPCLatencyEvaluation::OperandID::e_src_c;
   case 3:
+    if (TPCII::getSlotOpCode(MC) == TPCII::ST_TNSR_SQZ)
+      return TPCLatencyEvaluation::OperandID::e_src_c;
     return TPCLatencyEvaluation::OperandID::e_src_d;
 
   default:
@@ -1387,49 +1808,36 @@ bool TPCInstrInfo::isConditionalChain(const MachineInstr &DefMI,
   const MachineFunction &MF = *DefMI.getParent()->getParent();
   const MachineRegisterInfo &MRI = MF.getRegInfo();
 
-  if (UseMI.getNumDefs() != 1)
-    return false;
-  if (UseMI.getNumOperands() < 4)  // dest, income, pred, polarity
+  // dest, income, ..., pred, polarity
+  if (UseMI.getNumDefs() != 1 || UseMI.getNumOperands() < 4) 
     return false;
   if (DefMI.getNumDefs() != 1 || DefMI.getNumOperands() < 4)
     return false;
 
-  // Polarity
-
-  const MachineOperand &UsePolarityOp = UseMI.getOperand(UseMI.getNumOperands() - 1);
-  if (!UsePolarityOp.isImm())
+  // Predicate and Polarity.
+  bool DefPolarity; int DefPredIdx;
+  if (!looksLikeHavingAPredicate(DefMI, DefPredIdx, DefPolarity))
     return false;
-  bool UsePolarity = UsePolarityOp.getImm();
-
-  const MachineOperand &DefPolarityOp = DefMI.getOperand(DefMI.getNumOperands() - 1);
-  if (!DefPolarityOp.isImm())
+  bool UsePolarity; int UsePredIdx;
+  if (!looksLikeHavingAPredicate(UseMI, UsePredIdx, UsePolarity))
     return false;
-  bool DefPolarity = DefPolarityOp.getImm();
 
   // Polarities must be opposite.
   if (UsePolarity == DefPolarity)
     return false;
 
-  // Predicate
-
-  const MachineOperand &DefPredicateOp = DefMI.getOperand(DefMI.getNumOperands() - 2);
-  if (!DefPredicateOp.isReg())
-    return false;
-  unsigned DefPredicate = DefPredicateOp.getReg();
-  if (DefPredicateOp.isKill())
-    return false;
-
-  const MachineOperand &UsePredicateOp = UseMI.getOperand(UseMI.getNumOperands() - 2);
-  if (!UsePredicateOp.isReg())
-    return false;
-  unsigned UsePredicate = UsePredicateOp.getReg();
+  const MachineOperand &DefPredicate = DefMI.getOperand(DefPredIdx);
+  const MachineOperand &UsePredicate = UseMI.getOperand(UsePredIdx);
 
   // Predicate must be the same.
-  if (DefPredicate != UsePredicate)
+  if (DefPredicate.isKill())
     return false;
+  if (DefPredicate.getReg() != UsePredicate.getReg())
+    return false;
+
   bool UseFound = false;
   bool DefFound = false;
-  for (const MachineOperand &U : MRI.use_operands(DefPredicate)) {
+  for (const MachineOperand &U : MRI.use_operands(DefPredicate.getReg())) {
     if (DefFound) {
       if (U.getParent() == &UseMI) {
         UseFound = true;
@@ -1446,19 +1854,29 @@ bool TPCInstrInfo::isConditionalChain(const MachineInstr &DefMI,
     return false;
 
   // Income
-
-  const MachineOperand &IncomeOp = UseMI.getOperand(UseMI.getNumOperands() - 3);
-  if (!IncomeOp.isReg())
-    return false;
-  unsigned IncomeReg = IncomeOp.getReg();
-
-  if (DefMI.getOperand(0).getReg() != IncomeReg)
+  int IncomeIdx = getIncome(UseMI);
+  assert(IncomeIdx > 0 && "Def under predicate must have income");
+  const MachineOperand &Income = UseMI.getOperand(IncomeIdx);
+  if (!Income.isReg() || DefMI.getOperand(0).getReg() != Income.getReg())
     return false;
 
   LLVM_DEBUG(dbgs() << "Conditional chain recognized:"
                     << "    "; DefMI.dump();
              dbgs() << "    "; UseMI.dump(););
   return true;
+}
+
+static bool IsMov(const MachineInstr &MI) {
+  const MCInstrDesc &Desc = MI.getDesc();
+  unsigned Opcode = TPCII::getSlotOpCode(Desc);
+  if (TPCII::isLoadInst(Desc) && Opcode == TPCII::ldMOV)
+    return true;
+  else if (TPCII::isSPUInst(Desc) && Opcode == TPCII::spuMOV)
+    return true;
+  else if (TPCII::isVPUInst(Desc) && Opcode == TPCII::vpuMOV)
+    return true;
+  else
+    return false;
 }
 
 int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
@@ -1475,7 +1893,13 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     return 0;
   }
 
-  const llvm::MachineFunction &MF = *DefMI.getParent()->getParent();
+  const llvm::MachineFunction *CurrMF = nullptr;
+  if (TPCInstrInfo::MachineFunctionX2 != nullptr) {
+    CurrMF = TPCInstrInfo::MachineFunctionX2;
+  } else {
+    CurrMF = DefMI.getParent()->getParent();
+  }
+  const llvm::MachineFunction &MF = *CurrMF;
   const MachineRegisterInfo &MRI = MF.getRegInfo();
   
   const MCInstrDesc &DefMCID = DefMI.getDesc();
@@ -1502,7 +1926,7 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   if (DefReg.isPhysical()) {
     DefRegClass = getRegClass(DefMCID, DefIdx, &RI, MF);
     if (!DefRegClass)
-      DefRegClass = getClassOfPhysicalRegister(DefReg, RI);
+      DefRegClass = getRegisterClass(DefReg, MRI);
   } else {
     DefRegClass = MRI.getRegClass(DefReg);
   }
@@ -1513,7 +1937,7 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   if (UseReg.isPhysical()) {
     UseRegClass = getRegClass(UseMCID, UseIdx, &RI, MF);
     if (!UseRegClass)
-      UseRegClass = getClassOfPhysicalRegister(UseReg, RI);
+      UseRegClass = getRegisterClass(UseReg, MRI);
   } else {
     UseRegClass = MRI.getRegClass(UseReg);
   }
@@ -1526,8 +1950,123 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     return 0;
   }
 
-  if (DefRegClass->hasSuperClassEq(&TPC::HSRFRegClass)) {
-    // LLVM-1281 Optimize ST_TNSR_ID_REG latency
+// Table 4: Read-after-Write Restrictions (With Hardware registers)
+// ----------------------------------------------------------------------------
+// MOV TO_HW_REG IRF_DIM_MASK[0-3] |   Any instruction that uses       |   3
+//                                 |   IRF_DIM_MASK[0-3](Greco/Gaudi2) |
+// ----------------------------------------------------------------------------
+// MOV TO_HW_REG: VCARRY, ZP_REG,  |   ADD/MAC that uses this HW_REG   |   1
+// SCARRY                          |                                   | gen4+
+//                                 |                                   |   2
+//                                 |                                   | greco
+// ----------------------------------------------------------------------------
+// MOV TO_HW_REG: LD_PARTIAL_REG,  |   LD_TNSR*/ST_TNSR* that uses     |   2
+// ST_PARTIAL_REG, LD_TNSR_ID_REG, |   this HW_REG(Greco/Gaudi2)       |
+// ST_TNSR_ID_REG, ST_RMW_REG      |                                   |
+// ----------------------------------------------------------------------------
+// MOV TO_HW_REG: SQZ_CNTR[0-7]    |   ST_TNSR_SQZ/ST_TNSR_S that uses |   1
+//                                 |   this HW_REG(Gaudi2)             |
+// ----------------------------------------------------------------------------
+
+// This code work incorrect in the simulator.
+// It needs two latency.
+// mov  ZP_REG, V1, SP0; 	nop; 	nop; 	nop
+// nop; 	nop; 	mac.i8  ZP_REG A8, V2, V0, VP1; 	nop
+  if (IsMov(DefMI)) {
+    if ((Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) &&
+        DefRegClass->hasSuperClass(&TPC::MRFRegClass))
+      return 3;
+    else if ((Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) &&
+             (DefReg == TPC::LD_PARTIAL_REG ||
+              DefReg == TPC::ST_PARTIAL_REG ||
+              DefReg == TPC::LD_TNSR_ID_REG ||
+              DefReg == TPC::ST_TNSR_ID_REG ||
+              DefReg == TPC::ST_RMW_REG) &&
+             (TPCII::isLdTnsr(UseMCID, Subtarget.hasGen3Plus()) ||
+              TPCII::isStTnsr(UseMCID)))
+      return 2;
+    else if (Subtarget.hasGen3Plus() &&
+             ((TPCII::isSPUInst(UseMCID) &&
+               DefReg == TPC::S_CARRY &&
+               (TPCII::getSlotOpCode(UseMCID) == TPCII::spuADD ||
+                TPCII::getSlotOpCode(UseMCID) == TPCII::spuMAC)) ||
+              (TPCII::isVPUInst(UseMCID) &&
+               (DefReg == TPC::V_CARRY || DefReg == TPC::ZP_REG) &&
+               (TPCII::getSlotOpCode(UseMCID) == TPCII::vpuADD ||
+                TPCII::getSlotOpCode(UseMCID) == TPCII::vpuMAC))))
+      return 2;
+      // FIXME: Uncomment after above comment fix in the simulator.
+      //return Subtarget.hasGrecoISA() ? 2 : 1;
+    else if (Subtarget.hasGaudi2ISA() &&
+             UseRegClass == &TPC::HWSqzCntrRegClass &&
+             TPCII::isStoreInst(UseMCID) &&
+             (TPCII::getSlotOpCode(UseMCID) == TPCII::ST_TNSR_SQZ ||
+              TPCII::getSlotOpCode(UseMCID) == TPCII::ST_TNSR_S))
+      return 1;
+  }
+
+  // From Hilla Ben Yaacov
+  // You can do consecutive ST_TNSR_SQZ cycle after cycle, even if they are
+  // using the same squeeze counter.
+  // MOV and ST_TNSR_SQZ - I think we can do them one after the other without
+  // any instruction between them (latebcy=1).
+  if (DefRegClass == &TPC::HWSqzCntrRegClass &&
+      UseRegClass == &TPC::HWSqzCntrRegClass) {
+    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency between HWSqzCntr and HWSqzCntr = " << 1 << "\n");
+    DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+    return 1;
+  }
+
+  // From Hilla Ben Yaacov
+  // There is no latency for LFSR/SPU_LFSR - it is reseeded in the same cycle
+  // as it is read, and then ready with a new value in the next cycle.
+  // Same also for MOV to LFSR - it has 1 cycle latency.
+  if(DefRegClass->hasSuperClassEq(&TPC::HWSpuLFSRRegClass) ||
+     DefRegClass->hasSuperClassEq(&TPC::HWVpuLFSRRegClass)) {
+    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency HW LFSR = " <<  1 << "\n");
+    DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+    return 1;
+  }
+
+  // Latency DB interface currently does not work for HW registers, such as DIM_MASK_REG.
+  // Assume the latency is 4 for now.
+  if (DefRegClass->hasSuperClassEq(&TPC::HWSqzCntrSubRegClass) ||
+      DefRegClass->hasSuperClassEq(&TPC::HWSqzCntrRegClass) ||
+      DefRegClass->hasSuperClassEq(&TPC::HWLaneIdRegClass)) {
+    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency HWSqzCntr = " << 4 << "\n");
+    DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+    return 4;
+  }
+
+  // Nowadays any HW register can be only physical
+  if (DefReg.isPhysical() && TPC::HSRFRegClass.contains(DefReg)) {
+    // TPCLatencyResolver may be trigered on use-use or def-def a HW register.
+    // In this case latency 1 is being returned.
+    int Latency = 1;
+    if (DefOperand.isDef() && UseOperand.isDef()) {
+      switch(DefReg) {
+      default:
+        Latency = 4;
+        break;
+      case TPC::LD_PARTIAL_REG:
+      case TPC::ST_PARTIAL_REG:
+      case TPC::LD_TNSR_ID_REG:
+      case TPC::ST_TNSR_ID_REG:
+      case TPC::ST_RMW_REG:
+        assert(Subtarget.hasGen3Plus());
+        Latency = 2;
+        break;
+      }
+    }
+    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency HWReg = " <<
+                    Latency << "\n");
+    DEBUG_WITH_TYPE("latency", dbgs() <<
+                    "=====================================================\n");
+    return Latency;
+  }
+
+  if (DefRegClass->hasSuperClassEq(&TPC::HVRFRegClass)) {
+    assert(UseRegClass->hasSuperClassEq(&TPC::HVRFRegClass));
     DEBUG_WITH_TYPE("latency", dbgs() << "== Latency HWReg = " << 4 << "\n");
     DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
     return 4;
@@ -1609,6 +2148,17 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     return 0;
   }
 
+  // From Hilla Ben Yaakov's communication on 2022-02-23:
+  // the latency between an ADRF update in autoincrementing instruction (LD_G,
+  // ST_G, PREFETCH) and a use of the address in subsequent LD_G/ST_G/PREFETCH
+  // s 1, - i.e. you can perform back to back LD_G/ST_G/PREFETCH instructions
+  // with AUTO_INC, and always get the latest value of ADRF.
+  if (ImplicitDef && (DefRegClass == &TPC::ADRFRegClass)) {
+    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency between implicit ADRF def and use = " << 1 << "\n");
+    DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+    return 1;
+  }
+
   // Instructions LD_TNSR and ST_TNSR may have register operands that are not
   // encoded in the instruction. These are S27/S28 for tensor number, S30/S31
   // for size+offset and S29 for RMW. For all of them latency is 7.
@@ -1626,22 +2176,24 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     case TPCII::LD_TNSR:
     case TPCII::LD_TNSR_LOW:
     case TPCII::LD_TNSR_HIGH:
-      if (UseIdx == 2) {
-        assert(TPC::TnsrRegLdRegClass.hasSubClassEq(UseRegClass));
-        DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S27 -> LD_TNSR) " << 7 << "\n");
-        DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
-        return 7;
-      }
-      if (UseIdx == 3) {
-        assert(TPC::OffsSizeRegLdRegClass.hasSubClassEq(UseRegClass));
-        DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S30 -> LD_TNSR) " << 7 << "\n");
-        DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
-        return 7;
+      if (Subtarget.hasGaudiISA() || Subtarget.hasGaudiBISA()) {
+        if (UseIdx == 2) {
+          assert(TPC::TnsrRegLdRegClass.hasSubClassEq(UseRegClass));
+          DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S27 -> LD_TNSR) " << 7 << "\n");
+          DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+          return 7;
+        }
+        if (UseIdx == 3) {
+          assert(TPC::OffsSizeRegLdRegClass.hasSubClassEq(UseRegClass));
+          DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S30 -> LD_TNSR) " << 7 << "\n");
+          DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+          return 7;
+        }
       }
       break;
     case TPCII::ldGEN_ADDR:
       if (UseIdx == 1) {
-        assert(TPC::TnsrRegLdRegClass.hasSubClassEq(UseRegClass));
+        //assert(TPC::TnsrRegLdRegClass.hasSubClassEq(UseRegClass));
         DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S27 -> GEN_ADDR) " << 7 << "\n");
         DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
         return 7;
@@ -1655,29 +2207,31 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     case TPCII::ST_TNSR:
     case TPCII::ST_TNSR_LOW:
     case TPCII::ST_TNSR_HIGH:
-      if (UseIdx == 1) {
-        assert(TPC::TnsrRegStRegClass.hasSubClassEq(UseRegClass));
-        DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S28 -> ST_TNSR) " << 7 << "\n");
-        DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
-        return 7;
-      }
-      if (UseIdx == 3) {
-        assert(TPC::RMWRegRegClass.hasSubClassEq(UseRegClass) ||
-                TPC::OffsSizeRegStRegClass.hasSubClassEq(UseRegClass));
-        DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S29/S31 -> ST_TNSR) " << 7 << "\n");
-        DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
-        return 7;
-      }
-      if (UseIdx == 4 && TPC::OffsSizeRegStRegClass.hasSubClassEq(UseRegClass)) {
-        DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S31 -> ST_TNSR) " << 7 << "\n");
-        DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
-        return 7;
+      if (Subtarget.hasGaudiISA() || Subtarget.hasGaudiBISA()) {
+        if (UseIdx == 1) {
+          assert(TPC::TnsrRegStRegClass.hasSubClassEq(UseRegClass));
+          DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S28 -> ST_TNSR) " << 7 << "\n");
+          DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+          return 7;
+        }
+        if (UseIdx == 3) {
+          assert(TPC::RMWRegRegClass.hasSubClassEq(UseRegClass) ||
+                 TPC::OffsSizeRegStRegClass.hasSubClassEq(UseRegClass));
+          DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S29/S31 -> ST_TNSR) " << 7 << "\n");
+          DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+          return 7;
+        }
+        if (UseIdx == 4 && TPC::OffsSizeRegStRegClass.hasSubClassEq(UseRegClass)) {
+          DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S31 -> ST_TNSR) " << 7 << "\n");
+          DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+          return 7;
+        }
       }
       break;
     case TPCII::stGEN_ADDR:
       if (UseIdx == 1) {
         assert(TPC::TnsrRegStRegClass.hasSubClassEq(UseRegClass));
-        DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S28/HW -> GEN_ADDR) " << 7 << "\n");
+        DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (S28 -> GEN_ADDR) " << 7 << "\n");
         DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
         return 7;
       }
@@ -1858,18 +2412,25 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
 
   // This is the guideline from Ron - for producers (dst), isVPUDest always false
   bool isDefVectorPipe = false;
-  bool isAddSubFP16 = false;
-  bool is2srfDst = false;
+  bool IsDefFP16 = false;
+  bool IsDefFp8 = false;
+
+  const auto &DetectFp16Fp8 = [](const MachineInstr &Instr,
+                                 bool &IsFp16,
+                                 bool &IsFp8){
+    TPCII::OpType Type = getOpType(Instr);
+    IsFp16 = Type == TPCII::OpType::FP16;
+    IsFp8 = (Type == TPCII::OpType::FP8_143 ||
+             Type == TPCII::OpType::FP8_152);
+  };
+
+  DetectFp16Fp8(DefMI, IsDefFP16, IsDefFp8);
+
+  bool Is2srfDst = false;
   bool isDefLFSRImplicitDst = false;
   bool isDefIRFDest = (DefRegClass == &TPC::IRFRegClass);
   bool IsDefFloat = !TPCII::isLoopInst(DefMCID) &&
-                    !TPCII::isStoreInst(DefMCID) &&
                     isFloatData(getOpType(DefMI));
-  if (IsDefFloat) {
-    if (TPCII::isLoadInst(DefMCID) && !TPCII::isLookup(DefMCID)) {
-      IsDefFloat = false;
-    }
-  }
   if (TPCII::isLookup(DefMCID)) {
       IsDefFloat = true;
   }
@@ -1897,13 +2458,36 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     isUseVectorPipe = (UseDestRegClass == &TPC::VRFRegClass) ||
                       (UseDestRegClass == &TPC::VPRFRegClass) ||
                       (UseDestRegClass == &TPC::ARFRegClass) ||
-                      (UseDestRegClass == &TPC::DRFRegClass);
+                      (UseDestRegClass == &TPC::HVRFRegClass) ||
+                      (UseDestRegClass == &TPC::DRFRegClass) ||
+                      (UseDestRegClass == &TPC::HWZPRegRegClass) ||
+                      (UseDestRegClass == &TPC::HWVCarryRegClass);
   }
 
   // Workaround for MOV to LFSR, which is represented by special instruction.
   // TODO: can the code above do it?
-  if (UseMI.getOpcode() == TPC::WriteLFSR) {
+  if (UseMI.getOpcode() == TPC::WriteLFSRp ||
+      UseMI.getOpcode() == TPC::WriteLFSRm) {
     isUseVectorPipe = true;
+  }
+
+  // Skip extra arguments
+  auto IsStTnsrSQZ = [](unsigned Opcode) {
+    return Opcode == TPC::ST_TNSR_SQZ ||
+        Opcode == TPC::ST_TNSR_SQZ_T;
+  };
+  auto IsStTnsrSQZRWM = [](unsigned Opcode) {
+    return Opcode == TPC::ST_TNSR_SQZ_R ||
+        Opcode == TPC::ST_TNSR_SQZ_R_T;
+  };
+
+  if ((IsStTnsrSQZ(UseMCID.getOpcode()) && UseIdx == 7) ||
+      (IsStTnsrSQZ(DefMCID.getOpcode()) && DefIdx == 7) ||
+      (IsStTnsrSQZRWM(UseMCID.getOpcode()) && UseIdx == 8) ||
+      (IsStTnsrSQZRWM(DefMCID.getOpcode()) && DefIdx == 8)) {
+    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency for extra argument for ST_TNSR_SQZ = " << 0 << "\n");
+    DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
+    return 0;
   }
 
   // Latency between instructions in conditional chain is 0.
@@ -2070,22 +2654,18 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
 // ----------------------------------------------------------------------------
 // First WriteInstruction          |   Second Write Instruction        | Latency
 // ----------------------------------------------------------------------------
-// LD_G/LD_L/LD_L_V*/LD_TNSR* to   |   Any instruction on the SPU/VPU  |   
+// LD_G/LD_L/LD_L_V*/LD_TNSR* to   |   Any instruction on the SPU/VPU  |
 // SPRF/VPRF                       |   that updates the same SPRF/VPRF |   3
 // ----------------------------------------------------------------------------
-// LD_G/LD_L/LD_L_V*/LD_TNSR* to   |   MOV on a LOAD issue slot that   |   
+// LD_G/LD_L/LD_L_V*/LD_TNSR* to   |   MOV on a LOAD issue slot that   |
 // SPRF/VPRF                       |   updates the same SPRF/VPRF      |   3
 // ----------------------------------------------------------------------------
-// UDIV_4STEP                      |   Any instruction that defines    |   6
-//                                 |   the same def                    |
-// ----------------------------------------------------------------------------
-
-    int lat = 1;
-    unsigned opc1 = TPCII::getSlotOpCode(DefMCID);
-    unsigned opc2 = TPCII::getSlotOpCode(UseMCID);
+    int Lat = 1;
+    unsigned Opc1 = TPCII::getSlotOpCode(DefMCID);
+    unsigned Opc2 = TPCII::getSlotOpCode(UseMCID);
 
     if (TPCII::isLoadInst(DefMCID)) {
-      switch (opc1) {
+      switch (Opc1) {
        case TPCII::LD_L:
        case TPCII::LD_G:
        case TPCII::LD_L_V:
@@ -2095,8 +2675,8 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
        case TPCII::LD_TNSR_LOW:
        case TPCII::LD_TNSR_HIGH:
          if ( TPCII::isVPUInst(UseMCID) || TPCII::isSPUInst(UseMCID) ||
-              (TPCII::isLoadInst(UseMCID) && opc2 == TPCII::ldMOV) ) {
-            lat = 3;
+              (TPCII::isLoadInst(UseMCID) && Opc2 == TPCII::ldMOV) ) {
+            Lat = 3;
          }
          break;
       }
@@ -2104,39 +2684,59 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
 
     if (is_convert_instr_with_lane(DefMI) && is_convert_instr_with_lane(UseMI)) {
       if (getLaneSel(DefMI) != getLaneSel(UseMI)) {
-        lat = 0; // no latency between different lanes
+        Lat = 0; // no latency between different lanes
       }
     }
-    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (e_dst in Consumer) = " << lat << "\n");
+
+    DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (e_dst in Consumer) = " << Lat << "\n");
     DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
-    return lat;
+    return Lat;
+  }
+  
+  // Dedicated SRF registers for loops are not permitted to be changed inside
+  // the loop by the scalar pipe – only the PCU HW can manipulate them.
+  if (TPCII::isLoopInst(UseMCID) && Subtarget.isHWLoopReg(DefReg)) {
+    if (TPCII::isSPUInst(DefMCID) &&
+        TPCII::getSlotOpCode(DefMCID) == TPCII::spuUDIV)
+      return 10;
+    else
+      return 5;
+  }
+  
+
+  bool IsDnorm =
+      Subtarget.getTargetLowering()->getTargetMachine().Options.TpcDnorm;
+
+  if (IsDnorm) {
+    if (TPCII::isFMA(DefMCID))
+      return 6;
+    if (TPCII::isFMA(UseMCID))
+      return 6;
   }
 
   if (UseMCID.isBranch() && isPredicateReg(DefRegClass))
     UseOpId = TPCLatencyEvaluation::OperandID::e_src_p;
   bool IsUseFloat = !TPCII::isLoopInst(UseMCID) &&
-                    !TPCII::isStoreInst(UseMCID) &&
                     isFloatData(getOpType(UseMI));
-  if (IsUseFloat) {
-    if (TPCII::isLoadInst(UseMCID) && !TPCII::isLookup(UseMCID)) {
-      IsUseFloat = false;
-    }
-  }
   if (TPCII::isLookup(UseMCID)) {
       IsUseFloat = true;
   }
-
-  //todo: This condition can be more optimal. This condition can be relaxed for only FP instruction with SRC_B.
-  bool isDefSpuAddSub = (TPCII::isSPUInst(DefMCID) &&
-                         ((TPCII::getSlotOpCode(DefMCID) == TPCII::spuSUB) ||
-			  (TPCII::getSlotOpCode(DefMCID) == TPCII::spuADD)));
-  bool isDefVpuAddSub = (TPCII::isVPUInst(DefMCID) &&
-                         ((TPCII::getSlotOpCode(DefMCID) == TPCII::vpuSUB) ||
-			  (TPCII::getSlotOpCode(DefMCID) == TPCII::vpuADD)));
+  
+  if (TPCII::isSPUInst(DefMCID) &&
+      TPCII::getSlotOpCode(DefMCID) == TPCII::spuUDIV) { // UDIV_4STEP too
+    if (Subtarget.hasGrecoISA()) {
+      Is2srfDst = true;
+    } else if (Subtarget.hasGaudi2ISA() || Subtarget.hasDoron1ISA()) {
+      Is2srfDst = getSwitches(DefMI) == TPCII::SW_DIV_MODE_BOTH;
+    }
+  }
 
   bool defIsAccFp32 = false;
   bool useIsAccFp32 = false;
-  bool isUseFp16 = false;
+  bool IsUseFp16 = false;
+  bool IsUseFp8 = false;
+  DetectFp16Fp8(UseMI, IsUseFp16, IsUseFp8);
+
   if (Subtarget.hasGen2Plus()) {
     // Only MAC and MUL have a AccFp32
     // For now only relevent BF16
@@ -2161,10 +2761,17 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
                     TPCII::getSlotOpCode(UseMCID) == TPCII::vpuMAC) &&
                    getOpType(UseMI) == TPCII::OpType::BF16);
 
-    if (isMulMacSPU || isMulMacVPU) {
+    if (isMulMacSPU || isMulMacVPU)
       useIsAccFp32 = UseMI.getOperand(4).getImm() & TPCII::SW_ACC_FP32;
-    }
   }
+
+  auto HasX2 = [](const MachineInstr &Instr)-> bool {
+    const MCInstrDesc &Desc = Instr.getDesc();
+    return TPCII::isVPUInst(Desc) &&
+           ((TPCII::getSlotOpCode(Desc) == TPCII::vpuSUB ||
+             TPCII::getSlotOpCode(Desc) == TPCII::vpuADD) &&
+            (getSwitches(Instr) & TPCII::SW_X2_ARITHMETIC));
+  };
 
   TPCLatencyEvaluation::InstructionForLatencyDetermination DefData(
     convertSlot(TPCII::getInstrType(DefMCID)),
@@ -2176,10 +2783,10 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     isDefLFSRImplicitDst,
     defIsAccFp32,	// isAccFp32
     0,	    // idxDst0
-    is2srfDst,
-    0,	// is2xLookupAddSub,
-    isAddSubFP16,	// isAddSubFp16,
-    false,  //isFp8
+    Is2srfDst,
+    HasX2(DefMI),	// is2xLookupAddSub,
+    IsDefFP16,	// isFp16,
+    IsDefFp8,  //isFp8
     convertReg(DefRegClass)
   );
 
@@ -2194,38 +2801,205 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     useIsAccFp32,	// isAccFp32
     0,	    // idxDst0
     false,	// is2SrfDst
-    0, // is2xLookupAddSub,
-    isUseFp16,            // isAddSubFp16,
-    false,  //isFp8
+    UseOpId == TPCLatencyEvaluation::OperandID::e_src_p ? 0 : HasX2(UseMI),	// is2xLookupAddSub,
+    UseOpId == TPCLatencyEvaluation::OperandID::e_src_p ? false : IsUseFp16, // isFp16,
+    UseOpId == TPCLatencyEvaluation::OperandID::e_src_p ? false : IsUseFp8, //isFp8
     convertReg(UseRegClass)
   );
 
   if (TPCLatencyEvaluation::latenciesDB.empty()) {
-    if (Subtarget.hasGaudiISA()) {
+    if (Subtarget.hasGaudiISA() || Subtarget.hasGaudiBISA()) {
       TPCLatencyEvaluation::gaudi_buildInstructionLatenciesDB();
-    }
-    else {
+    } else if (Subtarget.hasDoron1ISA()) {
+      TPCLatencyEvaluation::doron1_buildInstructionLatenciesDB();
+    } else if (Subtarget.hasGaudi2ISA()) {
+      TPCLatencyEvaluation::gaudi2_buildInstructionLatenciesDB();
+    } else if (Subtarget.hasGrecoISA()) {
+      TPCLatencyEvaluation::goya2_buildInstructionLatenciesDB();
+    } else {
       TPCLatencyEvaluation::dali_buildInstructionLatenciesDB();
     }
   }
 
 
-  int Latency;
+  int Latency = 0;
   int tpc_generation = 1; // Dali
   
-  if (Subtarget.hasGaudiISA()) {
+  if (Subtarget.hasGaudiISA() || Subtarget.hasGaudiBISA()) {
     tpc_generation = 2;
+  } else if (Subtarget.hasGrecoISA()) {
+    tpc_generation = 3;
+  } else if (Subtarget.hasGaudi2ISA()) {
+    tpc_generation = 4;
+  } else if (Subtarget.hasDoron1ISA()) {
+    tpc_generation = 6;
   }
 
-  Latency = static_cast<int>(TPCLatencyEvaluation::calculateLatency(DefData, UseData, tpc_generation));
+  auto FixRegFile = [](const MCInstrDesc &Desc,
+      TPCLatencyEvaluation::OperandID Operand,
+      TPCLatencyEvaluation::RegisterFile &file) {
+    if (Operand == TPCLatencyEvaluation::e_dst) {
+      switch (Desc.getOpcode()) {
+      case TPC::LD_Gg4_INCsap:
+      case TPC::LD_Gg5_INCzap:
+      case TPC::LD_G_INCsap:
+        file = TPCLatencyEvaluation::e_rf_s;
+        break;
+      case TPC::LD_Gg4_INCpap:
+      case TPC::LD_G_INCpap:
+        file = TPCLatencyEvaluation::e_rf_sp;
+        break;
+      }
+    } else if (Operand == TPCLatencyEvaluation::e_src_a) {
+      switch (Desc.getOpcode()) {
+      case TPC::ST_G_INCs:
+      case TPC::ST_G_INCz:
+        file = TPCLatencyEvaluation::e_rf_s;
+        break;
+      case TPC::ST_G_INCp:
+        file = TPCLatencyEvaluation::e_rf_sp;
+        break;
+      }
+    }
+  };
 
+  FixRegFile(DefMCID, DefData.the_operandID, DefData.the_registerFile);
+  FixRegFile(UseMCID, UseData.the_operandID, UseData.the_registerFile);
+  
+  // Only for physical registers
+  if (TPCII::isFMA(DefMCID) && TPCII::isVPUInst(DefMCID) &&
+      TPCII::isFMA(UseMCID) && TPCII::isVPUInst(UseMCID) &&
+      DefReg.isPhysical() && DefReg != UseReg) {
+    const TargetRegisterInfo *TRI = Subtarget.getRegisterInfo();
+    LLVM_DEBUG(dbgs() << "FMA processing: " <<
+               TRI->getName(DefReg) << ", " << TRI->getName(UseReg) << "\n");
+    bool Visited = false;
+    for (MCSubRegIterator SubReg(DefReg, TRI, true);
+         SubReg.isValid(); ++SubReg) {
+      // Skipping DRF/ADRF register
+      if (!TPC::VRFRegClass.contains(*SubReg))
+        continue;
+
+      if (!TRI->isSubRegisterEq(UseReg, *SubReg))
+        continue;
+
+      const auto &GetIndexBySubReg = [&TRI](Register SuperReg,
+                                            Register SubReg) {
+        assert(SuperReg.isPhysical());
+        assert(SubReg.isPhysical());
+        unsigned Index = TRI->getSubRegIndex(SuperReg, SubReg);
+        switch (Index) {
+        default:
+          llvm_unreachable("Unexpected index");
+        case 0: //Self register
+        case TPC::sub_0:
+        case TPC::sub_s0:
+          return 0;
+        case TPC::sub_1:
+        case TPC::sub_s1:
+          return 1;
+        case TPC::sub_2:
+          return 2;
+        case TPC::sub_3:
+          return 3;
+        }
+      };
+
+      uint8_t DefIdxDst0 = GetIndexBySubReg(DefReg, *SubReg);
+      uint8_t UseIdxDst0 = GetIndexBySubReg(UseReg, *SubReg);
+
+      // FMA X2 to FMA and vs versa
+      // [LLVM-2305] In case the instruction is a switch with X2 return 0
+      // otherwise return 1 This check only relvent for FMA operations
+      // with X2.
+      if (getSwitches(UseMI) & TPCII::SW_X2_ARITHMETIC &&
+          DefIdxDst0 != UseIdxDst0) {
+        DEBUG_WITH_TYPE("latency", dbgs() << "LLVM-2305" << 6 << "\n");
+        return 6;
+      }
+
+      DefData.the_idxDst0 = DefIdxDst0;
+      UseData.the_idxDst0 = UseIdxDst0;
+      Visited = true;
+      unsigned TempLatency =
+          TPCLatencyEvaluation::calculateLatency(DefData, UseData,
+                                                 tpc_generation);
+
+      if (static_cast<int>(TempLatency) > Latency)
+        Latency = static_cast<int>(TempLatency);
+    }
+    assert(Visited && "calculateLatency has not been called");
+  } else if (TPCII::isFMA(DefMCID) && TPCII::isVPUInst(DefMCID) &&
+             TPCII::isFMA(UseMCID) && TPCII::isVPUInst(UseMCID) &&
+             DefReg.isVirtual()) {
+    unsigned DefSubregs = DefOperand.getSubReg();
+    unsigned UseSubregs = UseOperand.getSubReg();
+
+    const auto &GetSubIndex = [](unsigned SubregsType) ->
+        SmallVector<unsigned> {
+      switch (SubregsType) {
+      default:
+        llvm_unreachable("Unexpected index");
+      case 0: //Self register
+      case TPC::sub_0:
+      case TPC::sub_s0:
+        return {0};
+      case TPC::sub_1:
+      case TPC::sub_s1:
+        return {1};
+      case TPC::sub_2:
+        return {2};
+      case TPC::sub_3:
+        return {3};
+      case TPC::sub_0_sub_1:
+        return {0, 1};
+      case TPC::sub_2_sub_3:
+        return {2, 3};
+      }
+    };
+
+    if (DefSubregs == UseSubregs) {
+      Latency = static_cast<int>(TPCLatencyEvaluation::calculateLatency(DefData, UseData, tpc_generation));
+    } else {
+      SmallVector<unsigned> DefIdxs = GetSubIndex(DefSubregs);
+      SmallVector<unsigned> UseIdxs = GetSubIndex(UseSubregs);
+
+      for (auto DefIdx : DefIdxs) {
+        for (auto UseIdx : UseIdxs) {
+          // FMA X2 to FMA and vs versa
+          // [LLVM-2305] In case the instruction is a switch with X2 return 0
+          // otherwise return 1. This check only relvent for FMA operations
+          // with X2.
+          if (getSwitches(UseMI) & TPCII::SW_X2_ARITHMETIC &&
+              DefIdx != UseIdx) {
+            DEBUG_WITH_TYPE("latency", dbgs() << "LLVM-2305" << 6 << "\n");
+            return 6;
+          }
+
+          DefData.the_idxDst0 = DefIdx;
+          UseData.the_idxDst0 = UseIdx;
+          unsigned TempLatency =
+              TPCLatencyEvaluation::calculateLatency(DefData, UseData,
+                                                     tpc_generation);
+
+          if (static_cast<int>(TempLatency) > Latency)
+            Latency = static_cast<int>(TempLatency);
+        }
+      }
+    }
+  } else {
+    Latency = static_cast<int>(TPCLatencyEvaluation::calculateLatency(DefData, UseData, tpc_generation));
+  }
+
+  assert(Latency >= 0);
+  
   //
   // Fix latency value taking into account different PRM restrictions
   // In fact, the latencyDB interface function 'calculateLatency' should have
   // taken care of this, but this is not true for now.
   //
   if (tpc_generation > 1) {
-    // Gaudi restrictions:
+    // Gaudi and Goya2 restrictions:
     //
     // 4 cycles after any instruction which write to Scalar Predicate,
     // ASO with VPU_ASO_OP switch can't be predicated using this predicate
@@ -2243,6 +3017,30 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     }
   }
 
+  // Goya2 PRM v0.64: After doing a GEN_ADDR that changes the Tensor ID of that specific ADRF, 
+  // it is not allowed to do LD_G to VRF/VPRF from that ADRF for 6 cycles.
+  // Moreover you don’t know what are the leftovers in ADRF from previous kernels, so we do it always.
+  // TODO: At the beginning of the loop the first LD_G suffers more than the next ones, 
+  // so there is opportunity to peel the first iteration.
+  if (Subtarget.hasGrecoISA()
+      &&
+      ((TPCII::isLoadInst(DefMCID) &&
+        TPCII::getSlotOpCode(DefMCID) == TPCII::ldGEN_ADDR) ||
+       (TPCII::isStoreInst(DefMCID) &&
+        TPCII::getSlotOpCode(DefMCID) == TPCII::stGEN_ADDR))
+      &&
+      (TPCII::isLoadInst(UseMCID) &&
+       TPCII::getSlotOpCode(UseMCID) == TPCII::LD_G)
+      &&
+      (TPC::VRFRegClass.contains(UseMI.getOperand(0).getReg()) ||
+       TPC::VPRFRegClass.contains(UseMI.getOperand(0).getReg()))
+      &&
+      (DefMI.getOperand(0).getReg() == UseMI.getOperand(1).getReg())
+     )
+  {
+    Latency = std::max(Latency, 7);
+  }
+  
   DEBUG_WITH_TYPE("latency", dbgs() << "== Latency = " << Latency << "\n");
   DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
 
@@ -2250,39 +3048,15 @@ int TPCInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
 }
 
 bool TPCInstrInfo::isPredicated(const MachineInstr& MI) const {
-  if (MI.getOpcode() == TPC::JMPR) {
+  if (MI.getOpcode() == TPC::JMPR)
     return true;
-  }
 
-  // Intrinsics are predicated with a predicate being the penultimate operand.
-  const MCInstrDesc &MCID = MI.getDesc();
-  if (MCID.getNumOperands() > 1) {
-    const MachineOperand& PossiblePred = MI.getOperand(MCID.getNumOperands() - 2);
-    const MachineOperand& PossiblePol = MI.getOperand(MCID.getNumOperands() - 1);
-    if (!PossiblePol.isImm() || !PossiblePred.isReg())
-      return false;
+  bool Polarity; int Predicate;
+  if (!looksLikeHavingAPredicate(MI, Predicate, Polarity))
+    return false;
 
-    Register PReg = PossiblePred.getReg();
-    if (PReg == TPC::SP0 || PReg == TPC::VP0)
-      return false;
-    const TargetRegisterClass *RC;
-    if (PReg.isPhysical()) {
-      RC = getClassOfPhysicalRegister(PReg, RI);
-    } else {
-      // Virtual registers.
-      // In this case we cannot determine if the register is SP0, so such
-      // instruction is always considered predicated if the register is of
-      // predicate class.
-      const MachineRegisterInfo& MRI = MI.getParent()->getParent()->getRegInfo();
-      RC = MRI.getRegClass(PReg);
-    }
-    return TPC::SPRFRegClass.hasSubClassEq(RC)
-        || TPC::VPRFRegClass.hasSubClassEq(RC);
-  }
-
-  // TODO: other instructions (not intrinsics)?
-
-  return false;
+  Register PredReg = MI.getOperand(Predicate).getReg();
+  return PredReg != TPC::SPRF_TRUE && PredReg != TPC::VPRF_TRUE;
 }
 
 
@@ -2317,23 +3091,75 @@ LLVM_READONLY int getAltOpcodeStore(uint16_t Opcode, enum TPC::Slot inSlot);
 LLVM_READONLY int getAltOpcodeSpu  (uint16_t Opcode, enum TPC::Slot inSlot);
 LLVM_READONLY int getAltOpcodeVpu  (uint16_t Opcode, enum TPC::Slot inSlot);
 
+LLVM_READONLY int getAltOpcodeLoadGen3 (uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeStoreGen3(uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeSpuGen3  (uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeVpuGen3  (uint16_t Opcode, enum TPC::Slot inSlot);
+
+LLVM_READONLY int getAltOpcodeLoadGen4 (uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeStoreGen4(uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeSpuGen4  (uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeVpuGen4  (uint16_t Opcode, enum TPC::Slot inSlot);
+
+LLVM_READONLY int getAltOpcodeLoadDoron1 (uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeStoreDoron1(uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeSpuDoron1  (uint16_t Opcode, enum TPC::Slot inSlot);
+LLVM_READONLY int getAltOpcodeVpuDoron1  (uint16_t Opcode, enum TPC::Slot inSlot);
+
 bool TPCInstrInfo::getOtherSlotOpcodes(MachineInstr* MI, std::vector<unsigned>& opcodes) const {
   int altOpc;
   bool found = false;
   int (*getAltOpcode)(uint16_t, TPC::Slot);
   int (*getAltOpcodeGen)(uint16_t, TPC::Slot) = nullptr;
   int (*getAltOpcodeGenEx)(uint16_t, TPC::Slot) = nullptr;
+  int (*getAltOpcodeGenExEx)(uint16_t, TPC::Slot) = nullptr;
   if (TPCII::isVPUInst(MI->getDesc())) {
     getAltOpcode = llvm::TPC::getAltOpcodeVpu;
+    if (Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenExEx = llvm::TPC::getAltOpcodeVpuDoron1;
+    }
+    if (Subtarget.hasGaudi2ISA() || Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenEx = llvm::TPC::getAltOpcodeVpuGen4;
+    }
+    if (Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) {
+      getAltOpcodeGen = llvm::TPC::getAltOpcodeVpuGen3;
+    }
   }
   else if (TPCII::isSPUInst(MI->getDesc())) {
     getAltOpcode = llvm::TPC::getAltOpcodeSpu;
+    if (Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenExEx = llvm::TPC::getAltOpcodeSpuDoron1;
+    }
+    if (Subtarget.hasGaudi2ISA() || Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenEx = llvm::TPC::getAltOpcodeSpuGen4;
+    }
+    if (Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) {
+      getAltOpcodeGen = llvm::TPC::getAltOpcodeSpuGen3;
+    }
   }
   else if (TPCII::isLoadInst(MI->getDesc())) {
     getAltOpcode = llvm::TPC::getAltOpcodeLoad;
+    if (Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenExEx = llvm::TPC::getAltOpcodeLoadDoron1;
+    }
+    if (Subtarget.hasGaudi2ISA() || Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenEx = llvm::TPC::getAltOpcodeLoadGen4;
+    }
+    if (Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) {
+      getAltOpcodeGen = llvm::TPC::getAltOpcodeLoadGen3;
+    }
   }
   else if (TPCII::isStoreInst(MI->getDesc())) {
     getAltOpcode = llvm::TPC::getAltOpcodeStore;
+    if (Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenExEx = llvm::TPC::getAltOpcodeStoreDoron1;
+    }
+    if (Subtarget.hasGaudi2ISA() || Subtarget.hasDoron1ISA()) {
+      getAltOpcodeGenEx = llvm::TPC::getAltOpcodeStoreGen4;
+    }
+    if (Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) {
+      getAltOpcodeGen = llvm::TPC::getAltOpcodeStoreGen3;
+    }
   }
   else {
     return found;
@@ -2360,6 +3186,13 @@ bool TPCInstrInfo::getOtherSlotOpcodes(MachineInstr* MI, std::vector<unsigned>& 
         found = true;
       }
     }
+    if (getAltOpcodeGenExEx != nullptr) {
+      altOpc = getAltOpcodeGenExEx(MI->getOpcode(), slots[i]);
+      if (altOpc >= 0 && (altOpc != (uint16_t)-1U)) {
+        opcodes.push_back(altOpc);
+        found = true;
+      }
+    }
   }
 
   return found;
@@ -2374,7 +3207,7 @@ bool TPCInstrInfo::instHasImmField(const MachineInstr &MI) const {
 }
 
 static bool isRealPredicateReg(unsigned Reg) {
-  return (TPC::SPRFRegClass.contains(Reg) && (Reg != TPC::SP0));
+  return (TPC::SPRFRegClass.contains(Reg) && (Reg != TPC::SPRF_TRUE));
 }
 
 bool TPCInstrInfo::isScalarToVector(const MachineInstr &MI) const {
@@ -2469,16 +3302,7 @@ bool TPCInstrInfo::isIRFProducerWithDimMask(const MachineInstr &MI,
 
   // Determine destination register class.
   Register DefReg = MI.getOperand(0).getReg();
-  const TargetRegisterClass *DefRegClass;
-  if (DefReg.isPhysical()) {
-    DefRegClass = getRegClass(MCID, 0, &RI, MF);
-    if (!DefRegClass)
-      DefRegClass = getClassOfPhysicalRegister(DefReg, RI);
-  } else {
-    DefRegClass = MRI.getRegClass(DefReg);
-  }
-  assert(DefRegClass);
-
+  const TargetRegisterClass *DefRegClass = getRegisterClass(DefReg, MRI);
   if (DefRegClass != &TPC::IRFRegClass)
     // It can be LD_TNSR, - it consumes IRF but does not produce such.
     return false;
@@ -2590,11 +3414,10 @@ MachineInstr *TPCInstrInfo::foldMemoryOperandImpl(
       Register FoldReg = IsSpill ? DstReg : SrcReg;
       Register LiveReg = IsSpill ? SrcReg : DstReg;
       assert(FoldReg.isVirtual() && "Cannot fold physregs");
-      const TargetRegisterClass *RC = MRI.getRegClass(FoldReg);
-      if (LiveReg.isPhysical())
-        if (!RC->contains(LiveReg)) {
-          llvm_unreachable("Unrelated regclasses");
-        }
+      const TargetRegisterClass *RC = getRegisterClass(FoldReg, MRI);
+      const TargetRegisterClass *LRC = getRegisterClass(LiveReg, MRI);
+      if (isRegisterClassUnspillable(LRC))
+        return nullptr;
 
       MachineInstr *SpillMI = nullptr;
       if (IsSpill) {
@@ -2617,14 +3440,24 @@ MachineInstr *TPCInstrInfo::foldMemoryOperandImpl(
 }
 
 const TargetRegisterClass *
-TPCInstrInfo::getClassOfPhysicalRegister(Register Reg, const TargetRegisterInfo &TRI) const {
-  assert(Reg.isPhysical());
-  for (auto ClassIt = TRI.regclass_begin(); ClassIt != TRI.regclass_end(); ++ClassIt) {
-    const TargetRegisterClass *RC = *ClassIt;
-    if (RC->contains(Reg))
-      return RC;
+llvm::getRegisterClass(Register Reg, const MachineRegisterInfo &MRI) {
+  const TargetRegisterInfo &TRI = *MRI.getTargetRegisterInfo();
+  const TargetRegisterClass *RC = nullptr;
+  if (Reg.isPhysical()) {
+    if (TPC::SRFRegClass.contains(Reg))
+      RC = &TPC::SRFRegClass;
+    else
+      for (auto TRC : TRI.regclasses())
+        if (TRC->contains(Reg)) {
+          if (!RC || TRC->hasSubClassEq(RC))
+            RC = TRC;
+        }
+  } else {
+    RC = MRI.getRegClass(Reg);
   }
-  llvm_unreachable("Cannot find register class");
+
+  assert(RC);
+  return RC;
 }
 
 bool TPCInstrInfo::isProfitableToHoist(MachineInstr &MI) const {
@@ -2642,35 +3475,29 @@ bool TPCInstrInfo::isReallyTriviallyReMaterializable(const MachineInstr &MI,
   const MachineOperand &PredMO = MI.getOperand(NumOperands - 2);
   if (!PredMO.isReg())
     return false;
-  return PredMO.getReg() == TPC::SP0;
+  return PredMO.getReg() == TPC::SPRF_TRUE;
 }
 
 void TPCInstrInfo::reMaterialize(MachineBasicBlock &MBB,
-                                 MachineBasicBlock::iterator MI, unsigned DestReg,
+                                 MachineBasicBlock::iterator MI, Register DestReg,
                                  unsigned SubIdx, const MachineInstr &Orig,
                                  const TargetRegisterInfo &TRI) const {
-  //const MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
+  const MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
 
-  //TargetInstrInfo::reMaterialize(MBB, MI, DestReg, SubIdx, Orig, TRI);
   MachineInstr *DefMI = MBB.getParent()->CloneMachineInstr(&Orig);
   DefMI->substituteRegister(DefMI->getOperand(0).getReg(), DestReg, SubIdx, TRI);
-  MBB.insert(MI, DefMI);
 
-  MachineInstr &Instr = *--MI;
-  MachineOperand &MO = Instr.getOperand(0);
-  assert(MO.isReg() && MO.isDef());
-  if (!MO.getReg().isVirtual())
-    return;
-  if (MO.isTied()) {
-    const MCInstrDesc &MCI = Instr.getDesc();
-    if (MCI.getNumOperands() < 4)
-      return;
-    MachineOperand &IncomeMO = Instr.getOperand(MCI.getNumOperands() - 3);
-    if (!IncomeMO.isTied())
-      return;
-    if (IncomeMO.getSubReg()) {
-      IncomeMO.setSubReg(SubIdx);
-    }
+  // TODO: this is not a fix, it's just a workaround.
+  //       Sometimes llvm adds subregisters to vrfs for some reason
+  const TargetRegisterClass* RC = MRI.getRegClass(DefMI->getOperand(0).getReg());
+  if (TPC::VRFRegClass.hasSubClassEq(RC)) {
+    const MCInstrDesc &MCI = DefMI->getDesc();
+    DefMI->getOperand(MCI.getNumOperands() - 3).setSubReg(0);
+  }
+
+  MBB.insert(MI, DefMI);
+  if (DefMI->getOperand(0).getSubReg()) {
+    DefMI->getOperand(0).setIsUndef(true);
   }
 }
 
@@ -2695,60 +3522,26 @@ uint64_t TPCInstrInfo::getInstImm(const MachineInstr &MI) const {
 
 bool TPCInstrInfo::isLDSTInstrWithPredicate(const MachineInstr &MI,
                                             unsigned &pred,
-					    unsigned &polarity) const {
-  const llvm::MachineFunction &MF = *MI.getParent()->getParent();
-  const MachineRegisterInfo &MRI = MF.getRegInfo();
+                                            unsigned &polarity) const {
   const MCInstrDesc &MCID = MI.getDesc();
   if (!TPCII::isLoadInst(MCID) && !TPCII::isStoreInst(MCID)) {
     return false;
   }
-  pred = 0;
-  polarity = 0;
 
-  if(MCID.getNumOperands() < 2) {
-    return true;
-  }
+  bool Polarity;
+  int Predicate;
+  if (!looksLikeHavingAPredicate(MI, Predicate, Polarity))
+    return false;
 
-  // Predicate register is always the operand right before the last one.
-  // The last operand is predicate polarity and must be a constant.
-  const MachineOperand &pOp  = MI.getOperand(MCID.getNumOperands() - 2);
-  const MachineOperand &ppOp = MI.getOperand(MCID.getNumOperands() - 1);
-
-  // If the operand before the last one is not a register then we assume that
-  // the instruction does not use LD/ST predicate field (using default predicate reg ang polarity).
-  if(!pOp.isReg()) {
-    return true;
-  }
-  Register pReg = pOp.getReg();
-  const TargetRegisterClass *pRegClass;
-  if (pReg.isPhysical()) {
-    pRegClass = getClassOfPhysicalRegister(pReg, RI);
-  } else {
-    pRegClass = MRI.getRegClass(pReg);
-  }
-  assert(pRegClass);
-
-  // If the operand before the last one is not a VP or SP register then we assume that the
-  // instruction does not use LD/ST predicate field (using default predicate reg ang polarity).
-  if(!isPredicateReg(pRegClass)) {
-    return true;
-  }
-
-  // If the last operand is not an immediate then we assume that the instruction does not use
-  // LD/ST predicate field (using default predicate reg ang polarity).
-  if(!ppOp.isImm()) {
-    return true;
-  }
-
-  pred = pReg;
-  polarity = static_cast<unsigned>(ppOp.getImm());
-
+  pred = MI.getOperand(Predicate).getReg();
+  polarity = Polarity;
   return true;
 }
 
 bool TPCInstrInfo::isGenAddr(const MachineInstr &MI) const {
   const auto Opcode = MI.getOpcode();
-  return (Opcode == TPC::GEN_ADDR_st || Opcode == TPC::GEN_ADDR_ld);
+  return (Opcode == TPC::GEN_ADDR_st || Opcode == TPC::GEN_ADDR_stT ||
+          Opcode == TPC::GEN_ADDR_ld || Opcode == TPC::GEN_ADDR_ldT);
 }
 
 bool llvm::TPCInstrInfo::isMMIOAccess(const MachineInstr & MI)
@@ -2791,11 +3584,146 @@ bool TPCInstrInfo::instrProducesUnspillableReg(const MachineInstr &MI) const {
   unsigned reg = DestOp.getReg();
   const MachineFunction *MF = MI.getParent()->getParent();
   const MachineRegisterInfo &MRI = MF->getRegInfo();
-  const TargetRegisterClass *RC = MRI.getRegClass(reg);
+  const TargetRegisterClass *RC = getRegisterClass(reg, MRI);
+  return isRegisterClassUnspillable(RC);
+}
 
+bool TPCInstrInfo::isRegisterClassUnspillable(const TargetRegisterClass *RC) const {
   return (TPC::HWPCRegClass.hasSubClassEq(RC) ||
+          TPC::HWTnsrRegLdRegClass.hasSubClassEq(RC) ||
+          TPC::HWTnsrRegStRegClass.hasSubClassEq(RC) ||
+          TPC::HWOffsSizeRegLdRegClass.hasSubClassEq(RC) ||
+          TPC::HWOffsSizeRegStRegClass.hasSubClassEq(RC) ||
+          TPC::HWRMWRegRegClass.hasSubClassEq(RC) ||
+          TPC::HWDivStepRegClass.hasSubClassEq(RC) ||
+          TPC::HWSCarryRegClass.hasSubClassEq(RC) ||
+          TPC::HWVCarryRegClass.hasSubClassEq(RC) ||
+          TPC::HWZPRegRegClass.hasSubClassEq(RC) ||
+          TPC::HWSqzCntrSubRegClass.hasSubClassEq(RC) ||
+          TPC::HWSqzCntrRegClass.hasSubClassEq(RC) ||
+          TPC::HVRFRegClass.hasSubClassEq(RC) ||
+          TPC::HVPRFRegClass.hasSubClassEq(RC) ||
           TPC::HSRFRegClass.hasSubClassEq(RC) ||
-          TPC::HSPRFRegClass.hasSubClassEq(RC));
+          TPC::HSPRFRegClass.hasSubClassEq(RC) ||
+          // Also check for any RegClass contained in HSRF
+          // because getRegisterClass() may return one of them.
+          // For example, getRegisterClass(ST_TNST_ID_REG)
+          // returns HSRFPriorDoron1RegClass
+          TPC::HSRFPriorDoron1RegClass.hasSubClassEq(RC) ||
+          TPC::HSRFDoron1RegClass.hasSubClassEq(RC) ||
+          TPC::HSRFDoron1RWRegClass.hasSubClassEq(RC));
+}
+
+MachineFunction *TPCInstrInfo::MachineFunctionX2 = nullptr;
+
+bool TPCInstrInfo::useMachineCombiner() const {
+  return TPCEnableX2 && Subtarget.hasGaudi2ISA();
+}
+
+bool TPCInstrInfo::isThroughputPattern(MachineCombinerPattern Pattern) const {
+  return false;
+}
+
+bool TPCInstrInfo::shouldReduceRegisterPressure(
+    MachineBasicBlock *MBB, RegisterClassInfo *RegClassInfo) const {
+  m_tpcx2Util.resetMBBRegPressure(MBB, RegClassInfo);
+  return false;
+}
+
+bool TPCInstrInfo::getMachineCombinerPatterns(
+    MachineInstr &Root, SmallVectorImpl<MachineCombinerPattern> &Patterns,
+    bool DoRegPressureReduce) const {
+  // TODO : set booleans based on findings
+  AllowReorderForX2 = false;
+  if (AggressiveX2Combine) {
+    CheckVRegsPartOfOneDRFX2 = false;
+    CheckRegPressureX2 = false;
+  }
+  return m_tpcx2Util.findMACX2Pattern(Root, Patterns, CheckVRegsPartOfOneDRFX2,
+                                      CheckRegPressureX2, AllowReorderForX2);
+}
+
+void TPCInstrInfo::genAlternativeCodeSequence(
+    MachineInstr &Root, MachineCombinerPattern Pattern,
+    SmallVectorImpl<MachineInstr *> &InsInstrs,
+    SmallVectorImpl<MachineInstr *> &DelInstrs,
+    DenseMap<unsigned, unsigned> &InstrIdxForVirtReg) const {
+  MachineFunctionX2 = Root.getParent()->getParent();
+  return m_tpcx2Util.getMACX2Sequence(Root, InsInstrs, DelInstrs);
+}
+
+bool llvm::looksLikeHavingAPredicate(const MachineInstr &MI, int &PredicateIdx, bool &Polarity) {
+  std::tie(PredicateIdx, Polarity) = TPCMCInstrInfo::getPredicatePolarity(MI);
+  if (PredicateIdx == -1) {
+    return false;
+  }
+
+  const MachineOperand &PredicateMO = MI.getOperand(PredicateIdx);
+  if (!PredicateMO.isReg())
+    return false;
+  Register PredReg = PredicateMO.getReg();
+  const MachineFunction *MF = nullptr;
+  if (TPCInstrInfo::MachineFunctionX2 != nullptr) {
+    MF = TPCInstrInfo::MachineFunctionX2;
+  } else {
+    MF = MI.getParent()->getParent();
+  }
+  const MachineRegisterInfo &MRI = MF->getRegInfo();
+  const TargetRegisterClass *RC;
+  if (PredReg.isPhysical()) {
+    RC = getRegisterClass(PredReg, MRI);
+  } else {
+    // Virtual registers.
+    // In this case we cannot determine if the register is SP0, so such
+    // instruction is always considered predicated if the register is of
+    // predicate class.
+    RC = MRI.getRegClass(PredReg);
+  }
+  if (!TPC::SPRFRegClass.hasSubClassEq(RC) &&
+      !TPC::VPRFRegClass.hasSubClassEq(RC)) {
+    assert(false && "Unexpected class of OPERAND_PREDICATE register");
+    return false;
+  }
+  return true;
+}
+
+int llvm::getIncome(const MachineInstr &I) {
+// Instructions that do not produce values do not need income value.
+  if (I.getDesc().getNumDefs() == 0)
+    return -1;
+
+  // Calculate income source operand. It must be of the same type as the result
+  // of the instruction and be tied to the instruction result.
+  unsigned NIncome, Ndefs;
+  for (NIncome = I.getNumOperands() - 1, Ndefs = I.getNumDefs() - 1; NIncome > Ndefs; --NIncome) {
+    const MachineOperand &Op = I.getOperand(NIncome);
+    if (Op.isReg() && Op.isTied()) {
+      unsigned TiedOp = I.findTiedOperandIdx(NIncome);
+      if (TiedOp == 0)
+        break;
+    }
+  }
+  if (NIncome == 0) {
+    assert(TPCII::isStoreInst(I.getDesc()) && "No income??");
+    return -1;
+  }
+
+  return NIncome;
+}
+
+unsigned llvm::getSwitches(const MachineInstr &MI) {
+  const MCInstrDesc &Desc = MI.getDesc();
+  for (unsigned I = Desc.getNumOperands() - 1; I >= 0; --I) {
+    const MCOperandInfo &OpInfo = Desc.OpInfo[I];
+    if (OpInfo.OperandType == TPC::OperandType::OPERAND_SWITCH) {
+      const MachineOperand &SwitchesMO = MI.getOperand(I);
+      assert(SwitchesMO.isImm() && "Expect OPERAND_SWITCH is immediate");
+      return SwitchesMO.getImm();
+    }
+  }
+  
+  assert(false && "Switch was not found.");
+  return 0;
 }
 
 // TODO duplicated by TPCMCInstrInfo::getOpType
@@ -2828,4 +3756,153 @@ bool llvm::isSET_INDX(unsigned opc) {
           opc == TPC::SET_INDX_ld_ip || opc == TPC::SET_INDX_spu_ip || opc == TPC::SET_INDX_st_ip);
 }
 
+bool llvm::isAllLanesVpuConvert(const MachineInstr &MI,
+                                const TPCSubtarget &TST) {
+  assert(TPCII::isVPUInst(MI.getDesc()));
+  assert(TPCII::getSlotOpCode(MI.getDesc()) == TPCII::vpuCONVERT);
 
+  const unsigned Sw = getSwitches(MI);
+  const unsigned SrcTy = MI.getOperand(2).getImm();
+  const unsigned DstTy = (Sw >> 8) & 0xF;
+
+  // Goya CONVERT does not support ALL_LANES
+  if (TST.hasGoyaISA())
+    return false;
+
+  // Gaudi CONVERT supports ALL_LANES only for conversion:
+  //    FP32 -> BF16.
+  if (TST.hasGaudiISA()) {
+    return
+        // ALL_LANES specified.
+        (Sw & TPCII::SW_NUM_LANES_SRCB) == TPCII::SW_ALL_LANES_SRCB &&
+        // FP32 -> BF16 conversion.
+        SrcTy == TPCII::FP32 && DstTy == TPCII::BF16;
+  }
+
+  // GaudiB CONVERT supports ALL_LANES only for conversions:
+  //    BF16 -> FP32
+  //    FP16 -> FP32
+  if (TST.hasGaudiBISA()) {
+    return
+        // ALL_LANES specified.
+        (Sw & TPCII::SW_NUM_LANES_SRCB) == TPCII::SW_ALL_LANES_SRCB &&
+        // BF16/FP16 -> FP32
+        (SrcTy == TPCII::BF16 || SrcTy == TPCII::FP16) && DstTy == TPCII::FP32;
+  }
+
+  // Greco and Gaudi2 CONVERT supports ALL_LANES for all supported conversions.
+  if (TST.hasGrecoISA() || TST.hasGaudi2ISA())
+    return (Sw & TPCII::SW_NUM_LANES_SRCB) == TPCII::SW_ALL_LANES_SRCB;
+
+  // On Doron1 CONVERT NUM_LANES mask depends on conversion types.
+  //
+  // According to Doron1 PRM bit 7 is used in NUM_LANES mask for the following
+  // conversions only:
+  //    * U32 / I32 -> U8 / I8
+  //    * F32 / F8* -> U8 / I8
+  //    * F8*       -> U32 / U16 / U8 / I32/ I16 / I8
+  //
+  // Otherwise, bit 7 is used as X2 switch mask.
+  //
+  // ALL_LANES is prohibited for the following conversions:
+  //    * U32 / I32              -> U8 / I8
+  //    * U16 / I16              -> U8 / I8
+  //    * F32 / F16 / BF16 / F8* -> U8 / I8
+  //    * F8*                    -> U32 / I32 / U16 / I16 / U8 / I8
+  //
+  // So as ALL_LANES prohibition set contains set of extra bit conversions, just
+  // check against SW_NUM_LANES_SRCB_G5 mask or SW_NUM_LANES_SRCB mask, it does
+  // not matter.
+  if (TST.hasDoron1ISA()) {
+    // U32 / I32 -> U8 / I8
+    if ((SrcTy == TPCII::UINT32 || SrcTy == TPCII::INT32) &&
+        (DstTy == TPCII::UINT8 || DstTy == TPCII::INT8))
+      return false;
+
+    // U16 / I16 -> U8 / I8
+    if ((SrcTy == TPCII::UINT16 || SrcTy == TPCII::INT16) &&
+        (DstTy == TPCII::UINT8 || DstTy == TPCII::INT8))
+      return false;
+
+    // F32 / F16 / BF16 / F8* -> U8 / I8
+    if ((SrcTy == TPCII::FP32 || SrcTy == TPCII::FP16 || SrcTy == TPCII::BF16 ||
+         SrcTy == TPCII::FP8_143 || SrcTy == TPCII::FP8_152) &&
+        (DstTy == TPCII::UINT8 || DstTy == TPCII::INT8))
+      return false;
+
+    // F8* -> U32 / I32 / U16 / I16 / U8 / I8
+    if ((SrcTy == TPCII::FP8_143 || SrcTy == TPCII::FP8_152) &&
+        (DstTy == TPCII::UINT32 || DstTy == TPCII::UINT16 ||
+         DstTy == TPCII::UINT8 || DstTy == TPCII::INT32 ||
+         DstTy == TPCII::INT16 || DstTy == TPCII::INT8))
+      return false;
+
+    return (Sw & TPCII::SW_NUM_LANES_SRCB_G5) == TPCII::SW_ALL_LANES_SRCB;
+  }
+
+  llvm_unreachable("Unexpected target architecture");
+}
+
+bool llvm::isAllLanesVpuConvertI32(const MachineInstr &MI,
+                                   const TPCSubtarget &TST) {
+  assert(TPCII::isVPUInst(MI.getDesc()));
+  assert(TPCII::getSlotOpCode(MI.getDesc()) == TPCII::vpuCONVERT_INT32 ||
+         TPCII::getSlotOpCode(MI.getDesc()) == TPCII::vpuCONVERT_UINT32);
+
+  const unsigned Sw = getSwitches(MI);
+
+  // Goya, Gaudi and GaudiB CONVERT_INT32 / CONVERT_UINT32 do not support
+  // ALL_LANES.
+  if (TST.hasGoyaISA() || TST.hasGaudiISA() || TST.hasGaudiBISA())
+    return false;
+
+  // Greco and Gaudi2 CONVERT_INT32 / CONVERT_UINT32 support ALL_LANES for any
+  // type.
+  if (TST.hasGrecoISA() || TST.hasGaudi2ISA())
+    return (Sw & TPCII::SW_NUM_LANES) == TPCII::SW_ALL_LANES;
+
+  // Doron1 CONVERT_INT32 / CONVERT_UINT32 supports ALL_LANES only for
+  // conversions:
+  //    U32 -> U16
+  //    I32 -> I16
+  //
+  // Since Doron1 NUM_LANES mask depends on destination type.
+  //
+  // According to Doron1 PRM extra bit is used only for conversions:
+  //    I32 -> I8
+  //    U32 -> U8
+  //
+  // So as ALL_LANES prohibition set contains set of extra bit conversions, just
+  // check against SW_NUM_LANES_G5 or SW_NUM_LANES mask, it does not matter.
+  if (TST.hasDoron1ISA()) {
+    return
+        // TO_16
+        (Sw & TPCII::SW_GROUP_TO) == TPCII::SW_TO_16 &&
+        // ALL_LANES specified.
+        (Sw & TPCII::SW_NUM_LANES) == TPCII::SW_ALL_LANES;
+  }
+
+  llvm_unreachable("Unexpected target architecture");
+}
+
+bool llvm::isAllLanesVpuConvertI16(const MachineInstr &MI,
+                                   const TPCSubtarget &TST) {
+  assert(TPCII::isVPUInst(MI.getDesc()));
+  assert(TPCII::getSlotOpCode(MI.getDesc()) == TPCII::vpuCONVERT_INT16 ||
+         TPCII::getSlotOpCode(MI.getDesc()) == TPCII::vpuCONVERT_UINT16);
+
+  const unsigned Sw = getSwitches(MI);
+
+  // Goya, Gaudi, GaudiB, Doron1 CONVERT_INT16 / CONVERT_UINT16 do not support
+  // ALL_LANES.
+  if (TST.hasGoyaISA() || TST.hasGaudiISA() || TST.hasGaudiBISA() ||
+      TST.hasDoron1ISA())
+    return false;
+
+  // Greco and Gaudi2 CONVERT_INT16 / CONVERT_UINT16 support ALL_LANES for any
+  // type.
+  if (TST.hasGrecoISA() || TST.hasGaudi2ISA())
+    return (Sw & TPCII::SW_NUM_LANES) == TPCII::SW_ALL_LANES;
+
+  llvm_unreachable("Unexpected target architecture");
+}

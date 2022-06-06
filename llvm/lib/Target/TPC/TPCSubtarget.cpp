@@ -1,12 +1,3 @@
-//===---- TPCSubtarget.cpp ------------------------------------------------------- -===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===-------------------------------------------------------------------------------===//
-//
-//===-------------------------------------------------------------------------------===//
 #include "TPC.h"
 #include "TPCSubtarget.h"
 #include "TPCTargetMachine.h"
@@ -23,6 +14,9 @@ using namespace llvm;
 #define GET_SUBTARGETINFO_CTOR
 #include "TPCGenSubtargetInfo.inc"
 
+static::cl::opt<bool> AllowADRFSpills("allow-adrf-spill",
+        cl::Hidden, cl::ZeroOrMore, cl::init(false));
+
 static cl::opt<bool> EnableSubRegLiveness("tpc-enable-subreg-liveness",
        cl::init(true), cl::Hidden);
 
@@ -33,20 +27,23 @@ static cl::opt<bool> EnableSubRegLiveness("tpc-enable-subreg-liveness",
 
 TPCSubtarget::TPCSubtarget(
     const Triple &TT,
-    const std::string &CPU,
-    const std::string &FS,
+    const std::string CPU,
+    const std::string FS,
     const TargetMachine &TM)
-  : TPCGenSubtargetInfo(TT, CPU, FS), InstrInfo(*this), TLInfo(TM, *this) {
+  : TPCGenSubtargetInfo(TT, CPU, /* TuneCPU */ CPU, FS), InstrInfo(*this), TLInfo(TM, *this) {
 
-    ParseSubtargetFeatures(CPU, FS);
+    ParseSubtargetFeatures(CPU, /* TuneCPU */ CPU, FS);
 
     // Initialize scheduling itinerary for the specified CPU.
     InstrItins = getInstrItineraryForCPU(CPU);
+
+    HasADRFSpills = AllowADRFSpills;
 }
 
 static bool isGEN_ADDR(SUnit * SU) {
   unsigned opc = SU->getInstr()->getOpcode();
-  return (opc == TPC::GEN_ADDR_ld || opc == TPC::GEN_ADDR_st);
+  return (opc == TPC::GEN_ADDR_ld || opc == TPC::GEN_ADDR_st ||
+          opc == TPC::GEN_ADDR_ldT || opc == TPC::GEN_ADDR_stT);
 }
 
 static bool isST_TNSR(SUnit * SU) {
@@ -129,7 +126,10 @@ static bool IsRoundCSRConsumer(SUnit * SU) {
     TPCII::OpType Type = getOpType(*MI);
     switch (Type) {
     case TPCII::OpType::FP32:
+    case TPCII::OpType::FP16:
     case TPCII::OpType::BF16:
+    case TPCII::OpType::FP8_143:
+    case TPCII::OpType::FP8_152:
       return true;
     default:
       return false;
@@ -150,9 +150,7 @@ static bool IsConvertRoundCSRConsumer(SUnit * SU) {
       (TPCII::isVPUInst(Desc) &&
        (SlotOpcode == TPCII::vpuCONVERT ||
         SlotOpcode == TPCII::vpuNEARBYINT))) {
-    unsigned Switch = SU->getInstr()->getOperand(
-          Desc.getNumOperands() - 4).getImm();
-
+    unsigned Switch = getSwitches(*SU->getInstr());
     unsigned RoundMode = Switch & TPCII::SW_GROUP_RM;
     return RoundMode == TPCII::SW_CSR;
   }
@@ -218,6 +216,20 @@ static void propagateDataDep(ScheduleDAGInstrs *DAG, SUnit * SU, SUnit * PSU, Sm
         LLVM_DEBUG(dumpSU(DAG, SU));
       }
     }
+}
+
+static bool isFloatData(TPCII::OpType X) {
+  switch (X) {
+  case TPCII::OpType::BF16:
+  case TPCII::OpType::FP16:
+  case TPCII::OpType::FP32:
+  // Gaudi2 opcodes:
+  case TPCII::OpType::FP8_152:
+  case TPCII::OpType::FP8_143:
+    return true;
+  default:
+    return false;
+  }
 }
 
 void TPCSubtarget::TPCDAGMutation::apply(ScheduleDAGInstrs *DAG) {
@@ -299,6 +311,85 @@ void TPCSubtarget::TPCDAGMutation::apply(ScheduleDAGInstrs *DAG) {
               SI.setLatency(0);
               D.getSUnit()->setDepthDirty();
             }
+        }
+      }
+
+      // Set latency to at least two for output dependences, due to the following
+      // restrictions. Restrictions are covered in TPCLatencyResolver.cpp, however,
+      // setting latency here helps scheduling more efficiently.
+      // 
+      // Gaudi (Gen2): The following cycle after MAC/MUL BF16/FP32, it is not allowed
+      //               to schedule an instruction which writes to the same destination
+      //               (or destinations) as the MAC/MUL
+      // Gaudisb     : The following cycle after MAC/MUL BF16/FP32/FP16 or ADD/SUB FP16,
+      //               it is not allowed to schedule an instruction which writes to the same
+      //               destination(or destinations) as the MAC/MUL/ADD/SUB.
+      // Goya2 (Gen3), Gaudi2 (Gen4): The following cycle after MAC/MUL BF16/FP32/FP16
+      //               or ADD/SUB FP16, it is not allowed to schedule an instruction
+      //               which writes to the same destination (or destinations) as
+      //               the MAC/MUL/ADD/SUB.
+      // Gaudi2 (Gen4): The following cycle after MAC/MUL/MADD BF16/FP32/FP16/FP8_152/FP8_143
+      //               or ADD/SUB FP16/FP8_152/FP8_143 or ADD/SUB FP32 with X2, it is not allowed
+      //               to schedule an instruction which writes to the same destination
+      //               (or destinations) as the MAC/MUL/ADD/SUB/MADD.
+      //
+      if (D.getKind() == SDep::Output) {
+        if (!Subtarget.hasGoyaISA()) {
+          const MachineInstr* DefMI = D.getSUnit()->getInstr();
+          const MCInstrDesc &DefMCID = DefMI->getDesc();
+          unsigned opcDef = TPCII::getSlotOpCode(DefMCID);
+          bool isDefRestrict = false;
+          if ((TPCII::isVPUInst(DefMCID) && (opcDef == TPCII::vpuMAC || opcDef == TPCII::vpuMUL)) ||
+              (TPCII::isSPUInst(DefMCID) && (opcDef == TPCII::spuMAC || opcDef == TPCII::spuMUL))) {
+            isDefRestrict = isFloatData(getOpType(*DefMI));
+          }
+          if (Subtarget.hasGaudi2ISA()) {
+            if (TPCII::isVPUInst(DefMCID) && (opcDef == TPCII::vpuMADD)) {
+              isDefRestrict = isFloatData(getOpType(*DefMI));
+            }
+          }
+          if (Subtarget.hasGrecoISA() ||
+              Subtarget.hasGaudi2ISA() ||
+              Subtarget.hasGaudiBISA()) {
+            if ((TPCII::isVPUInst(DefMCID) && (opcDef == TPCII::vpuADD || opcDef == TPCII::vpuSUB)) ||
+                (TPCII::isSPUInst(DefMCID) && (opcDef == TPCII::spuADD || opcDef == TPCII::spuSUB))) {
+              isDefRestrict = (getOpType(*DefMI) == TPCII::OpType::FP16);
+              if (!isDefRestrict && Subtarget.hasGaudi2ISA()) {
+                if (getOpType(*DefMI) == TPCII::OpType::FP16) {
+                  isDefRestrict = true;
+                }
+                if (!isDefRestrict &&
+                    ((getOpType(*DefMI) == TPCII::OpType::FP32) && TPCII::isVPUInst(DefMCID)))
+                {
+                  // Check the switch operand for 'X2'
+                  if ((DefMI->getNumOperands() > 5) && DefMI->getOperand(5).isImm()) { // Switches
+                    int64_t imm = DefMI->getOperand(5).getImm();
+                    int64_t X2_sw = (imm >> 4) & 1;
+                    isDefRestrict = (X2_sw != 0);
+                  }
+                }
+              }
+            }
+          }
+          if (isDefRestrict) {
+            // It is not necessary to check if the "use" instr writes
+            // to the same destination as "def", because we have Output dependency,
+            // which implies writing to the same destination.
+            unsigned alatency = std::max(D.getLatency(), (unsigned)2);
+            LLVM_DEBUG(dbgs() << "- Set latency = " << alatency << " for : \n");
+            LLVM_DEBUG(dumpSU(DAG, D.getSUnit()));
+            LLVM_DEBUG(dumpSU(DAG, &SU));
+            D.setLatency(alatency);
+            SU.setHeightDirty();
+
+            // Change the dependence in the opposite direction too.
+            for (SDep &SI : D.getSUnit()->Succs) {
+              if (SI.getSUnit() != &SU || SI.getKind() != SDep::Output)
+                continue;
+              SI.setLatency(alatency);
+              D.getSUnit()->setDepthDirty();
+            }
+          }
         }
       }
 
@@ -446,6 +537,14 @@ unsigned TPCSubtarget::getRoundCSRAddr() const {
     return 0x7FC;
   else if (hasGaudiISA())
     return 0x8FC;
+  else if (hasGaudiBISA())
+    return 0x8FC;
+  else if (hasGrecoISA())
+    return 0x8FC;
+  else if (hasGaudi2ISA())
+    return 0xD68;
+  else if (hasDoron1ISA())
+    return 0xD68;
   else
     llvm_unreachable("Unknown arch for getRoundCSRAddr");
 }
@@ -455,6 +554,35 @@ unsigned TPCSubtarget::getConvRoundCSRAddr() const {
     return 0x7FC;
   else if (hasGaudiISA())
     return 0x8FC;
+  else if (hasGaudiBISA())
+    return 0x8FC;
+  else if (hasGrecoISA())
+    return 0xCA8;
+  else if (hasGaudi2ISA())
+    return 0xCA8;
+  else if (hasDoron1ISA())
+    return 0xCA8;
   else
     llvm_unreachable("Unknown arch for GetConvRoundCSR");
+}
+
+Register TPCSubtarget::getHWLoopStartReg() const {
+  return hasDoron1() ? TPC::S12 : TPC::S32;
+}
+
+Register TPCSubtarget::getHWLoopFinalReg() const {
+  return hasDoron1() ? TPC::S15 : TPC::S35;
+}
+
+SmallVector<Register, 4> TPCSubtarget::getHWLoopRegs() const {
+  return hasDoron1() ? SmallVector<Register, 4>(
+                           {TPC::S12, TPC::S13, TPC::S14, TPC::S15})
+                       : SmallVector<Register, 4>(
+                           {TPC::S32, TPC::S33, TPC::S34, TPC::S35});
+}
+
+bool TPCSubtarget::isHWLoopReg(const Register Reg) const {
+  const unsigned StartId = getHWLoopStartReg().id();
+  const unsigned FinalId = getHWLoopFinalReg().id();
+  return StartId <= Reg.id() && Reg.id() <= FinalId;
 }

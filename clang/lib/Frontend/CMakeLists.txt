@@ -8,15 +8,19 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-set(optional_deps intrinsics_gen)
-if (CLANG_BUILT_STANDALONE)
-  set(optional_deps)
+# LLVM_TPC_COMPILER
+#
+
+if("TPC" IN_LIST LLVM_TARGETS_TO_BUILD)
+    list(APPEND LLVM_LINK_COMPONENTS TPCDesc)
 endif()
 
-# Original files are kept here.
+set(converter ${LLVM_MAIN_SRC_DIR}/utils/TPC/embed_file.py)
+
+# Original header files are kept here.
 set(embeddable_files_dir ${CLANG_SOURCE_DIR}/lib/Headers)
 
-# Set of files to embed.
+# Set of header files to embed.
 set(embedded_files
   tpc-defs.h
   tpc-reduction_functions_core.h
@@ -31,14 +35,31 @@ foreach(file ${embedded_files})
   list(APPEND embedded_files_list "${embedded_file}")
   add_custom_command(
     OUTPUT ${embedded_file}
-    DEPENDS ${file_to_embed} ${CMAKE_CURRENT_SOURCE_DIR}/embed_file.py
+    DEPENDS ${file_to_embed} ${converter}
     COMMAND
-      ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/embed_file.py "${embedded_file}" "${file_to_embed}"
+      ${PYTHON_EXECUTABLE} "${converter}" "${embedded_file}" "${file_to_embed}"
   )
 endforeach()
 set_source_files_properties(${embedded_files_list}
   PROPERTIES GENERATED TRUE
 )
+
+# Create files with IR libraries.
+foreach(file ${tpclib_bitcode_files})
+  set(filename)
+  get_filename_component(filename ${file} NAME)
+  set(embedded_file "${CMAKE_CURRENT_BINARY_DIR}/${filename}.inc")
+  list(APPEND embedded_libraries_list "${embedded_file}")
+  add_custom_command(
+    OUTPUT "${embedded_file}"
+    COMMAND ${CMAKE_COMMAND} -E touch ${embedded_file}
+  )
+endforeach()
+set_source_files_properties(${embedded_libraries_list}
+  PROPERTIES GENERATED TRUE
+)
+#
+# /LLVM_TPC_COMPILER
 
 add_clang_library(clangFrontend
   ASTConsumers.cpp
@@ -56,7 +77,6 @@ add_clang_library(clangFrontend
   FrontendAction.cpp
   FrontendActions.cpp
   FrontendOptions.cpp
-  FrontendTiming.cpp
   HeaderIncludeGen.cpp
   InitHeaderSearch.cpp
   InitPreprocessor.cpp
@@ -75,10 +95,11 @@ add_clang_library(clangFrontend
   VerifyDiagnosticConsumer.cpp
   InterfaceStubFunctionsConsumer.cpp
   ${embedded_files_list}
+  ${embedded_libraries_list}
 
   DEPENDS
   ClangDriverOptions
-  ${optional_deps}
+  intrinsics_gen
 
   LINK_LIBS
   clangAST

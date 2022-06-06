@@ -1,8 +1,9 @@
 //===---- TPCSoftwareLoopPipelining.cpp - Pipeline loops -----===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,13 +12,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "TPCInstrInfo.h"
+#include "TPCLoopData.h"
+#include "TPCMachineInstrTools.h"
+#include "TPCMachineLoopDependencyAnalysis.h"
+#include "TPCMachineLoopLinearIV.h"
 #include "TPCSubtarget.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "MCTargetDesc/TPCMCInstrInfo.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/ADT/SmallSet.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -30,23 +34,20 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include <cassert>
-#include <cstdint>
 #include <cstdlib>
-#include <iterator>
 #include <map>
 #include <set>
-#include <utility>
 #include <vector>
 
 using namespace llvm;
@@ -80,17 +81,131 @@ struct ExThreadParams {
   std::vector<MachineInstr*> Epilog;
 };
 
+/// Return collection of machine instruction which uses the given register.
+///
+/// \details Function is useful when MRI.use_instructions is not applicable.
+///     For example, machine operand or machine instruction manipulations might
+///     invalidate iterator over MRI.use_instructions range:
+///
+/// \code
+///     for (MachineInstruction &MI : MRI.use_instructions(Reg))
+///         MI.getOperand(3).setReg(..)  // Might invalidate iterator!
+///
+///     // Prefer:
+///     for (MachineInstruction &MI : collectUses(Reg, MRI))
+///         MI.getOperand(3).setReg(..)  // Safe
+SmallVector<MachineInstr *, 8> collectUses(const Register Reg,
+                                           const MachineRegisterInfo &MRI) {
+  SmallVector<MachineInstr *, 8> Uses;
+  for (MachineInstr &MI : MRI.use_instructions(Reg))
+    Uses.push_back(&MI);
+  return Uses;
+}
+
+/// Shortcut to change operand TargetOp with ResultOp reg/imm content having
+/// other operand flags left untouched.
+static void updateRegOrImmOperand(MachineOperand &TargetOp,
+                                  const MachineOperand &ResultOp) {
+  assert(TargetOp.isImm() || TargetOp.isReg());
+  assert(ResultOp.isImm() || ResultOp.isReg());
+  assert(!TargetOp.isReg() || !TargetOp.isDef());
+
+  if (TargetOp.isImm() && ResultOp.isImm()) {
+    TargetOp.setImm(ResultOp.getImm());
+    return;
+  }
+
+  if (TargetOp.isReg() && ResultOp.isReg()) {
+    TargetOp.setReg(ResultOp.getReg());
+    return;
+  }
+
+  if (TargetOp.isImm()) {
+    TargetOp.ChangeToRegister(ResultOp.getReg(), false);
+    return;
+  }
+
+  TargetOp.ChangeToImmediate(ResultOp.getImm());
+}
+
+/// Replace registers of all uses operands for the given machine instruction
+/// from OldReg to NewReg.
+///
+/// \note Use registers which are actually definitions (see LOOP instruction for
+///     example) are not replaced.
+static void replaceUses(MachineInstr &MI, const Register OldReg,
+                        const Register NewReg) {
+  for (MachineOperand &MO : MI.uses()) {
+    if (MO.isReg() && MO.getReg() == OldReg)
+      MO.setReg(NewReg);
+  }
+}
+
+/// Replace register of all uses operands for all machine instructions of the
+/// given machine basic block with the new register.
+///
+/// \note Use registers which are actually definitions (see LOOP instruction for
+///     example) are not replaced.
+///
+/// \param MBB machine basic block which instructions should be updated.
+/// \param OldReg registry number to be replaced.
+/// \param NewReg registry number to be substituted.
+/// \param ProcessPhi whether to process phi instructions.
+static void replaceUsesInBB(MachineBasicBlock &MBB, const Register OldReg,
+                            const Register NewReg, const bool ProcessPhi) {
+  for (MachineInstr &MI : MBB) {
+    if (ProcessPhi || !MI.isPHI())
+      replaceUses(MI, OldReg, NewReg);
+  }
+}
+
+// Replace use register operands according to mapping for register ids in the
+// given machine instruction inplace.
+static void replaceUseRegistersByMapping(MachineInstr &MI, const RegMap &Map) {
+  for (MachineOperand& MO : MI.uses()) {
+    if (!MO.isReg())
+      continue;
+
+    auto It = Map.find(MO.getReg());
+    if (It != Map.end())
+      MO.setReg(It->second);
+  }
+}
+
+/// Build mapping: next IV definition -> index of step operand in this
+/// instruction.
+static DenseMap<MachineInstr *, int>
+makeLinearIVNextValDefToStepOpIxMapping(const MachineLoop &ML,
+                                        const MachineRegisterInfo &MRI,
+                                        const MLLinearIVsContainer &LinearIVs) {
+  DenseMap<MachineInstr *, int> RV;
+  for (const MLoopLinearIV &Info : LinearIVs) {
+    // HWCounter is not interesting for our case.
+    if (Info.isHWCounter())
+      continue;
+
+    // Only immediate steps are supported.
+    if (!Info.getStepOp().isImm())
+      continue;
+
+    RV[&Info.getNextDefMI()] = Info.getStepOpIx();
+  }
+
+  return RV;
+}
+
 class TPCPipeliner  : public MachineFunctionPass {
   MachineLoopInfo            *MLI;
   MachineRegisterInfo        *MRI;
   MachineDominatorTree       *MDT; //Needed?
   const TPCInstrInfo         *TII;
   const TargetRegisterInfo   *TRI;
-  MachineFunction            *LMF;
+
+  MachineFunction *CurrMF;
 
   std::vector<ExThreadParams> ExecThreads;
   AccumChains AccumulateMap;
-  std::map<MachineInstr*, int> LinearIVs;
+  DenseMap<MachineInstr *, int> LinearIVs;
 
   // For a given phi-def store it's values for (UnrollCount - 1) iterations
   // in case phi executions paths depend on each other
@@ -101,6 +216,8 @@ class TPCPipeliner  : public MachineFunctionPass {
   std::vector<unsigned> EndCounters;
   std::vector<unsigned> NextCounters;
   std::vector<unsigned> LeftCounters;
+
+  MLLinearIVsContainer MLLinearIVs;
 
   MachineBasicBlock* Header;
   MachineBasicBlock* Latch;
@@ -122,7 +239,7 @@ class TPCPipeliner  : public MachineFunctionPass {
 public:
   static char ID;
   TPCPipeliner() : MachineFunctionPass(ID), MLI(nullptr), MRI(nullptr), MDT(nullptr),
-                   TII(nullptr), TRI(nullptr), LMF(nullptr),
+                   TII(nullptr), TRI(nullptr), CurrMF(nullptr),
                    Header(nullptr), Latch(nullptr), Exit(nullptr), Prolog(nullptr),
                    CurLoop(nullptr), LoopInst(nullptr), LoopCounter(-1),
                    Ascending(false), Inclusive(false) {
@@ -141,30 +258,37 @@ public:
 private:
   bool pipeline(MachineLoop* L);
   bool unrollAndAlign(unsigned UnrollCount, bool DoPipelining);
+  void fixUnrolledLoopBoundary(unsigned UnrollCount);
   bool findInnermostLoop(MachineLoop* L);
+  void recalculateAnalysis();
   void replaceVregs(MachineInstr* MI, unsigned ThreadNum);
-  unsigned getCounterRegister(MachineLoop* L);
   void decoupleIfPossible(MachineInstr* MI, unsigned ThreadNum);
-  bool align(std::vector<unsigned>& Shifts);
-  void createPrologCounters(int Counter, MachineBasicBlock* PrologBlock);
+  bool align(const std::vector<unsigned> &Shifts);
+  void createPrologCounters(unsigned UnrollCount, MachineBasicBlock* PrologBlock);
   void createEpilogCounters(int Counter, MachineBasicBlock* PrologBlock);
   void createNextCounters(int Counter, MachineBasicBlock* PrologBlock);
   bool isPhiDef(unsigned Reg, unsigned Thread);
-  void replaceUses(MachineInstr* MI, unsigned Old, unsigned New);
   void modifyBoundary(unsigned Decrement);
-  void calcLoopForm();
+  bool calcLoopForm();
   bool isCyclicDependency(MachineInstr* Phi, MachineInstr* MovedInst, MachineOperand& Use);
-  void phiPath(MachineInstr* Phi, std::vector<MachineInstr*>& Path, MachineOperand& HeadPhiUse);
-  void patchPhiStartValue(MachineInstr* Phi, int UnrollCount, MachineBasicBlock* MBB, MachineBasicBlock::instr_iterator I);
+  std::vector<MachineInstr*> phiPath(MachineInstr *Phi, MachineOperand &HeadPhiUse);
+  void patchPhiStartValue(MachineInstr &Phi, int UnrollCount);
   void replaceWithZero(MachineOperand& ReplaceMO, TPCII::OpType ot);
-  void findLinearInduction(unsigned UnrollCount);
   void setPrologInserter();
   void sortDelayedPhis();
   bool feedsPhi(MachineInstr* MI);
-  void correctCounters(int Counter);
+  void correctCounters(unsigned UnrollCount);
   void correctIVs(int Counter);
   void correctExit();
   bool checkForProhibitingInstructions();
+
+  /// Add epilogue loop after the source loop to be unrolled.
+  ///
+  /// Source loop params should be changed so that its iterations count fits for
+  /// unrolling. Method must be called before source loop unrolling because
+  /// it prepares source loop for unrolling.
+  void generateEpilogueLoop(unsigned UnrollCount, bool HasLoopTakenGuarantee);
+
   void addDoubleRegs(MachineBasicBlock* Accum, unsigned Res, unsigned Op1,
                      unsigned Op2, unsigned AddOpc, TPCII::OpType Type,
                      const TargetRegisterClass* RC);
@@ -187,26 +311,47 @@ FunctionPass *llvm::createTPCPipeliner() {
 char TPCPipeliner::ID = 0;
 
 bool TPCPipeliner::runOnMachineFunction(MachineFunction &MF) {
+  if (skipFunction(MF.getFunction()))
+    return false;
+
   if (!EnablePipelining) {
     return false;
   }
+
+  LLVM_DEBUG({
+    dbgs() << "********* TPC Software Loop Pipelining *********\n";
+    MF.dump();
+  });
+
   MLI = &getAnalysis<MachineLoopInfo>();
   MRI = &MF.getRegInfo();
   MDT = &getAnalysis<MachineDominatorTree>();
   TII = MF.getSubtarget<TPCSubtarget>().getInstrInfo();
   TRI = MF.getSubtarget<TPCSubtarget>().getRegisterInfo();
-  LMF = &MF;
+  CurrMF = &MF;
 
   bool Changed = false;
   for (auto &L : *MLI) {
-    Changed |= findInnermostLoop(L);
+    const bool Unrolled = findInnermostLoop(L);
+
+    if (Unrolled) {
+      Changed = true;
+      recalculateAnalysis();
+    }
   }
+
+  LLVM_DEBUG({
+    if (Changed) {
+      dbgs() << "MF at the end of pipelining pass\n";
+      MF.dump();
+    }
+  });
 
   return Changed;
 }
 
-static bool isLoop(MachineInstr* MI) {
-  return TPCII::isLoopInst(MI->getDesc()) && MI->getOpcode() != TPC::LOOPEND;
+static bool isLoop(const MachineInstr &MI) {
+  return TPCII::isLoopInst(MI.getDesc()) && MI.getOpcode() != TPC::LOOPEND;
 }
 
 static unsigned getAddOpc(TPCII::OpType Type, const TargetRegisterClass* RC) {
@@ -260,6 +405,10 @@ bool TPCPipeliner::feedsPhi(MachineInstr *MI) {
   return false;
 }
 
+void TPCPipeliner::recalculateAnalysis() {
+  MDT->calculate(*CurrMF);
+}
+
 // For effective pipelining we need not to just unroll, but make
 // execution threads independent. In order to do that we need to create new
 // virtual registers for cloned instructions. But we can't do it
@@ -293,13 +442,8 @@ void TPCPipeliner::decoupleIfPossible(MachineInstr* MI, unsigned ThreadNum) {
       unsigned v_reg  = MRI->createVirtualRegister(MRI->getRegClass(MO.getReg()));
       ExecThreads[ThreadNum].VRegMap[MO.getReg()] = v_reg;
 
-      for (MachineInstr* ThreadMI : ExecThreads[ThreadNum].ThreadInstrs) {
-        for (MachineOperand& TMO : ThreadMI->uses()) {
-          if (TMO.isReg() && TMO.getReg() == MO.getReg()) {
-            TMO.setReg(v_reg);
-          }
-        }
-      }
+      for (MachineInstr *ThreadMI : ExecThreads[ThreadNum].ThreadInstrs)
+        replaceUses(*ThreadMI, MO.getReg(), v_reg);
 
       MO.setReg(v_reg);
     }
@@ -340,18 +484,10 @@ void TPCPipeliner::decoupleIfPossible(MachineInstr* MI, unsigned ThreadNum) {
         MO.setReg(v_reg);
 
         if (ThreadNum == ExecThreads.size() - 1) {
-          for (MachineRegisterInfo::use_iterator
-                 RSUse = MRI->use_begin(OrigReg), RSE = MRI->use_end();
-               RSUse != RSE; ++RSUse) {
-
-            MachineInstr *RSUseMI = RSUse->getParent();
-            if (!CurLoop->contains(RSUseMI)) {
-              for (MachineOperand& CMO : RSUseMI->uses()) {
-                if (CMO.isReg() && CMO.getReg() == OrigReg) {
-                  CMO.setReg(v_reg);
-                }
-              }
-            }
+          for (MachineOperand &RSUse: MRI->use_operands(OrigReg)) {
+            MachineInstr *RSUseMI = RSUse.getParent();
+            if (!CurLoop->contains(RSUseMI))
+              replaceUses(*RSUseMI, OrigReg, v_reg);
           }
         }
       }
@@ -360,6 +496,8 @@ void TPCPipeliner::decoupleIfPossible(MachineInstr* MI, unsigned ThreadNum) {
 }
 
 void TPCPipeliner::replaceVregs(MachineInstr* MI, unsigned ThreadNum) {
+  replaceUseRegistersByMapping(*MI, ExecThreads[ThreadNum].VRegMap);
+
   for (MachineOperand& MO : MI->uses()) {
     if (!MO.isReg()) continue;
     // Tied register that was not defined in the current execution thread
@@ -373,85 +511,9 @@ void TPCPipeliner::replaceVregs(MachineInstr* MI, unsigned ThreadNum) {
         MO.setReg(v_reg);
       }
     }
-
-    if (ExecThreads[ThreadNum].VRegMap.count(MO.getReg()) > 0) {
-      MO.setReg(ExecThreads[ThreadNum].VRegMap[MO.getReg()]);
-    }
   }
 
   decoupleIfPossible(MI, ThreadNum);
-}
-
-unsigned TPCPipeliner::getCounterRegister(MachineLoop* L) {
-  unsigned Counter = TPC::S32;
-  MachineLoop* Parent = L->getParentLoop();
-  while(Parent) {
-    MachineBasicBlock* MBB = Parent->getHeader();
-
-    MachineBasicBlock* Preheader = nullptr;
-
-    typedef std::vector<MachineBasicBlock*> MBBVector;
-    MBBVector Preds(MBB->pred_begin(), MBB->pred_end());
-    for (MBBVector::iterator I = Preds.begin(), E = Preds.end(); I != E; ++I) {
-      MachineBasicBlock *PB = *I;
-      if (!Parent->getLoopLatch()) {
-        break;
-      }
-      if (PB != Parent->getLoopLatch()) {
-        Preheader = PB;
-        break;
-      }
-    }
-
-    if (Preheader == nullptr) {
-      Parent = Parent->getParentLoop();
-      continue;
-    }
-
-
-    for (MachineInstr& MI : Preheader->instrs()) {
-      if (isLoop(&MI)) {
-        Counter++;
-        break;
-      }
-    }
-
-    Parent = Parent->getParentLoop();
-    if (Counter == TPC::S35) {
-      break;
-    }
-  }
-
-  return Counter;
-}
-
-static unsigned getUnrollCountFromMetadata(const MDNode* LoopMD) {
-  // First operand should refer to the loop id itself.
-  assert(LoopMD->getNumOperands() > 0 && "requires at least one operand");
-//  assert(LoopMD->getOperand(0) == LoopMD && "invalid loop id");
-
-  MDNode *MD = nullptr;
-
-  for (unsigned i = 1, e = LoopMD->getNumOperands(); i < e; ++i) {
-    MD = dyn_cast<MDNode>(LoopMD->getOperand(i));
-    if (!MD)
-      continue;
-
-    MDString *S = dyn_cast<MDString>(MD->getOperand(0));
-    if (!S)
-      continue;
-
-    if (S->getString().equals("llvm.loop.machine.unroll.count")) {
-      assert(MD->getNumOperands() == 2 &&
-             "Unroll hint metadata should have two operands.");
-      unsigned Count =
-          mdconst::extract<ConstantInt>(MD->getOperand(1))->getZExtValue();
-      assert(Count >= 1 && "Unroll count must be positive.");
-      return Count;
-    }
-  }
-
-  return 0;
 }
 
 static bool getPipelineFromMetadata(const MDNode* LoopMD) {
@@ -482,6 +544,561 @@ static bool getPipelineFromMetadata(const MDNode* LoopMD) {
   return 0;
 }
 
+/// Return iterations count for loops like:
+///   for (int i = Start; i Cmp Bound; i += Step)
+///
+/// if Start, Bound and Step are immediate values.
+static llvm::Optional<uint64_t> getIterationsCount(const int64_t Start,
+                                                   const int64_t Bound,
+                                                   const int64_t Step,
+                                                   const int64_t Cmp) {
+  assert(Cmp == TPCII::LoopLT || Cmp == TPCII::LoopLE || Cmp == TPCII::LoopEQ ||
+         Cmp == TPCII::LoopNE || Cmp == TPCII::LoopGE || Cmp == TPCII::LoopGT);
+
+  // Process Start == Bound boundary case here in order not to ignore it below
+  if (Start == Bound) {
+    if (Cmp == TPCII::LoopLT || Cmp == TPCII::LoopNE || Cmp == TPCII::LoopGT)
+      return 0;  // loop is never taken
+
+    if (Step == 0)
+      return llvm::None;  // infinite loop
+
+    const int CmpToTake = Step < 0 ? TPCII::LoopGE : TPCII::LoopLE;
+    return Cmp == TPCII::LoopEQ || Cmp == CmpToTake
+        ? llvm::Optional<uint64_t>(1) // loop is taken once
+        : llvm::Optional<uint64_t>(); // infinite loop
+  }
+
+  // Process Step == 0 boundary case and cases when Step sign does not
+  // correspond to relation between Start and Bound
+  if (Step == 0 || (Step < 0 && Start < Bound) || (Step > 0 && Bound < Start)) {
+    const int CmpToHang1 = Start < Bound ? TPCII::LoopLT : TPCII::LoopGT;
+    const int CmpToHang2 = Start < Bound ? TPCII::LoopLE : TPCII::LoopGE;
+    return Cmp == TPCII::LoopNE || Cmp == CmpToHang1 || Cmp == CmpToHang2
+        ? llvm::Optional<uint64_t>()  // infinite loop
+        : llvm::Optional<uint64_t>(0); // loop is never taken
+  }
+
+  assert((Step < 0 && Bound < Start) || (Step > 0 && Start < Bound));
+
+  // Check against never taken loops
+  const int CmpToSkip1 = Start < Bound ? TPCII::LoopGT : TPCII::LoopLT;
+  const int CmpToSkip2 = Start < Bound ? TPCII::LoopGE : TPCII::LoopGT;
+  if (Cmp == TPCII::LoopEQ || Cmp == CmpToSkip1 || Cmp == CmpToSkip2)
+    return 0;
+
+  // Bound and Start must fit I32 type according to TPC architecture.
+  assert(isIntN(32, Bound));  // otherwise, Bound - Start might overflow I64
+  assert(isIntN(32, Start));  // otherwise, Bound - Start might overflow I64
+  const uint64_t Distance = Start < Bound ? Bound - Start : Start - Bound;
+
+  const uint64_t AbsStep = Step > 0 ? Step : -Step;
+
+  // Special case of loop with != compare
+  if (Cmp == TPCII::LoopNE)
+    return Distance % AbsStep == 0
+        ? llvm::Optional<uint64_t>(Distance / AbsStep)
+        : llvm::Optional<uint64_t>();  // infinite loop
+
+  // Finally process regular ranges
+  assert((Step < 0 && (Cmp == TPCII::LoopGT || Cmp == TPCII::LoopGE)) ||
+         (Step > 0 && (Cmp == TPCII::LoopLT || Cmp == TPCII::LoopLE)));
+  const int CmpToHitExtraIteration = Step < 0
+      ? Cmp == TPCII::LoopGE
+      : Cmp == TPCII::LoopLE;
+  return Distance / AbsStep +
+         (Cmp == CmpToHitExtraIteration && Distance % AbsStep == 0 ? 1 : 0);
+}
+
+/// Return whether iterations count for LOOP instruction might be calculated at
+/// compile time.
+static bool isIterationsCountKnownAtCompileTime(const MachineInstr &LoopInstr) {
+  assert(isLoop(LoopInstr));
+  const MachineOperand &Start = LoopInstr.getOperand(0);
+  const MachineOperand &Bound = LoopInstr.getOperand(1);
+  const MachineOperand &Step = LoopInstr.getOperand(2);
+  const MachineOperand &Comp = LoopInstr.getOperand(3);
+  return Start.isImm() && Bound.isImm() && Step.isImm() && Comp.isImm();
+}
+
+/// Return iterations count for LOOP instruction if it is known at compile time.
+/// Might return llvm::None if START, STEP, BOUNDARY are not known at compile
+/// time or loop is infinite.
+static llvm::Optional<uint64_t>
+getCompileTimeIterationsCount(const MachineInstr &LoopInstr) {
+  assert(isLoop(LoopInstr));
+  if (!isIterationsCountKnownAtCompileTime(LoopInstr))
+    return llvm::None;
+
+  const MachineOperand &Start = LoopInstr.getOperand(0);
+  const MachineOperand &Bound = LoopInstr.getOperand(1);
+  const MachineOperand &Step = LoopInstr.getOperand(2);
+  const MachineOperand &Comp = LoopInstr.getOperand(3);
+  return getIterationsCount(Start.getImm(), Bound.getImm(), Step.getImm(),
+                            Comp.getImm());
+}
+
+/// Shortcut to replace phi instruction inputs using input pair references.
+static void setPhiIPInternals(const PhiIP &IP, const Register Reg,
+                              MachineBasicBlock &MBB) {
+  IP.MBBOp->setMBB(&MBB);
+  updateRegOrImmOperand(*IP.ValOp, MachineOperand::CreateReg(Reg, false));
+}
+
+/// Shortcut to replace phi instruction inputs using input pair references.
+static void setPhiIPInternals(const PhiIP &IP, const RegMap &RegMapping,
+                              MachineBasicBlock &MBB) {
+  IP.MBBOp->setMBB(&MBB);
+
+  // Nothing to do if ValOp is Imm/FpImm value. Process register case.
+  if (!IP.ValOp->isReg())
+    return;
+
+  auto It = RegMapping.find(IP.ValOp->getReg());
+  if (It == RegMapping.end())
+    return;
+
+  IP.ValOp->setReg(It->second);
+}
+
+void TPCPipeliner::generateEpilogueLoop(const unsigned UnrollCount,
+                                        const bool HasLoopTakenGuarantee) {
+  assert(Prolog);
+  assert(Prolog->getParent());
+  assert(Latch);
+  assert(LoopInst);
+  assert(Exit);
+  assert(MDT && MRI && TII);
+  // Previous passes must guarantee the correct layout.
+  assert(Prolog->isSuccessor(Exit));
+  // Code below splits source loop MIR into two loops. The first one has
+  // iterations count divisible to UnrollCount. The second one, the epilogue
+  // loop, is for the rest iterations.
+  //
+  // Source MIR:
+  //
+  //    BB.prolog:
+  //      LOOP ... %BB.exit  ; <- initial iterations count
+  //
+  //    BB.loop:
+  //      LOOPEND %BB.exit, %BB.loop
+  //
+  //    BB.exit:
+  //      ...
+  //
+  // Should be transformed to:
+  //
+  //    BB.prolog:
+  //      LOOP ... %BB.epilogue_pre_header  ; <- iterations count divisible to
+  //                                        ; UnrollCount
+  //
+  //    BB.loop:
+  //      LOOPEND %BB.epilogue_pre_header, %BB.loop
+  //
+  //    BB.epilogue_pre_header:
+  //      LOOP ... %BB.exit  ; <- the rest iterations
+  //
+  //    BB.epilogue_loop:
+  //      LOOPEND ... %BB.exit, %BB.epilogue_loop
+  //
+  //    BB.exit:
+  //      ...
+
+  // Note that operands shortcuts from LoopInst are organized as lambdas because
+  // LoopInst might be replaced with another one and deleted during this
+  // function, and lambdas allow avoiding dangling references bugs.
+  auto StartOp = [&]() -> MachineOperand & { return LoopInst->getOperand(0); };
+  auto BoundOp = [&]() -> MachineOperand & { return LoopInst->getOperand(1); };
+  auto StepOp = [&]() -> MachineOperand & { return LoopInst->getOperand(2); };
+  auto CmpOp = [&]() -> MachineOperand & { return LoopInst->getOperand(3); };
+  assert(StepOp().isImm()); // Precondition.
+
+  // Source loop bound may be changed during epilogue loop generation. Save the
+  // initial value for future use.
+  const MachineOperand SavedSourceBoundOp = BoundOp();
+
+  const ArrayRef<MachineBasicBlock *> SourceBBs = CurLoop->getBlocks();
+
+  // Add instructions to Prolog to calculate iterations count (immediate or run
+  // time) for the source loop. If value is known at compile time, its
+  // calculation at run time should be omitted.
+  //
+  // It should be like (simplified):
+  //
+  //    BB.prolog:
+  //      MinDistance = Bound - Start
+  //      UnrolledStep = std::abs(Step * UnrollCount)  ; immediate
+  //      MinRestDistance = MinDistance % UnrolledStep;
+  //      UnrolledDistance = MinDistance - MinRestDistance;
+  //      UnrolledBoundary = Start + UnrolledDistance
+  //
+  // Note than depending on CmpOp() actual distance absolute value might be
+  // greater than std::abs(MinDistance) on 1. For example:
+  //    for (int i = 0; i <= 100; ++i)
+  //      ...
+  //    // MinDistance == 100
+  //    // Actual distance == 101
+
+  const MachineOperand MinDistanceOp =
+      evalSubI32(*Prolog, --Prolog->end(), BoundOp(), StartOp(), *MRI, *TII);
+
+  assert(isIntN(32, StepOp().getImm() * UnrollCount));  // Precondition.
+  const std::int32_t UnrolledStep = std::abs(StepOp().getImm() * UnrollCount);
+
+  // If there is guarantee that loop is taken and step > 0, it means that Bound
+  // >= Start, i.e. MinDistance >= 0. Cheaper remainder calculation algorithm
+  // might be used for positive numerators.
+  const MachineOperand MinRestDistanceOp =
+      StepOp().getImm() > 0 && HasLoopTakenGuarantee
+          ? evalRemPosToPosI32(*Prolog, --Prolog->end(), MinDistanceOp,
+                               UnrolledStep, *MRI, *TII)
+          : evalRemPosI32(*Prolog, --Prolog->end(), MinDistanceOp, UnrolledStep,
+                          *MRI, *TII);
+
+  const MachineOperand UnrolledDistanceVal = evalSubI32(
+      *Prolog, --Prolog->end(), MinDistanceOp, MinRestDistanceOp, *MRI, *TII);
+
+  const MachineOperand UnrolledBoundaryVal = evalAddI32(
+      *Prolog, --Prolog->end(), StartOp(), UnrolledDistanceVal, *MRI, *TII);
+
+  bool isDoron1Plus = CurrMF->getSubtarget<TPCSubtarget>().hasDoron1();
+
+  // Set the new boundary for the source loop to be unrolled.
+  //
+  // If operand type is changed, LoopInst type should be updated also. For
+  // example:
+  //    Source loop (LOOPsii):
+  //      for (int i = start; i < 100; ++i)
+  //
+  //    Loop to be unrolled (LOOPssi):
+  //      new_boundary = 100 - start;
+  //      for (int i = start; i < new_boundary; ++i)
+  if (BoundOp().isImm()) {
+    if (UnrolledBoundaryVal.isImm()) {
+      BoundOp().setImm(UnrolledBoundaryVal.getImm());
+    } else {
+      // Loop instruction type is going to be changed. Instruction replacement
+      // is required.
+      const unsigned NewOpcode = getLoopMachineInstrOpcode(
+          StartOp().isImm(),
+          false, // Bound is UnrolledLoopBoundOp, it is a register.
+          true,  // Step is immediate by precondition.
+          TPCMCInstrInfo::hasPredicate(*LoopInst, isDoron1Plus));
+
+      // Exit must already have "address taken" property because it was the
+      // target of indirect branch (from source loop) before transformation.
+      assert(LoopInst->getOperand(4).getMBB() == Exit);
+
+      const MachineInstrBuilder MIB = BuildMI(*Prolog, LoopInst->getIterator(),
+                                              DebugLoc(), TII->get(NewOpcode));
+      MIB.add(StartOp());
+      MIB.addReg(UnrolledBoundaryVal.getReg());
+      MIB.add(StepOp());
+      MIB.add(CmpOp());
+      MIB.addMBB(Exit);
+      if (TPCMCInstrInfo::hasPredicate(*LoopInst, isDoron1Plus)) {
+        MIB.add(LoopInst->getOperand(5));  // PredReg
+        MIB.add(LoopInst->getOperand(6)); // Polarity
+      }
+      MIB.addReg(LoopCounter, RegState::Define | RegState::Implicit);
+
+      LLVM_DEBUG(dbgs() << "Loop instruction: " << *LoopInst;
+                 dbgs() << "   replaced with: " << *MIB.getInstr());
+
+      LoopInst->eraseFromParent();
+      LoopInst = MIB.getInstr();
+    }
+  } else {
+    // It should be impossible to convert source loop with register bound to
+    // immediate bound like this:
+    //    Source loop:         for (int i = 0; i < bound; ++i)
+    //    Loop to be unrolled: for (int i = 0; i < CONST; ++i)
+    assert(!UnrolledBoundaryVal.isImm());
+
+    BoundOp().setReg(UnrolledBoundaryVal.getReg());
+  }
+
+  // Create epilogue loop pre-header block before the exit block.
+  MachineFunction &MF = *Prolog->getParent();
+  MachineBasicBlock &EpilogLoopPreHeader =
+      *MF.CreateMachineBasicBlock(Prolog->getBasicBlock());
+  MF.insert(Exit->getIterator(), &EpilogLoopPreHeader);
+  LoopInst->getOperand(4).setMBB(&EpilogLoopPreHeader);
+  Latch->removeSuccessor(Exit);
+  Latch->addSuccessor(&EpilogLoopPreHeader);
+  EpilogLoopPreHeader.setHasAddressTaken(); // has implicit ref from loop instr.
+
+  // Naive clone instructions of loop blocks without registers renewal.
+  SmallVector<MachineBasicBlock *, 2> ClonedBBs;
+  ClonedBBs.reserve(SourceBBs.size());
+  for (MachineBasicBlock *SourceBB : SourceBBs) {
+    MachineBasicBlock *ClonedBB = ClonedBBs.emplace_back(
+        MF.CreateMachineBasicBlock(SourceBB->getBasicBlock()));
+    MF.insert(Exit->getIterator(), ClonedBB);
+    for (const MachineInstr &MI : *SourceBB)
+      ClonedBB->push_back(MF.CloneMachineInstr(&MI));
+  }
+
+  // Shortcut to search cloned BB by its source counterpart. Expected source
+  // and cloned BBs count is 1, so linear search is nice here.
+  const auto GetRelatedClonedBB = [&](MachineBasicBlock *SourceBB) {
+    const auto *const It = llvm::find(SourceBBs, SourceBB);
+    return It != SourceBBs.end()
+               ? ClonedBBs[std::distance(SourceBBs.begin(), It)]
+               : nullptr;
+  };
+
+  // Update successors / predecessors for cloned blocks.
+  for (MachineBasicBlock *SourceBB : SourceBBs) {
+    for (MachineBasicBlock *S : SourceBB->successors()) {
+      if (MachineBasicBlock *ClonedS = GetRelatedClonedBB(S)) {
+        GetRelatedClonedBB(SourceBB)->addSuccessor(ClonedS);
+      } else {
+        assert(S == &EpilogLoopPreHeader); // Latch suc is already updated.
+      }
+    }
+  }
+  // Update successors for EpilogLoopPreHeader.
+  EpilogLoopPreHeader.addSuccessor(ClonedBBs.front());
+  EpilogLoopPreHeader.addSuccessor(Exit);  // From the future LOOP instruction.
+  // Update successor for cloned Latch block to the Exit
+  GetRelatedClonedBB(Latch)->addSuccessor(Exit);
+  // Replace Exit block as Prolog successor to EpilogLoopPreHeader
+  Prolog->removeSuccessor(Exit);
+  Prolog->addSuccessor(&EpilogLoopPreHeader);
+
+  // Create new definitions for cloned instructions and replace its usages.
+  RegMap RegMapping;
+  for (MachineBasicBlock *ClonedBB : ClonedBBs) {
+    for (MachineInstr &ClonedInstr : ClonedBB->instrs()) {
+      for (MachineOperand &ClonedOp : ClonedInstr.defs()) {
+        const Register PrevDefReg = ClonedOp.getReg();
+        if (PrevDefReg.isPhysical())
+          continue;
+
+        const TargetRegisterClass *RC = MRI->getRegClass(PrevDefReg);
+        const Register DefReg = MRI->createVirtualRegister(RC);
+        for (MachineBasicBlock *BB : ClonedBBs)
+          replaceUsesInBB(*BB, PrevDefReg, DefReg, false);
+        replaceUsesInBB(*Exit, PrevDefReg, DefReg, false);
+
+        RegMapping[PrevDefReg] = DefReg;
+        ClonedOp.setReg(DefReg);
+      }
+    }
+  }
+
+  // Update phi nodes in cloned loop.
+  //
+  // Source MIR:
+  //
+  //    BB.prolog:
+  //      %prolog_value = ...
+  //      LOOP ...
+  //
+  //    BB.loop:
+  //      %result = PHI [%prolog_value, BB.prolog], [%loop_value, BB.loop]
+  //      %loop_value = ...
+  //      LOOPEND ...
+  //
+  //    BB.exit:
+  //      ...
+  //
+  // Should be transformed to:
+  //
+  //    BB.prolog:
+  //      %prolog_value = ...
+  //      LOOP ...
+  //
+  //    BB.loop:
+  //      %result = PHI [%prolog_value, BB.prolog], [%loop_value, BB.loop]
+  //      %loop_value = ...
+  //      LOOPEND ...
+  //
+  //    BB.epilogue_pre_header:
+  //      %result_eph = PHI [%prolog_value, BB.prolog],   ; CHANGE HERE!
+  //                        [%loop_value, BB.loop]        ; CHANGE HERE!
+  //      LOOP ...
+  //
+  //    BB.epilogue_loop:
+  //      %epilogue_result = PHI [%result_eph, BB.epilogue_pre_header], ; HERE!
+  //                             [%epilogue_value, BB.epilogue_loop]    ; HERE!
+  //      %epilogue_value = ...
+  //      LOOPEND ...
+  //
+  //    BB.exit:
+  //      ...
+  for (MachineBasicBlock *ClonedBB : ClonedBBs) {
+    for (MachineInstr &ClonedPhi : ClonedBB->phis()) {
+      const PhiIP PrologIP = getPhiIPForMBB(ClonedPhi, *Prolog).getValue();
+      const PhiIP LatchIP = getPhiIPForMBB(ClonedPhi, *Latch).getValue();
+      const MachineInstr &CounterpartPhi =
+          insertPHI(*MRI->getRegClass(ClonedPhi.getOperand(0).getReg()),
+                    {&PrologIP, &LatchIP}, EpilogLoopPreHeader,
+                    EpilogLoopPreHeader.begin(), *MRI, *TII);
+      LLVM_DEBUG(dbgs() << "Epilogue: Created phi counterpart in EPH\n"
+                        << "  Cloned phi : " << ClonedPhi
+                        << "  Counterpart: " << CounterpartPhi);
+      setPhiIPInternals(PrologIP, CounterpartPhi.getOperand(0).getReg(),
+                        EpilogLoopPreHeader);
+      setPhiIPInternals(LatchIP, RegMapping, *GetRelatedClonedBB(Latch));
+    }
+  }
+
+  // Update phi nodes in Exit block.
+  //
+  // Source MIR:
+  //
+  //    BB.prolog:
+  //      %prolog_value = ...
+  //      LOOP ...
+  //
+  //    BB.loop:
+  //      %loop_value = ...
+  //      LOOPEND ...
+  //
+  //    BB.exit:
+  //      %result = PHI [%prolog_value, BB.prolog],
+  //                    [%loop_value, BB.loop]
+  //
+  // Should be transformed to:
+  //
+  //    BB.prolog:
+  //      %prolog_value = ...
+  //      LOOP ...
+  //
+  //    BB.loop:
+  //      %loop_value = ...
+  //      LOOPEND ...
+  //
+  //    BB.epilogue_pre_header:
+  //      %result_eph = PHI [%prolog_value, BB.prolog],   ; CHANGE HERE!
+  //                        [%loop_value, BB.loop]        ; CHANGE HERE!
+  //      LOOP ...
+  //
+  //    BB.epilogue_loop:
+  //      %epilogue_value = ...
+  //      LOOPEND ...
+  //
+  //    BB.exit:
+  //      %result = PHI [%result_eph, BB.epilogue_pre_header],  ; CHANGE HERE!
+  //                    [%epilogue_value, BB.epilogue_loop]     ; CHANGE HERE!
+  //
+  // Note that %loop_value and %prolog_value might be immediate, not a registry.
+  for (MachineInstr &Phi : Exit->phis()) {
+    const PhiIP IPProlog = getPhiIPForMBB(Phi, *Prolog).getValue();
+    const PhiIP IPLatch = getPhiIPForMBB(Phi, *Latch).getValue();
+
+    Register EpilogPreHeaderDefReg;
+
+    // Need Phi in epilogue pre header:
+    //
+    //   EpilogPreHeaderDefReg = PHI [IPProlog->ValOp, Prolog],
+    //                               [IPLatch->ValOp, Latch]
+    //
+    // Find the required phi or create the new one.
+    MachineInstr *CounterpartPhi = nullptr;
+    for (MachineInstr &EPHPhi : EpilogLoopPreHeader.phis()) {
+      if (isPhiInputs(EPHPhi, {&IPProlog, &IPLatch})) {
+        CounterpartPhi = &EPHPhi;
+        break;
+      }
+    }
+    if (CounterpartPhi) {
+      EpilogPreHeaderDefReg = CounterpartPhi->getOperand(0).getReg();
+
+      LLVM_DEBUG(dbgs() << "Epilogue: Found phi counterpart in EPH\n"
+                        << "  Counterpart: " << *CounterpartPhi);
+    } else {
+      // Create counterpart phi instruction in epilogue loop pre header.
+      EpilogPreHeaderDefReg = MRI->createVirtualRegister(
+          MRI->getRegClass(Phi.getOperand(0).getReg()));
+      CounterpartPhi =
+          BuildMI(EpilogLoopPreHeader, EpilogLoopPreHeader.begin(), DebugLoc(),
+                  TII->get(TargetOpcode::PHI), EpilogPreHeaderDefReg)
+              .add(*IPProlog.ValOp)
+              .addMBB(Prolog)
+              .add(*IPLatch.ValOp)
+              .addMBB(Latch)
+              .getInstr();
+
+      LLVM_DEBUG(dbgs() << "Epilogue: Created phi counterpart in EPH\n"
+                        << "  Exit phi : " << Phi
+                        << "  Counterpart: " << *CounterpartPhi);
+    }
+
+    // Update phi inputs.
+    setPhiIPInternals(IPProlog, EpilogPreHeaderDefReg, EpilogLoopPreHeader);
+    setPhiIPInternals(IPLatch, RegMapping, *GetRelatedClonedBB(Latch));
+  }
+
+  // Insert LOOP instruction into EpilogLoopPreHeader, LOOPEND instruction in
+  // the cloned loop latch block must already present.
+  {
+    // EpilogLoopPreHeader is going to use hardware register LoopCounter, so it
+    // must be enumerated in live ins.
+    if (!EpilogLoopPreHeader.isLiveIn(LoopCounter))
+      EpilogLoopPreHeader.addLiveIn(LoopCounter);
+
+    const unsigned Opcode = getLoopMachineInstrOpcode(
+        false, // Start is used from counter physical register.
+        SavedSourceBoundOp.isImm(),
+        true, // Step is immediate by precondition.
+        TPCMCInstrInfo::hasPredicate(*LoopInst, isDoron1Plus));
+
+    const MachineInstrBuilder MIB =
+        BuildMI(EpilogLoopPreHeader, EpilogLoopPreHeader.end(), DebugLoc(),
+                TII->get(Opcode));
+    MIB.addReg(LoopCounter); // Standard epilogue loop trick from LLVM.
+    MIB.add(SavedSourceBoundOp);
+    MIB.add(StepOp());
+    MIB.add(CmpOp());
+    MIB.addMBB(Exit);
+    if (TPCMCInstrInfo::hasPredicate(*LoopInst, isDoron1Plus)) {
+      MIB.add(LoopInst->getOperand(5));  // PredReg
+      MIB.add(LoopInst->getOperand(6)); // Polarity
+    }
+    MIB.addReg(LoopCounter, RegState::Define | RegState::Implicit);
+  }
+
+  // Update LOOPEND instruction params in cloned loop Latch.
+  {
+    MachineInstr &LoopEndInstr = GetRelatedClonedBB(Latch)->back();
+    assert(LoopEndInstr.getOpcode() == TPC::LOOPEND);
+
+    // According to construction algorithm, exit block for epilogue loop LOOPEND
+    // instruction should already point to Exit. Nothing to do.
+    assert(LoopEndInstr.getOperand(0).getMBB() == Exit);
+
+    // Continuation block should point to cloned loop header.
+    LoopEndInstr.getOperand(1).setMBB(ClonedBBs.front());
+  }
+
+  // Update LOOPEND instruction params in source loop latch.
+  {
+    MachineInstr &LoopEndInstr = Latch->back();
+    assert(LoopEndInstr.getOpcode() == TPC::LOOPEND);
+
+    // Source loop exit block must point to epilogue loop pre-header.
+    LoopEndInstr.getOperand(0).setMBB(&EpilogLoopPreHeader);
+
+    // Source loop continuation block must already point to source loop header.
+    assert(LoopEndInstr.getOperand(1).getMBB() == Header);
+  }
+
+  // Remove loop_taken pragma for the source loop if exists. There is no more
+  // guarantee that source loop is always taken.
+  removeLoopTakenMD(Latch->back());
+
+  Exit = &EpilogLoopPreHeader;
+
+  // At this point program has created the new loop and rewired CFG. Unrolling
+  // code does not take into account epilogue loop existence, and it should not.
+  // Update analysis internal structures for their proper results within
+  // unrolling code.
+  recalculateAnalysis();
+}
+
 // Calculates unroll count and how to shift execution threads
 bool TPCPipeliner::pipeline(MachineLoop* L) {
   NextCounters.clear();
@@ -493,6 +1110,7 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   AdjustedPhis.clear();
   AccumulateMap.clear();
   LinearIVs.clear();
+  MLLinearIVs.clear();
 
   Header = nullptr;
   Latch  = nullptr;
@@ -500,135 +1118,167 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   Prolog = nullptr;
 
   CurLoop = L;
-  LoopCounter = getCounterRegister(CurLoop);
+  LoopCounter = getCounterRegister(*CurLoop);
   Header = CurLoop->getHeader();
   Latch = CurLoop->getLoopLatch();
+  Exit = CurLoop->getExitBlock();
 
-  if (Latch == nullptr) {
+  LLVM_DEBUG(dbgs() << "Run pipelining for loop with header "
+                    << printMBBReference(*Header) << "\n");
+
+  if (!Latch)
     return false;
-  }
 
-  MachineInstr& EndInstr = *(--Latch->end());
-  
-  if (EndInstr.getOpcode() != TPC::LOOPEND) {
+  if (!Exit)
     return false;
-  }
 
-  typedef std::vector<MachineBasicBlock*> MBBVector;
-  MBBVector Preds(Header->pred_begin(), Header->pred_end());
-  for (MBBVector::iterator I = Preds.begin(), E = Preds.end(); I != E; ++I) {
-    MachineBasicBlock *PB = *I;
-    if (PB != Latch) {
-      assert(Prolog == nullptr && "Three predecessors for a hardware loop");
-      Prolog = PB;
-    }
-  }
+  MachineInstr& EndInstr = Latch->back();
 
-  LoopInst = &(*(--Prolog->end()));
-  if (!isLoop(LoopInst)) {
+  if (EndInstr.getOpcode() != TPC::LOOPEND)
     return false;
-  }
 
-  if (checkForProhibitingInstructions()) {
+  Prolog = CurLoop->getLoopPredecessor();
+  assert(Prolog);
+
+  LoopInst = &Prolog->back();
+  if (!isLoop(*LoopInst))
     return false;
-  }
 
   PrologInserter = --Prolog->end();
 
-  const MDNode* LoopMD = nullptr;
+  // Avoid unrolling non-single MBB loops. Loops with branches are not supported
+  // by unrolling algorithm. Theoretically loop might consist of a chain of MBBs
+  // without terminators, but the case should not appear, such MBBs should be
+  // squashed before this pass.
+  if (CurLoop->getBlocks().size() >= 2)
+    return false;
 
-  calcLoopForm();
+  // Avoid unrolling if step is not an immediate value. It is hard to make
+  // gain from unrolling in this case.
+  const MachineOperand &Step = LoopInst->getOperand(2);
+  if (!Step.isImm())
+    return false;
 
-  if(EndInstr.getOperand(EndInstr.getNumOperands() - 5).isMetadata()) {
-    LoopMD = EndInstr.getOperand(EndInstr.getNumOperands() - 5).getMetadata();
-  }
+  // Get user-specified unroll count from pragma.
+  const MDNode *LoopMD = getMachineLoopMDNode(EndInstr);
 
-  // Get iteration count and unroll count from pragmas
-  if (LoopMD) {
-    unsigned UnrollCount = getUnrollCountFromMetadata(LoopMD);
-    bool DoPipeline = getPipelineFromMetadata(LoopMD);
-    //unsigned Divide = getMetadataValue(LoopMD, "llvm.loop.unroll.divide");
+  const unsigned UserUnrollCount =
+      LoopMD ? getUnrollCountFromMetadata(LoopMD).getValueOr(0) : 0;
 
-    if (UnrollCount > 0) {
-      if (LoopInst->getOperand(1).isImm() && LoopInst->getOperand(2).isImm()
-          && LoopInst->getOperand(0).isImm()) {
-        int Start = LoopInst->getOperand(0).getImm();
-        int Bound = LoopInst->getOperand(1).getImm();
-        int Step = LoopInst->getOperand(2).getImm();
+  if (UserUnrollCount < 2)
+    return false;
 
-        // We can get all loop parameters in compile time and they don't
-        // match with UnrollCount. Nothing we can do here.
-        if ((Bound-Start / Step) % UnrollCount != 0) {
-          return false;
+  if (!calcLoopForm())
+    return false;
+
+  if (checkForProhibitingInstructions())
+    return false;
+
+  // Report warning on dependencies which might affect unrolling result.
+  const bool IgnoreCheckAgainstStoresToSameTensorId = true;
+  const MLDAReport DepAnalysisReport = runMachineLoopDataDependencyAnalysis(
+      *CurLoop, *MRI, CurrMF->getSubtarget<TPCSubtarget>(), *TII, MLLinearIVs,
+      IgnoreCheckAgainstStoresToSameTensorId, UserUnrollCount);
+  if (DepAnalysisReport.HasLoopDependentMemStLd == true ||
+      DepAnalysisReport.HasLoopIndependentMemStLd == true ||
+      DepAnalysisReport.HasLoopDependentMemStSt == true ||
+      DepAnalysisReport.HasLoopIndependentMemStSt == true) {
+    errs()
+        << "warning: TPC backend unrolling is requested in loop_unroll pragma, "
+           "but compiler has detected memory dependencies which are affected "
+           "by backend unrolling algorithm. TPC backend unrolling optimization "
+           "is going to be applied anyway, but code correctness is not "
+           "guaranteed. Please, re-check the source code.\n";
+
+    // Try to print source code location from header basic block.
+    auto FirstMI = CurLoop->getHeader()->getFirstNonPHI();
+    if (FirstMI != CurLoop->getHeader()->end()) {
+      if (const DILocation *Loc = FirstMI->getDebugLoc().get()) {
+        const StringRef FileName = Loc->getFilename();
+        if (!FileName.empty()) {
+          errs() << "at: " << FileName << ":" << Loc->getLine() << ":"
+                 << Loc->getColumn() << "\n";
         }
-        if ((Bound-Start) / Step  < (long) (UnrollCount * 2)) {
-          DoPipeline = false;
-        }
+        const Optional<StringRef> Source = Loc->getSource();
+        if (Source.hasValue())
+          errs() << Source.getValue() << "\n";
       }
-      return unrollAndAlign(UnrollCount, DoPipeline);
-    //} else if (Divide > 0) {
-    //  return unrollAndAlign(Divide);
     }
   }
 
-  // TODO: better analysis and automatic unrolling withoug pragmas
-  return false;
-  // Don't have enough pragmas. Still can pipeline if loop parameters are constants
-//  MachineBasicBlock::iterator InsertPos = --Prolog->end();
+  // Collect information about linear induction variables.
+  MLLinearIVs = findLinearIVs(*CurLoop, *MRI);
 
-//  if (!isLoop(&(*InsertPos))) {
-//    return false;
-//  }
+  LLVM_DEBUG({
+    for (const MLoopLinearIV &IV : MLLinearIVs)
+      dbgs() << "Detected linear iv: " << IV.getNextDefMI();
+  });
 
-//  MachineInstr& LoopInst = *(InsertPos);
-//  MachineOperand& Start = LoopInst.getOperand(0);
-//  MachineOperand& Boundary = LoopInst.getOperand(1);
-//  MachineOperand& Step = LoopInst.getOperand(2);
-//  unsigned CmpMode = LoopInst.getOperand(3).getImm();
+  // Special linear IVs mapping for compatibility with non-refactored algorithm
+  // parts.
+  LinearIVs =
+      makeLinearIVNextValDefToStepOpIxMapping(*CurLoop, *MRI, MLLinearIVs);
 
-//  // Can't pipeline without constant step
-//  if (!Step.isImm()) {
-//    return false;
-//  }
+  const unsigned UnrollCount = UserUnrollCount;
 
-//  if (Start.isImm() && Boundary.isImm() && Step.isImm()) {
-//    int StartVal = Start.getImm();
-//    int EndVal = Boundary.getImm();
-//    int StepVal = Step.getImm();
-//    unsigned Inclusive = 0;
+  bool Pipelined = LoopMD && getPipelineFromMetadata(LoopMD);
 
-//    if (CmpMode == TPCII::LoopEQ ||
-//        CmpMode == TPCII::LoopLE ||
-//        CmpMode == TPCII::LoopGE) {
-//      Inclusive = 1;
-//    }
+  if (isIterationsCountKnownAtCompileTime(*LoopInst)) {
+    const llvm::Optional<uint64_t> IterationsCount =
+        getCompileTimeIterationsCount(*LoopInst);
 
-//    unsigned IterCount = (abs(EndVal - StartVal) + Inclusive) / abs(StepVal);
-//    if ((abs(EndVal - StartVal) + Inclusive) % StepVal) IterCount++;
+    // Avoid unrolling infinite loops.
+    if (!IterationsCount.hasValue())
+      return false;
 
-//    DEBUG(dbgs() << "Iter count " << IterCount << "\n");
+    // Avoid unrolling loop if it has no sense.
+    if (IterationsCount.getValue() < UnrollCount)
+      return false;
 
-//    // Just try several common divisors
-//    if (!(IterCount % 4) && IterCount >=8) {
-//      return unrollAndAlign(4, L);
-//    }
-//    if (!(IterCount % 3) && IterCount >=6) {
-//      return unrollAndAlign(3, L);
-//    }
-//    if (!(IterCount % 5) && IterCount >=10) {
-//      return unrollAndAlign(5, L);
-//    }
-//  }
+    // Avoid pipelining if it has no sense.
+    if (IterationsCount.getValue() < UnrollCount * 2)
+      Pipelined = false;
+  }
 
-//  return false;
+  // Avoid unrolling if unrolled step does not fit into i32 type.
+  assert(isIntN(32, Step.getImm()));
+  if (!isIntN(32, static_cast<int64_t>(Step.getImm()) *
+                      static_cast<int64_t>(UnrollCount)))
+    return false;
+
+  // If user manually specified loop_unroll, he guarantees that trip count value
+  // is divisible at unrolled step even if trip count value is a run time value.
+  // It is the loop_unroll pragma precondition. But if user additionally
+  // specified unaligned_trip_count, then epilogue should be generated.
+  const bool IsEpilogueRequired =
+      findOptionMDForLoopMD(*LoopMD, "llvm.loop.unroll.unaligned_trip_count");
+
+  if (IsEpilogueRequired) {
+    // Pipelining does not work properly if loop epilogue is generated, so
+    // pipelining must be disabled if pass is going to generate epilogue.
+    Pipelined = false;
+
+    generateEpilogueLoop(UnrollCount, LoopMD && hasLoopTakenMD(*LoopMD));
+
+    LLVM_DEBUG({
+      dbgs() << "MF after epilogue loop generation:\n\n";
+      CurrMF->dump();
+    });
+  } else {
+    LLVM_DEBUG(dbgs() << "Epilogue loop generation is not required.\n");
+  }
+
+  unrollAndAlign(UnrollCount, Pipelined);
+
+  return true;
 }
 
-void TPCPipeliner::createPrologCounters(int Counter, MachineBasicBlock* PrologBlock) {
+void TPCPipeliner::createPrologCounters(unsigned UnrollCount, MachineBasicBlock* PrologBlock) {
   // For the first thread just return start value
   unsigned StartReg;
   //MachineBasicBlock::iterator InsertPos = --PrologBlock->end();
   MachineBasicBlock::iterator InsertPos = PrologInserter;
-  assert(isLoop(&(*(--Prolog->end()))) && "Preheader wasn't created during loop construction");
+  assert(isLoop(*(--Prolog->end())) && "Preheader wasn't created during loop construction");
   if (LoopInst->getOperand(0).isReg()) {
     StartReg = LoopInst->getOperand(0).getReg();
   } else {
@@ -638,14 +1288,14 @@ void TPCPipeliner::createPrologCounters(int Counter, MachineBasicBlock* PrologBl
         .addImm(TPCII::OpType::INT32)
         .addImm(0)
         .addReg(v_reg, RegState::Undef)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
     StartReg = v_reg;
   }
   InitialCounters.push_back(StartReg);
 
   unsigned PrevReg = StartReg;
-  for (int i = 1; i < Counter; ++i) {
+  for (unsigned i = 1; i < UnrollCount; ++i) {
     unsigned v_reg  = MRI->createVirtualRegister(PrologBlock->getParent()->getSubtarget().getTargetLowering()->getRegClassFor(MVT::i32));
     if (LoopInst->getOperand(2).isReg()) {
       MachineInstr* MI = BuildMI(*PrologBlock, InsertPos, DebugLoc(), TII->get(TPC::ADDssp), v_reg)
@@ -654,7 +1304,7 @@ void TPCPipeliner::createPrologCounters(int Counter, MachineBasicBlock* PrologBl
           .addImm(TPCII::OpType::INT32)
           .addImm(0)
           .addReg(PrevReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       (void) MI;
       PrevReg = v_reg;
@@ -666,7 +1316,7 @@ void TPCPipeliner::createPrologCounters(int Counter, MachineBasicBlock* PrologBl
           .addImm(TPCII::OpType::INT32)
           .addImm(0)
           .addReg(StartReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       (void) MI;
       LLVM_DEBUG(ExecThreads[i].Dprolog.push_back(MI));
@@ -674,29 +1324,53 @@ void TPCPipeliner::createPrologCounters(int Counter, MachineBasicBlock* PrologBl
     InitialCounters.push_back(v_reg);
 
     // Now patch loop counter registers that were moved out of the loop
-    for (MachineInstr* MI : ExecThreads[i].CounterInstrs) {
-      for (MachineOperand& MO : MI->uses()) {
-        if (MO.isReg() && MO.getReg() == LoopCounter) {
-          MO.setReg(v_reg);
-        }
-      }
-    }
+    for (MachineInstr *MI : ExecThreads[i].CounterInstrs)
+      replaceUses(*MI, LoopCounter, v_reg);
   }
 }
 
-void TPCPipeliner::correctCounters(int Counter) {
+void TPCPipeliner::correctCounters(unsigned UnrollCount) {
   if (ExecThreads[1].CounterInstrs.empty()) {
     return;
   } else {
-    createPrologCounters(Counter, Prolog);
+    createPrologCounters(UnrollCount, Prolog);
   }
 }
 
 void TPCPipeliner::correctIVs(int UnrollCount) {
-  for (auto IV: LinearIVs) {
-    MachineInstr* MI = IV.first;
-    unsigned OpNum = IV.second;
-    MI->getOperand(OpNum).setImm(MI->getOperand(OpNum).getImm() * UnrollCount);
+  for (auto IV : LinearIVs) {
+    MachineInstr *const MI = IV.first;
+    const unsigned OpNum = IV.second;
+
+    const Register NextItValDefReg = MI->getOperand(0).getReg();
+    const uint64_t NewStepValue = MI->getOperand(OpNum).getImm() * UnrollCount;
+
+    const SmallVector<MachineInstr *, 8> NextItValUses =
+        collectUses(NextItValDefReg, *MRI);
+
+    const bool HasUsageInsideLoop =
+        any_of(NextItValUses, [this](MachineInstr *UseMI) {
+          return !UseMI->isPHI() && CurLoop->contains(UseMI);
+        });
+
+    if (HasUsageInsideLoop) {
+      MachineInstr *const ClonedMI = Prolog->getParent()->CloneMachineInstr(MI);
+      const Register Reg =
+          MRI->createVirtualRegister(MRI->getRegClass(NextItValDefReg));
+      ClonedMI->getOperand(0).setReg(Reg);
+
+      // Replace IV phi input with unrolled step value.
+      for (MachineInstr *UseMI : NextItValUses) {
+        if (UseMI->isPHI() && CurLoop->contains(UseMI))
+          replaceUses(*UseMI, NextItValDefReg, Reg);
+      }
+
+      MI->getParent()->insert(MI, ClonedMI);
+
+      ClonedMI->getOperand(OpNum).setImm(NewStepValue);
+    } else {
+      MI->getOperand(OpNum).setImm(NewStepValue);
+    }
   }
 }
 
@@ -711,12 +1385,10 @@ void TPCPipeliner::correctExit() {
     Latch->addSuccessor(MBB);
 
     // Reverse exit rewiring again
-    for (MachineInstr& MI : MBB->instrs()) {
-      if (MI.isPHI()) {
-        for (MachineOperand& MO : MI.uses()) {
-          if (MO.isMBB() && MO.getMBB() == EB) {
-            MO.setMBB(Latch);
-          }
+    for (MachineInstr &MI : MBB->phis()) {
+      for (MachineOperand &MO : MI.uses()) {
+        if (MO.isMBB() && MO.getMBB() == EB) {
+          MO.setMBB(Latch);
         }
       }
     }
@@ -743,7 +1415,7 @@ void TPCPipeliner::createNextCounters(int Counter, MachineBasicBlock* PrologBloc
           .addImm(TPCII::OpType::INT32)
           .addImm(0)
           .addReg(LoopCounter, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     } else {
       // TODO: Need to multiply
@@ -753,7 +1425,7 @@ void TPCPipeliner::createNextCounters(int Counter, MachineBasicBlock* PrologBloc
           .addImm(TPCII::OpType::INT32)
           .addImm(0)
           .addReg(LoopCounter, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
     }
     unsigned ThreadCounter = ExecThreads[i].VRegMap[LoopCounter];
@@ -799,7 +1471,7 @@ void TPCPipeliner::createEpilogCounters(int Counter, MachineBasicBlock* PrologBl
         .addImm(TPCII::OpType::INT32)
         .addImm(0) // Switch
         .addReg(LoopCounter, RegState::Undef)
-        .addReg(TPC::SP0)
+        .addReg(TPC::SPRF_TRUE)
         .addImm(0);
 
     EpilogInserter = ++MachineBasicBlock::iterator(MI);
@@ -824,7 +1496,7 @@ void TPCPipeliner::createEpilogCounters(int Counter, MachineBasicBlock* PrologBl
           .addImm(TPCII::OpType::INT32)
           .addImm(0) // Switch
           .addReg(LoopCounter, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       LLVM_DEBUG(ExecThreads[i].Epilog.push_back(MI));
       EpilogInserter = ++MachineBasicBlock::iterator(MI);
@@ -837,7 +1509,7 @@ void TPCPipeliner::createEpilogCounters(int Counter, MachineBasicBlock* PrologBl
           .addImm(TPCII::OpType::INT32)
           .addImm(0) // Switch
           .addReg(LoopCounter, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
       LLVM_DEBUG(ExecThreads[Counter - i].Epilog.push_back(MI));
       EpilogInserter = ++MachineBasicBlock::iterator(MI);
@@ -846,14 +1518,6 @@ void TPCPipeliner::createEpilogCounters(int Counter, MachineBasicBlock* PrologBl
   }
 
   std::reverse(EndCounters.begin(), EndCounters.end());
-}
-
-void TPCPipeliner::replaceUses(MachineInstr* MI, unsigned Old, unsigned New) {
-  for (MachineOperand& MO: MI->uses()) {
-    if (MO.isReg() && MO.getReg() == Old) {
-      MO.setReg(New);
-    }
-  }
 }
 
 // Checks wether a MovedInst defines a Phi use
@@ -870,7 +1534,7 @@ bool TPCPipeliner::isCyclicDependency(MachineInstr* Phi, MachineInstr* MovedInst
   }
 }
 
-bool TPCPipeliner::align(std::vector<unsigned>& Shifts) {
+bool TPCPipeliner::align(const std::vector<unsigned> &Shifts) {
   Exit = CurLoop->getExitBlock();
 
   // Can't pipeline across basic blocks
@@ -912,11 +1576,8 @@ bool TPCPipeliner::align(std::vector<unsigned>& Shifts) {
       PrologMI->removeFromParent();
 
       // Replace loop iterator with prolog initial values
-      for (MachineOperand& MO: PrologMI->uses()) {
-        if (MO.isReg() && MO.getReg() == ExecThreads[i].VRegMap[LoopCounter]) {
-          MO.setReg(InitialCounterReg);
-        }
-      }
+      replaceUses(*PrologMI, ExecThreads[i].VRegMap[LoopCounter],
+                  InitialCounterReg);
 
       // Clone instruction and insert it as a shifted iteration at the end of the loop
       MachineInstr* ShiftedMI = Prolog->getParent()->CloneMachineInstr(PrologMI);
@@ -968,11 +1629,7 @@ bool TPCPipeliner::align(std::vector<unsigned>& Shifts) {
         MO.setReg(v_reg);
       }
 
-      for (MachineOperand& MO : PrologMI->uses()) {
-        if (MO.isReg() && PrologMap.count(MO.getReg()) > 0) {
-          MO.setReg(PrologMap[MO.getReg()]);
-        }
-      }
+      replaceUseRegistersByMapping(*PrologMI, PrologMap);
 
       // If we moved an instruction dependent on a phi-node, remove a phi-node use
       // and replace it with a value from a pre-loop block
@@ -1053,11 +1710,7 @@ bool TPCPipeliner::align(std::vector<unsigned>& Shifts) {
           LLVM_DEBUG(ExecThreads[i].Dphi.push_back(&(*Header->begin())));
         }
       }
-      for (MachineOperand& MO : LeftMI->uses()) {
-        if (MO.isReg() && MO.getReg() == ExecThreads[i].VRegMap[LoopCounter]) {
-          MO.setReg(LeftCounterReg);
-        }
-      }
+      replaceUses(*LeftMI, ExecThreads[i].VRegMap[LoopCounter], LeftCounterReg);
 
       // We have SSA here, create new vregs for everything
       for (MachineOperand& MO : LeftMI->defs()) {
@@ -1077,15 +1730,11 @@ bool TPCPipeliner::align(std::vector<unsigned>& Shifts) {
 //          LeftMI->dump();
 //          unsigned TiedReg = LeftMI->getOperand(LeftMI->findTiedOperandIdx(Idx)).getReg();
           unsigned TiedReg = LeftMI->getOperand(LeftMI->findTiedDefIdx(MO)).getReg();
-          replaceUses(EpilogMI, MO.getReg(), TiedReg);
+          replaceUses(*EpilogMI, MO.getReg(), TiedReg);
         }
       }
 
-      for (MachineOperand& MO : EpilogMI->uses()) {
-        if (MO.isReg() && MO.getReg() == ExecThreads[i].VRegMap[LoopCounter]) {
-          MO.setReg(EndCounterReg);
-        }
-      }
+      replaceUses(*EpilogMI, ExecThreads[i].VRegMap[LoopCounter], EndCounterReg);
 
       Exit->insert(EpilogInserter, EpilogMI);
       EpilogInserter = ++MachineBasicBlock::iterator(EpilogMI);
@@ -1115,100 +1764,88 @@ bool TPCPipeliner::align(std::vector<unsigned>& Shifts) {
 
     // We created new virtual registers for the regular iteration instructions.
     // If there're phi nodes dependent on these instructions, patch they uses 
-    for (unsigned j = 0; j < ExecThreads[i].Phis.size(); ++j) {
-      MachineInstr* PhiInst = ExecThreads[i].Phis[j];
-      for (MachineOperand& MO: PhiInst->uses()) {
-        if(MO.isReg() && EpilogMap.count(MO.getReg()) > 0) {
-          MO.setReg(EpilogMap[MO.getReg()]);
-        }
-      }
-    }
+    for (MachineInstr *PhiInst: ExecThreads[i].Phis)
+      replaceUseRegistersByMapping(*PhiInst, EpilogMap);
 
     for (MachineInstr& MI : *Header) {
-      if (!MI.isPHI()) {
-        for (MachineOperand& MO : MI.uses()) {
-          if (MO.isReg() && EpilogMap.count(MO.getReg()) > 0) {
-            MO.setReg(EpilogMap[MO.getReg()]);
-          }
-        }
-      }
+      if (!MI.isPHI())
+        replaceUseRegistersByMapping(MI, EpilogMap);
     }
-
   }
   return true;
 }
 
 bool TPCPipeliner::isPhiDef(unsigned Reg, unsigned Thread) {
-  for (unsigned i = 0; i < ExecThreads[Thread].Phis.size(); ++i) {
-    MachineInstr* Phi = ExecThreads[Thread].Phis[i];
-    if ((*Phi->defs().begin()).getReg() == Reg) {
-      return true;
-    }
-  }
+  return any_of(
+      ExecThreads[Thread].Phis,
+      [Reg](MachineInstr *Phi){ return Phi->defs().begin()->getReg() == Reg; });
+}
 
-  return false;
+void TPCPipeliner::fixUnrolledLoopBoundary(const unsigned UnrollCount) {
+  // Fix unrolled loop boundary for <=, >= cases.
+  //
+  // Initial loop:
+  //
+  //    for (int i = start; i <= k * unroll_step; i += step)
+  //      function(i);
+  //
+  // Should be transformed to (!note changed boundary here!):
+  //
+  //    for (int i = start; i <= (k - 1) * unroll_step; i += unroll_step) {
+  //      function(i);
+  //      ...
+  //      function(i + unroll_step - step);
+  //    }
+  //
+  // Note that i == k * unroll_step is not processed in transformed loop. It is
+  // an epilogue loop responsibility.
+  MachineOperand &BoundOp = LoopInst->getOperand(1);
+  const MachineOperand &StepOp = LoopInst->getOperand(2);
+  const MachineOperand &CmpOp = LoopInst->getOperand(3);
+  assert(StepOp.isImm() && CmpOp.isImm());
+  if (CmpOp.getImm() == TPCII::LoopGE || CmpOp.getImm() == TPCII::LoopLE) {
+    const MachineOperand FixedBoundOp = evalSubI32(
+        *Prolog, --Prolog->end(), BoundOp,
+        MachineOperand::CreateImm(UnrollCount * StepOp.getImm()), *MRI, *TII);
+    updateRegOrImmOperand(BoundOp, FixedBoundOp);
+  }
 }
 
 // Unrolls the loop, makes execution threads independent, shifts iterations
 bool TPCPipeliner::unrollAndAlign(unsigned UnrollCount, bool DoPipelining) {
-  for (unsigned i = 0 ; i < UnrollCount; ++i) {
-    ExThreadParams p;
-    ExecThreads.push_back(p);
-  }
+  assert(ExecThreads.empty());
+  ExecThreads.resize(UnrollCount);
 
   for (MachineBasicBlock* MBB : CurLoop->getBlocks()) {
-    for (MachineBasicBlock::instr_iterator I = MBB->instr_begin();
-         I != MBB->instr_end(); ++I) {
-      MachineInstr* MI = &(*I);
-
-      if (MI->isBranch()) continue;
-      if (MI->isPHI()) {
-        ExecThreads[0].Phis.push_back(MI);
+    for (MachineInstr &MI: MBB->instrs()) {
+      if (MI.isBranch()) continue;
+      if (MI.isPHI()) {
+        ExecThreads[0].Phis.push_back(&MI);
       } else {
-        ExecThreads[0].ThreadInstrs.push_back(MI);
+        ExecThreads[0].ThreadInstrs.push_back(&MI);
       }
     }
   }
 
-  // Before pipelining we need to find all induction variables that are left
-  // after hw transformation and fix increments
-  findLinearInduction(UnrollCount);
-
   ExecThreads[0].VRegMap[LoopCounter] = LoopCounter;
 
   // Duplicate counter register for every execution thread
-  auto InsertPos = Header->begin();
-  while(InsertPos != Header->end() && (*InsertPos).isPHI()) ++InsertPos;
-
-  unsigned PrevReg = LoopCounter;
-  for (unsigned i = 1; i < UnrollCount; ++i) {
-    unsigned v_reg  = MRI->createVirtualRegister(Header->getParent()->getSubtarget().getTargetLowering()->getRegClassFor(MVT::i32));
-    if (LoopInst->getOperand(2).isReg()) {
-      // If increment value is a register, we can't easily make increments in
-      // each execution thread independent.
-      BuildMI(*Header, InsertPos, DebugLoc(), TII->get(TPC::ADDssp), v_reg)
-          .addReg(PrevReg)
-          .addReg(LoopInst->getOperand(2).getReg())
-          .addImm(TPCII::OpType::INT32)
-          .addImm(0)
-          .addReg(PrevReg, RegState::Undef)
-          .addReg(TPC::SP0)
-          .addImm(0);
-      PrevReg = v_reg;
-      InsertPos++;
-    } else {
+  {
+    const auto InsertPos = Header->getFirstNonPHI();
+    for (unsigned I = 1; I < UnrollCount; ++I) {
+      const Register VReg = MRI->createVirtualRegister(&TPC::SRFRegClass);
       // If increment value is a constant create independent increment for
       // each execution thread with increment values computed at compile time.
-      BuildMI(*Header, InsertPos, DebugLoc(), TII->get(TPC::ADDsip), v_reg)
-          .addReg(PrevReg)
-          .addImm(LoopInst->getOperand(2).getImm() * i)
+      BuildMI(*Header, InsertPos, DebugLoc(), TII->get(TPC::ADDsip), VReg)
+          .addReg(LoopCounter)
+          .addImm(LoopInst->getOperand(2).getImm() * I)
           .addImm(TPCII::OpType::INT32)
           .addImm(0)
-          .addReg(PrevReg, RegState::Undef)
-          .addReg(TPC::SP0)
+          .addReg(VReg, RegState::Undef)
+          .addReg(TPC::SPRF_TRUE)
           .addImm(0);
+      ExecThreads[I].VRegMap[LoopCounter] = VReg;
     }
-    ExecThreads[i].VRegMap[LoopCounter] = v_reg;
   }
 
   // Unroll and make execution threads independent
@@ -1223,9 +1860,8 @@ bool TPCPipeliner::unrollAndAlign(unsigned UnrollCount, bool DoPipelining) {
         continue;
       }
 
-      if(std::find(ExecThreads[0].ThreadInstrs.begin(), ExecThreads[0].ThreadInstrs.end(), CurMI) == ExecThreads[0].ThreadInstrs.end()) {
+      if (!is_contained(ExecThreads[0].ThreadInstrs, CurMI))
         continue;
-      }
 
       // Don't clone loops
       if (CurMI->isBranch()) continue;
@@ -1249,6 +1885,8 @@ bool TPCPipeliner::unrollAndAlign(unsigned UnrollCount, bool DoPipelining) {
     }
   }
 
+  fixUnrolledLoopBoundary(UnrollCount);
+
   MachineInstr* LastInstr = nullptr;
   if (Prolog->size() == 1) {
     LastInstr = &(*(--Prolog->end()));
@@ -1259,156 +1897,148 @@ bool TPCPipeliner::unrollAndAlign(unsigned UnrollCount, bool DoPipelining) {
   // Now clone and patch phi-nodes
   sortDelayedPhis();
 
-  for (MachineInstr* CurMI : DelayedPhis) {
-    assert(CurMI->isPHI() && "Non-phi instruction is in the phi list");
-    patchPhiStartValue(CurMI, UnrollCount, CurMI->getParent(), MachineBasicBlock::instr_iterator(CurMI));
-  }
-
+  for (MachineInstr* CurMI : DelayedPhis)
+    patchPhiStartValue(*CurMI, UnrollCount);
 
   PrologInserter = MachineBasicBlock::iterator(LastInstr);
 
-  // Merge all accumulator values
-  MachineBasicBlock* OldExit = CurLoop->getExitBlock();
-  assert(OldExit && "This loop is a hardware loop, it should have only one exit");
-  assert(LoopInst->getOperand(4).getMBB() == OldExit && "Loop doesn't end with ExitBlock");
+  if (!AccumulateMap.empty()) {
+    // Merge all accumulator values
+    MachineBasicBlock* OldExit = CurLoop->getExitBlock();
+    assert(OldExit && "This loop is a hardware loop, it should have only one exit");
+    assert(LoopInst->getOperand(4).getMBB() == OldExit && "Loop doesn't end with ExitBlock");
 
-  // We need to merge accumulators just outside the loop.
-  // But ExitBlock may contain Phi-nodes depending on accumulated values.
-  // So we create another block, insert it before ExitBlock and make
-  // it the new exit for the loop
-  MachineFunction* MF = OldExit->getParent();
-  MachineBasicBlock* Accum = MF->CreateMachineBasicBlock();
-  MF->insert(OldExit->getIterator(), Accum);
-  assert(LoopInst->getOperand(4).isMBB() && "Incorrect loop instruction");
-  LoopInst->getOperand(4).setMBB(Accum);
-  Accum->addSuccessor(OldExit, BranchProbability::getOne());
-  Latch->removeSuccessor(OldExit);
-  Latch->addSuccessor(Accum);
+    // We need to merge accumulators just outside the loop.
+    // But ExitBlock may contain Phi-nodes depending on accumulated values.
+    // So we create another block, insert it before ExitBlock and make
+    // it the new exit for the loop
+    MachineFunction* MF = OldExit->getParent();
+    MachineBasicBlock* Accum = MF->CreateMachineBasicBlock();
+    MF->insert(OldExit->getIterator(), Accum);
+    assert(LoopInst->getOperand(4).isMBB() && "Incorrect loop instruction");
+    LoopInst->getOperand(4).setMBB(Accum);
+    Accum->addSuccessor(OldExit, BranchProbability::getOne());
+    Latch->removeSuccessor(OldExit);
+    Latch->addSuccessor(Accum);
 
-  // Fix Phi-nodes for the former exit block
-  for (MachineInstr& MI : OldExit->instrs()) {
-    if (MI.isPHI()) {
-      for (MachineOperand& MO : MI.uses()) {
+    // Fix Phi-nodes for the former exit block
+    for (MachineInstr &MI : OldExit->phis()) {
+      for (MachineOperand &MO : MI.uses()) {
         if (MO.isMBB() && MO.getMBB() == Latch) {
           MO.setMBB(Accum);
         }
       }
     }
-  }
 
-  // For every entry in AccumulateMap we need to build a chain of ADDs
-  // from the last thread to the first. The result of a the merge
-  // should be the def of the first accumulator in the chain.
-  // All occurences of this def inside the loop should be patched to preserve ssa.
-  RegMap ForceSsa;
-  MachineBasicBlock::iterator AccumInsertPos = Accum->end();
+    // For every entry in AccumulateMap we need to build a chain of ADDs
+    // from the last thread to the first. The result of a the merge
+    // should be the def of the first accumulator in the chain.
+    // All occurences of this def inside the loop should be patched to preserve ssa.
+    RegMap ForceSsa;
+    MachineBasicBlock::iterator AccumInsertPos = Accum->end();
 
-  for (AccumChains::iterator It = AccumulateMap.begin(); It != AccumulateMap.end(); ++It) {
-    unsigned ResReg = It->first;
-    std::vector<unsigned> Chain = It->second;
-    unsigned AddOpc;
-    const TargetRegisterClass* RC = MRI->getRegClass(ResReg);
-    MachineInstr* MI = MRI->getVRegDef(ResReg);
-    TPCII::OpType Type = getOpType(*MI);
-    AddOpc = getAddOpc(Type, RC);
+    for (AccumChains::iterator It = AccumulateMap.begin(); It != AccumulateMap.end(); ++It) {
+      unsigned ResReg = It->first;
+      const std::vector<unsigned> &Chain = It->second;
+      const TargetRegisterClass* RC = MRI->getRegClass(ResReg);
+      MachineInstr* MI = MRI->getVRegDef(ResReg);
+      TPCII::OpType Type = getOpType(*MI);
+      const unsigned AddOpc = getAddOpc(Type, RC);
 
-    unsigned ChainTerm = Chain.back();
-    if (TPC::ARFRegClass.hasSubClassEq(RC)) {
-      for (int i = Chain.size() - 2; i >= 0; --i) {
-         unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-         addQuadroRegs(Accum, TmpVreg, ChainTerm, Chain[i], AddOpc, Type, &TPC::VRFRegClass);
-         ChainTerm = TmpVreg;
-      }
-      unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-      addQuadroRegs(Accum, ResReg, ChainTerm, TmpVreg, AddOpc, Type, &TPC::VRFRegClass);
-      ForceSsa[ResReg] = TmpVreg;
-    } else if (TPC::DRFRegClass.hasSubClassEq(RC)) {
-      for (int i = Chain.size() - 2; i >= 0; --i) {
-         unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-         addDoubleRegs(Accum, TmpVreg, ChainTerm, Chain[i], AddOpc, Type, &TPC::VRFRegClass);
-         ChainTerm = TmpVreg;
-      }
-      unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-      addDoubleRegs(Accum, ResReg, ChainTerm, TmpVreg, AddOpc, Type, &TPC::VRFRegClass);
-      ForceSsa[ResReg] = TmpVreg;
-    } else if (TPC::ZRFRegClass.hasSubClassEq(RC)) {
-      for (int i = Chain.size() - 2; i >= 0; --i) {
-         unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-         addDoubleRegs(Accum, TmpVreg, ChainTerm, Chain[i], AddOpc, Type, &TPC::SRFRegClass);
-         ChainTerm = TmpVreg;
-      }
-      unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-      addDoubleRegs(Accum, ResReg, ChainTerm, TmpVreg, AddOpc, Type, &TPC::SRFRegClass);
-      ForceSsa[ResReg] = TmpVreg;
-    } else {
-      for (int i = Chain.size() - 2; i >= 0; --i) {
+      unsigned ChainTerm = Chain.back();
+      if (TPC::ARFRegClass.hasSubClassEq(RC)) {
+        for (int i = Chain.size() - 2; i >= 0; --i) {
+           unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
+           addQuadroRegs(Accum, TmpVreg, ChainTerm, Chain[i], AddOpc, Type, &TPC::VRFRegClass);
+           ChainTerm = TmpVreg;
+        }
         unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-        BuildMI(*Accum, AccumInsertPos, DebugLoc(), TII->get(AddOpc), TmpVreg)
+        addQuadroRegs(Accum, ResReg, ChainTerm, TmpVreg, AddOpc, Type, &TPC::VRFRegClass);
+        ForceSsa[ResReg] = TmpVreg;
+      } else if (TPC::DRFRegClass.hasSubClassEq(RC)) {
+        for (int i = Chain.size() - 2; i >= 0; --i) {
+           unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
+           addDoubleRegs(Accum, TmpVreg, ChainTerm, Chain[i], AddOpc, Type, &TPC::VRFRegClass);
+           ChainTerm = TmpVreg;
+        }
+        unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
+        addDoubleRegs(Accum, ResReg, ChainTerm, TmpVreg, AddOpc, Type, &TPC::VRFRegClass);
+        ForceSsa[ResReg] = TmpVreg;
+      } else if (TPC::ZRFRegClass.hasSubClassEq(RC)) {
+        for (int i = Chain.size() - 2; i >= 0; --i) {
+           unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
+           addDoubleRegs(Accum, TmpVreg, ChainTerm, Chain[i], AddOpc, Type, &TPC::SRFRegClass);
+           ChainTerm = TmpVreg;
+        }
+        unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
+        addDoubleRegs(Accum, ResReg, ChainTerm, TmpVreg, AddOpc, Type, &TPC::SRFRegClass);
+        ForceSsa[ResReg] = TmpVreg;
+      } else {
+        for (int i = Chain.size() - 2; i >= 0; --i) {
+          unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
+          BuildMI(*Accum, AccumInsertPos, DebugLoc(), TII->get(AddOpc), TmpVreg)
+              .addReg(ChainTerm)
+              .addReg(Chain[i])
+              .addImm(Type)
+              .addImm(0)
+              .addReg(TmpVreg, RegState::Undef)
+              .addReg(TPC::SPRF_TRUE)
+              .addImm(0);
+          ChainTerm = TmpVreg;
+        }
+
+        unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
+        BuildMI(*Accum, AccumInsertPos, DebugLoc(), TII->get(AddOpc), ResReg)
             .addReg(ChainTerm)
-            .addReg(Chain[i])
+            .addReg(TmpVreg)
             .addImm(Type)
             .addImm(0)
-            .addReg(PrevReg, RegState::Undef)
-            .addReg(TPC::SP0)
+            .addReg(ResReg, RegState::Undef)
+            .addReg(TPC::SPRF_TRUE)
             .addImm(0);
-        ChainTerm = TmpVreg;
+        ForceSsa[ResReg] = TmpVreg;
       }
-
-      unsigned TmpVreg = MRI->createVirtualRegister(MRI->getRegClass(ResReg));
-      BuildMI(*Accum, AccumInsertPos, DebugLoc(), TII->get(AddOpc), ResReg)
-          .addReg(ChainTerm)
-          .addReg(TmpVreg)
-          .addImm(Type)
-          .addImm(0)
-          .addReg(PrevReg, RegState::Undef)
-          .addReg(TPC::SP0)
-          .addImm(0);
-      ForceSsa[ResReg] = TmpVreg;
     }
-  }
 
-  // To preserve SSA replace original accumulator values with a new reg inside this loop
-  for (MachineBasicBlock* MBB : CurLoop->getBlocks()) {
-    for (MachineInstr& MI : MBB->instrs()) {
-      for (MachineOperand& MO : MI.operands()) {
-        if (MO.isReg()) {
-          for (RegMap::iterator It = ForceSsa.begin();
-               It != ForceSsa.end(); ++It) {
-            if (MO.getReg() == It->first) {
+    // To preserve SSA replace original accumulator values with a new reg inside this loop
+    for (MachineBasicBlock* MBB : CurLoop->getBlocks()) {
+      for (MachineInstr& MI : MBB->instrs()) {
+        for (MachineOperand& MO : MI.operands()) {
+          if (MO.isReg()) {
+            auto It = ForceSsa.find(MO.getReg());
+            if (It != ForceSsa.end())
               MO.setReg(It->second);
-            }
           }
         }
       }
     }
   }
 
+  const auto DumpInstructions = [](const std::vector<MachineInstr*> &InstrVec){
+    for (MachineInstr *MI: InstrVec) {
+      LLVM_DEBUG(MI->dump());
+    }
+  };
+
   for (unsigned i = 0; i < UnrollCount; ++i) {
     LLVM_DEBUG(dbgs() << "\n******** Thread " << i << " *********\n");
-
     LLVM_DEBUG(dbgs() << "\nPhis\n");
-    for (unsigned j = 0; j < ExecThreads[i].Phis.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Phis[j]->dump());
-    }
-    for (unsigned j = 0; j < ExecThreads[i].Dphi.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Dphi[j]->dump());
-    }
-
+    DumpInstructions(ExecThreads[i].Phis);
+    DumpInstructions(ExecThreads[i].Dphi);
     LLVM_DEBUG(dbgs() << "\nLoop body\n");
-    for (unsigned j = 0; j < ExecThreads[i].ThreadInstrs.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].ThreadInstrs[j]->dump());
-    }
+    DumpInstructions(ExecThreads[i].ThreadInstrs);
   }
   LLVM_DEBUG(dbgs() << "\n");
 
   // TODO: proper alignment strategy
-  std::vector<unsigned> Shifts;
-  for (unsigned i = 0; i < UnrollCount; ++i) {
-    Shifts.push_back(std::min(ExecThreads[i].ThreadInstrs.size() - 1, (size_t)UnrollCount - i));
-  }
+  bool Aligned = false;
+  if (DoPipelining) {
+    std::vector<unsigned> Shifts;
+    for (unsigned i = 0; i < UnrollCount; ++i)
+      Shifts.push_back(std::min(ExecThreads[i].ThreadInstrs.size() - 1, (size_t)UnrollCount - i));
 
-  //MF->dump();
-  bool Aligned = DoPipelining ? align(Shifts) : false;
+    Aligned = align(Shifts);
+  }
 
   if (!DoPipelining) {
     setPrologInserter();
@@ -1418,16 +2048,16 @@ bool TPCPipeliner::unrollAndAlign(unsigned UnrollCount, bool DoPipelining) {
   }
 
   // Change the increment value of the loop
-  if (LoopInst->getOperand(2).isImm()) {
-    LoopInst->getOperand(2).setImm(LoopInst->getOperand(2).getImm()*UnrollCount);
+  {
+    MachineOperand &StepOp = LoopInst->getOperand(2);
+    assert(StepOp.isImm());
+    StepOp.setImm(StepOp.getImm() * UnrollCount);
 
-    if (LoopInst->getOperand(2).getImm() > 0 && LoopInst->getOperand(3).getImm() == 5) {
-      LoopInst->getOperand(3).setImm(2);
-    }
-  } else {
-    llvm_unreachable("");
+    MachineOperand &CompOp = LoopInst->getOperand(3);
+    if (StepOp.getImm() > 0 && CompOp.getImm() == TPCII::LoopNE)
+      CompOp.setImm(TPCII::LoopLT);
   }
-  
+
   if (Aligned) {
     PrologInserter = --Prolog->end();
     modifyBoundary(UnrollCount);
@@ -1435,39 +2065,23 @@ bool TPCPipeliner::unrollAndAlign(unsigned UnrollCount, bool DoPipelining) {
 
   for (unsigned i = 0; i < UnrollCount; ++i) {
     LLVM_DEBUG(dbgs() << "\n******** Thread " << i << " *********\n");
-
     LLVM_DEBUG(dbgs() << "\nPrologue\n");
-    for (unsigned j = 0; j < ExecThreads[i].Dprolog.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Dprolog[j]->dump());
-    }
-
+    DumpInstructions(ExecThreads[i].Dprolog);
     LLVM_DEBUG(dbgs() << "\nPhis\n");
-    for (unsigned j = 0; j < ExecThreads[i].Phis.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Phis[j]->dump());
-    }
-    for (unsigned j = 0; j < ExecThreads[i].Dphi.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Dphi[j]->dump());
-    }
-
+    DumpInstructions(ExecThreads[i].Phis);
+    DumpInstructions(ExecThreads[i].Dphi);
     LLVM_DEBUG(dbgs() << "\nLoop body\n");
-    for (unsigned j = 0; j < ExecThreads[i].Dloop.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Dloop[j]->dump());
-    }
-    for (unsigned j = 0; j < ExecThreads[i].Dshift.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Dshift[j]->dump());
-    }
-
+    DumpInstructions(ExecThreads[i].Dloop);
+    DumpInstructions(ExecThreads[i].Dshift);
     LLVM_DEBUG(dbgs() << "\nEpilogue\n");
-    for (unsigned j = 0; j < ExecThreads[i].Epilog.size();++j) {
-      LLVM_DEBUG(ExecThreads[i].Epilog[j]->dump());
-    }
+    DumpInstructions(ExecThreads[i].Epilog);
   }
   LLVM_DEBUG(dbgs() << "\n");
 
   return true;
 }
 
-void TPCPipeliner::calcLoopForm() {
+bool TPCPipeliner::calcLoopForm() {
   int CmpMode = LoopInst->getOperand(3).getImm();
   if (CmpMode == TPCII::LoopLE || CmpMode == TPCII::LoopGE || CmpMode == TPCII::LoopEQ) {
     Inclusive = true;
@@ -1477,32 +2091,35 @@ void TPCPipeliner::calcLoopForm() {
 
   if (LoopInst->getOperand(2).isImm()) {
     Ascending = (LoopInst->getOperand(2).getImm() > 0);
-    return;
+    return true;
   }
 
   if (LoopInst->getOperand(0).isImm() && LoopInst->getOperand(1).isImm()) {
     Ascending = (LoopInst->getOperand(0).getImm() < LoopInst->getOperand(1).getImm());
-    return;
+    return true;
   }
 
-  // TODO: Can't say, should prohibit pipelining
+  return false;  // loop form was not detected - prohibit unrolling
 }
 
 void TPCPipeliner::modifyBoundary(unsigned Decrement) {
-  if (LoopInst->getOperand(1).isImm()) {
-    if (LoopInst->getOperand(2).isImm()) {
-      int Step = LoopInst->getOperand(2).getImm();
+  MachineOperand &BoundOp = LoopInst->getOperand(1);
+  MachineOperand &StepOp = LoopInst->getOperand(2);
+  MachineOperand &CmpOp = LoopInst->getOperand(3);
+  if (BoundOp.isImm()) {
+    if (StepOp.isImm()) {
+      int Step = StepOp.getImm();
       if (Step > 0) {
-        LoopInst->getOperand(1).setImm(LoopInst->getOperand(1).getImm() - Decrement);
+        BoundOp.setImm(BoundOp.getImm() - Decrement);
       } else {
-        LoopInst->getOperand(1).setImm(LoopInst->getOperand(1).getImm() + Decrement);
+        BoundOp.setImm(BoundOp.getImm() + Decrement);
       }
     } else {
-      int CmpMode = LoopInst->getOperand(3).getImm();
+      int CmpMode = CmpOp.getImm();
       if (CmpMode == TPCII::LoopLE || CmpMode == TPCII::LoopLT) {
-        LoopInst->getOperand(1).setImm(LoopInst->getOperand(1).getImm() - Decrement);
+        BoundOp.setImm(BoundOp.getImm() - Decrement);
       } else if (CmpMode == TPCII::LoopGE || CmpMode == TPCII::LoopGT) {
-        LoopInst->getOperand(1).setImm(LoopInst->getOperand(1).getImm() + Decrement);
+        BoundOp.setImm(BoundOp.getImm() + Decrement);
       } else {
         // Can't infer ascending or descending  nature of the loop. Have to create
         // a runtime check.
@@ -1511,56 +2128,56 @@ void TPCPipeliner::modifyBoundary(unsigned Decrement) {
       }
     }
   } else {
-    unsigned NewBoundary = MRI->createVirtualRegister(MRI->getRegClass(LoopInst->getOperand(1).getReg()));
-    if (LoopInst->getOperand(2).isImm()) {
-      int Step = LoopInst->getOperand(2).getImm();
+    unsigned NewBoundary = MRI->createVirtualRegister(MRI->getRegClass(BoundOp.getReg()));
+    if (StepOp.isImm()) {
+      int Step = StepOp.getImm();
       if (Step > 0) {
-        unsigned LoopCounter = LoopInst->getOperand(1).getReg();
+        unsigned LoopCounter = BoundOp.getReg();
         BuildMI(*Prolog, PrologInserter, DebugLoc(), TII->get(TPC::SUBsip), NewBoundary)
             .addReg(LoopCounter)
             .addImm(Decrement)
             .addImm(TPCII::OpType::INT32)
             .addImm(0) // Switch
             .addReg(LoopCounter, RegState::Undef)
-            .addReg(TPC::SP0)
+            .addReg(TPC::SPRF_TRUE)
             .addImm(0);
-        LoopInst->getOperand(1).setReg(NewBoundary);
+        BoundOp.setReg(NewBoundary);
       } else {
-        unsigned LoopReg = LoopInst->getOperand(1).getReg();
+        unsigned LoopReg = BoundOp.getReg();
         BuildMI(*Prolog, PrologInserter, DebugLoc(), TII->get(TPC::ADDsip), NewBoundary)
             .addReg(LoopReg)
             .addImm(Decrement)
             .addImm(TPCII::OpType::INT32)
             .addImm(0)
             .addReg(LoopReg, RegState::Undef)
-            .addReg(TPC::SP0)
+            .addReg(TPC::SPRF_TRUE)
             .addImm(0);
-        LoopInst->getOperand(1).setReg(NewBoundary);
+        BoundOp.setReg(NewBoundary);
       }
     } else {
-      int CmpMode = LoopInst->getOperand(3).getImm();
+      int CmpMode = CmpOp.getImm();
       if (CmpMode == TPCII::LoopLE || CmpMode == TPCII::LoopLT) {
-        unsigned LoopCounter = LoopInst->getOperand(1).getReg();
+        unsigned LoopCounter = BoundOp.getReg();
         BuildMI(*Prolog, PrologInserter, DebugLoc(), TII->get(TPC::SUBsip), NewBoundary)
             .addReg(LoopCounter)
             .addImm(Decrement)
             .addImm(TPCII::OpType::INT32)
             .addImm(0)
             .addReg(LoopCounter, RegState::Undef)
-            .addReg(TPC::SP0)
+            .addReg(TPC::SPRF_TRUE)
             .addImm(0);
-        LoopInst->getOperand(1).setReg(NewBoundary);
+        BoundOp.setReg(NewBoundary);
       } else if (CmpMode == TPCII::LoopGE || CmpMode == TPCII::LoopGT) {
-        unsigned LoopReg = LoopInst->getOperand(1).getReg();
+        unsigned LoopReg = BoundOp.getReg();
         BuildMI(*Prolog, PrologInserter, DebugLoc(), TII->get(TPC::ADDsip), NewBoundary)
             .addReg(LoopReg)
             .addImm(Decrement)
             .addImm(TPCII::OpType::INT32)
             .addImm(0)
             .addReg(LoopReg, RegState::Undef)
-            .addReg(TPC::SP0)
+            .addReg(TPC::SPRF_TRUE)
             .addImm(0);
-        LoopInst->getOperand(1).setReg(NewBoundary);
+        BoundOp.setReg(NewBoundary);
       } else {
         // Can't infer ascending or descending  nature of the loop. Have to create
         // a runtime check.
@@ -1571,12 +2188,13 @@ void TPCPipeliner::modifyBoundary(unsigned Decrement) {
 }
 
 void TPCPipeliner::replaceWithZero(MachineOperand& ReplaceMO, TPCII::OpType ot) {
-  MachineBasicBlock::iterator ZeroInsertPos = Prolog->begin();
-  while(ZeroInsertPos != Prolog->end() && (*ZeroInsertPos).isPHI()) ++ZeroInsertPos;
-  if (ReplaceMO.isFPImm() || ReplaceMO.isImm()) {
+  MachineBasicBlock::iterator ZeroInsertPos = Prolog->getFirstNonPHI();
+  if (ReplaceMO.isImm()) {
+    ReplaceMO.setImm(0);
+  } else if (ReplaceMO.isFPImm()) {
     // Even if the immediate is a floating point number, MOV uses integer bit
     // representation.
-    ReplaceMO.setImm(0);
+    ReplaceMO.ChangeToImmediate(0);
   } else if (ReplaceMO.isReg()) {
     const auto AddMovZero = [&](unsigned Opcode, unsigned Reg) {
       BuildMI(*Prolog, ZeroInsertPos++, DebugLoc(), TII->get(Opcode), Reg)
@@ -1584,7 +2202,7 @@ void TPCPipeliner::replaceWithZero(MachineOperand& ReplaceMO, TPCII::OpType ot) 
          .addImm(ot)
          .addImm(0)
          .addReg(Reg, RegState::Undef)
-         .addReg(TPC::SP0)
+         .addReg(TPC::SPRF_TRUE)
          .addImm(0);
     };
 
@@ -1629,44 +2247,41 @@ void TPCPipeliner::replaceWithZero(MachineOperand& ReplaceMO, TPCII::OpType ot) 
   }
 }
 
+// Return index of machine basic block argument in the given phi instruction
+static llvm::Optional<unsigned> getBBIndexAsPhiOperand(MachineInstr &Phi,
+                                                       MachineBasicBlock &BB) {
+  for (auto &Item: enumerate(Phi.uses())) {
+    if (Item.value().isMBB() && Item.value().getMBB() == &BB)
+      return Item.index();
+  }
+  return llvm::None;
+}
+
 // Some cloned phi-nodes must start with the same values (for accumulators)
 // the others must adjust out-of-loop uses and create instructions in the preheader
-void TPCPipeliner::patchPhiStartValue(MachineInstr* Phi, int UnrollCount,
-                                      MachineBasicBlock* MBB,
-                                      MachineBasicBlock::instr_iterator I) {
-  std::vector<MachineInstr*> Path;
-  unsigned PhiDef = Phi->getOperand(0).getReg();
+void TPCPipeliner::patchPhiStartValue(MachineInstr &Phi, int UnrollCount) {
+  assert(Phi.isPHI());
+  MachineBasicBlock *const MBB = Phi.getParent();
+  const unsigned PhiDef = Phi.getOperand(0).getReg();
 
-  int OutOfLoopUse = -1;
-  int LoopUse = -1;
+  const unsigned OutOfLoopUse = getBBIndexAsPhiOperand(Phi, *Prolog).getValue();
+  const unsigned LoopUse = getBBIndexAsPhiOperand(Phi, *Latch).getValue();
 
-  int counter = 0;
-  for (MachineOperand& MO : Phi->uses()) {
-    if (MO.isMBB() && MO.getMBB() == Prolog) {
-      OutOfLoopUse = counter;
-    }
-    if (MO.isMBB() && MO.getMBB() == Latch) {
-      LoopUse = counter;
-    }
-    ++counter;
-  }
-
-  phiPath(Phi, Path, Phi->getOperand(OutOfLoopUse));
+  std::vector<MachineInstr*> Path = phiPath(&Phi, Phi.getOperand(OutOfLoopUse));
   std::reverse(Path.begin(), Path.end());
 
   // TODO: what if not a reg
-  unsigned FinalReg = Phi->getOperand(OutOfLoopUse).getReg();
+  unsigned FinalReg = Phi.getOperand(OutOfLoopUse).getReg();
   unsigned FirstReg = FinalReg;
 
   std::vector<unsigned> UseVec;
   std::vector<unsigned> DefVec;
 
   for (int i = 1; i < UnrollCount; ++i) {
-    MachineInstr* ClonedPhi = MBB->getParent()->CloneMachineInstr(&(*I));
+    MachineInstr* ClonedPhi = MBB->getParent()->CloneMachineInstr(&Phi);
     ExecThreads[i].Phis.push_back(ClonedPhi);
     replaceVregs(ClonedPhi, i);
-    MBB->insert(I, ClonedPhi);
-    RegMap RM;
+    MBB->insert(MachineBasicBlock::instr_iterator(Phi), ClonedPhi);
 
     if (!Path.empty() && TPCII::isMac(Path.back()->getDesc())) {
       MachineOperand& ReplaceMO = ClonedPhi->getOperand(OutOfLoopUse);
@@ -1674,7 +2289,7 @@ void TPCPipeliner::patchPhiStartValue(MachineInstr* Phi, int UnrollCount,
       continue;
     }
 
-    RM[PhiDef] = FinalReg;
+    RegMap RM = {{PhiDef, FinalReg}};
 
     for (MachineInstr* MI : Path) {
       MachineInstr* Copy = Prolog->getParent()->CloneMachineInstr(MI);
@@ -1699,8 +2314,8 @@ void TPCPipeliner::patchPhiStartValue(MachineInstr* Phi, int UnrollCount,
           ExecThreads[i].CounterInstrs.push_back(Copy);
         }
         // Parallel threads shouldn't be tied to the same vreg
-        if (Phi->getOperand(OutOfLoopUse).isReg()) {
-          unsigned phi_reg = Phi->getOperand(OutOfLoopUse).getReg();
+        if (Phi.getOperand(OutOfLoopUse).isReg()) {
+          unsigned phi_reg = Phi.getOperand(OutOfLoopUse).getReg();
           if (MO.getReg() == phi_reg && MO.isTied()) {
             unsigned copy_reg  = MRI->createVirtualRegister(MRI->getRegClass(MO.getReg()));
             BuildMI(*Prolog, --Prolog->end()/*PrologInserter*/, DebugLoc(), TII->get(TargetOpcode::COPY), copy_reg)
@@ -1725,13 +2340,14 @@ void TPCPipeliner::patchPhiStartValue(MachineInstr* Phi, int UnrollCount,
   AdjustedPhis[LoopUse] = UseVec;
 }
 
-
 // Find all instructions that participate in a phi-node calculation inside a loop
-void TPCPipeliner::phiPath(MachineInstr* Phi, std::vector<MachineInstr*>& Path, MachineOperand& HeadPhiUse) {
+std::vector<MachineInstr*> TPCPipeliner::phiPath(MachineInstr *Phi,
+                                                 MachineOperand &HeadPhiUse) {
   std::vector<MachineOperand*> OperandStack;
   OperandStack.push_back(&Phi->getOperand(1));
   OperandStack.push_back(&Phi->getOperand(3));
 
+  std::vector<MachineInstr*> Path;
   while(!OperandStack.empty()) {
     MachineOperand* MO = OperandStack.back();
     OperandStack.pop_back();
@@ -1756,43 +2372,7 @@ void TPCPipeliner::phiPath(MachineInstr* Phi, std::vector<MachineInstr*>& Path, 
 
     Path.push_back(DefMI);
   }
-}
-
-// TODO: full implementation of SSA loop search
-void TPCPipeliner::findLinearInduction(unsigned UnrollCount) {
-  for (MachineBasicBlock* MBB : CurLoop->getBlocks()) {
-    for (MachineBasicBlock::instr_iterator I = MBB->instr_begin();
-         I != MBB->instr_end(); ++I) {
-      MachineInstr* Phi = &(*I);
-
-      if (!Phi->isPHI()) break;
-
-      unsigned PhiDef = Phi->getOperand(0).getReg();
-
-      int LoopUse = -1;
-
-      int counter = 0;
-      for (MachineOperand& MO : Phi->uses()) {
-        if (MO.isMBB() && MO.getMBB() == Latch) {
-          LoopUse = counter;
-        }
-        ++counter;
-      }
-
-      MachineInstr* DefMI = MRI->getVRegDef(Phi->getOperand(LoopUse).getReg());
-      if (DefMI == nullptr) continue;
-      for (MachineOperand& MO : DefMI->uses()) {
-        if (MO.isReg() && MO.getReg() == PhiDef && TPCII::isAdd(DefMI->getDesc())) {
-          //found a linear induction
-          if (DefMI->getOperand(2).isImm()) {
-            LinearIVs[DefMI] = 2;
-          } else if (DefMI->getOperand(1).isImm()) {
-            LinearIVs[DefMI] = 1;
-          }
-        }
-      }
-    }
-  }
+  return Path;
 }
 
 // Find a position for prolog counters. We need to insert them before
@@ -1814,69 +2394,52 @@ struct PhiDepTree {
   MachineInstr* Phi;
   int Preds;
 
-  PhiDepTree() : Phi(nullptr), Preds(0) {}
+  PhiDepTree(MachineInstr *PhiInstr) : Phi(PhiInstr), Preds(0) {}
 };
 
-static void DFS(PhiDepTree* Node, std::list<MachineInstr*>& SortedPhis) {
-  for (PhiDepTree* Succ : Node->succs) {
-    DFS(Succ, SortedPhis);
+static void DFS(const PhiDepTree &Node,
+                std::vector<MachineInstr *> &SortedPhis) {
+  for (PhiDepTree *Succ : Node.succs) {
+    DFS(*Succ, SortedPhis);
   }
-  if (std::find(SortedPhis.begin(), SortedPhis.end(), Node->Phi) == SortedPhis.end()) {
-    SortedPhis.push_back(Node->Phi);
+  if (!is_contained(SortedPhis, Node.Phi)) {
+    SortedPhis.push_back(Node.Phi);
   }
 }
 
 void TPCPipeliner::sortDelayedPhis() {
-  std::list<MachineInstr*> SortedPhis;
-  std::vector<PhiDepTree*> Tree;
-
   // Create all nodes
-  for (MachineInstr* Phi : DelayedPhis) {
-    PhiDepTree* Node = new PhiDepTree();
-    Node->Phi = Phi;
-    Tree.push_back(Node);
-  }
+  std::vector<PhiDepTree> Tree(DelayedPhis.begin(), DelayedPhis.end());
 
   // Build dep graph
   // TODO: for now just implement naive algorythm. But it's too slow and should be rewritten
   for (unsigned i = 0; i < DelayedPhis.size(); ++i) {
     MachineInstr* Dependant = DelayedPhis[i];
-    PhiDepTree* DependantNode = Tree[i];
+    PhiDepTree &DependantNode = Tree[i];
 
-    int OutOfLoopUse = -1;
-    std::vector<MachineInstr*> Path;
+    const unsigned OutOfLoopUse =
+        getBBIndexAsPhiOperand(*Dependant, *Prolog).getValue();
 
-    int counter = 0;
-    for (MachineOperand& MO : Dependant->uses()) {
-      if (MO.isMBB() && MO.getMBB() == Prolog) {
-        OutOfLoopUse = counter;
-      }
-      ++counter;
-    }
-
-    phiPath(Dependant, Path, Dependant->getOperand(OutOfLoopUse));
+    const std::vector<MachineInstr*> Path =
+        phiPath(Dependant, Dependant->getOperand(OutOfLoopUse));
 
     for (unsigned j = 0; j < DelayedPhis.size(); ++j) {
       MachineInstr* Phi = DelayedPhis[j];
-      PhiDepTree* PhiNode = Tree[j];
-      unsigned LoopReg = -1;
+      PhiDepTree &PhiNode = Tree[j];
 
       if (Phi == Dependant) continue;
 
-      int counter = 0;
-      for (MachineOperand& MO : Phi->uses()) {
-        if (MO.isMBB() && MO.getMBB() == Latch) {
-          LoopReg = Phi->getOperand(counter).getReg();
-        }
-        ++counter;
-      }
+      const llvm::Optional<unsigned> LatchOpIx =
+          getBBIndexAsPhiOperand(*Phi, *Latch);
+      const llvm::Optional<Register> LoopReg = LatchOpIx.map(
+          [Phi](unsigned Value){ return Phi->getOperand(Value).getReg(); });
 
       // Find wether the dependant path uses the def of Phi
       for (MachineInstr* MI : Path) {
         for (MachineOperand& MO : MI->uses()) {
           if (MO.isReg() && (MO.getReg() == LoopReg || MO.getReg() == Phi->getOperand(0).getReg())) {
-            PhiNode->succs.push_back(DependantNode);
-            DependantNode->Preds++;
+            PhiNode.succs.push_back(&DependantNode);
+            DependantNode.Preds++;
             break;
           }
         }
@@ -1885,35 +2448,91 @@ void TPCPipeliner::sortDelayedPhis() {
   }
 
   // Topological sort
-  for (PhiDepTree* Node : Tree) {
-    if (Node->Preds == 0) {
-      DFS(Node, SortedPhis);
+  DelayedPhis.clear();
+  for (const PhiDepTree &Node : Tree) {
+    if (Node.Preds == 0) {
+      DFS(Node, DelayedPhis);
     }
   }
-
-  SortedPhis.reverse();
-  DelayedPhis = std::vector<MachineInstr*>(SortedPhis.begin(), SortedPhis.end());
-
-  for (PhiDepTree* Node : Tree) {
-    delete Node;
-  }
+  std::reverse(DelayedPhis.begin(), DelayedPhis.end());
 }
 
 bool TPCPipeliner::checkForProhibitingInstructions() {
   for (MachineBasicBlock* MBB : CurLoop->getBlocks()) {
     for (const MachineInstr& MI : MBB->instrs()) {
       if (MI.getOpcode() == TPC::ASO) {
+        LLVM_DEBUG(dbgs() << "ASO detected: " << MI);
+        return true;
+      }
+      if (MI.getOpcode() == TPC::CACHE_FLUSH) {
+        LLVM_DEBUG(dbgs() << "CACHE_FLUSH detected: " << MI);
+        return true;
+      }
+      if (MI.getOpcode() == TPC::CACHE_INVALIDATE) {
+        LLVM_DEBUG(dbgs() << "CACHE_INVALIDATE detected: " << MI);
         return true;
       }
       if (TPCInstrInfo::isMMIOAccess(MI)) {
+        LLVM_DEBUG(dbgs() << "MMIOAccess detected: " << MI);
         return true;
       }
 
+      // Prohibit hardware registries usage which are single in their registry
+      // class to avoid their spilling.
       for (const MachineOperand& MO: MI.defs()) {
         assert(MO.isReg() && "Def can't be a constant");
         if (MO.getReg().isPhysical()) continue;
         const TargetRegisterClass *RC = MRI->getRegClass(MO.getReg());
+        if (TPC::HWRMWRegRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "RMW-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWDivStepRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "DivStep-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWSCarryRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "SCarry-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWVCarryRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "VCarry-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWZPRegRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "ZP-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWTnsrRegLdRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "Tensor load like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWTnsrRegStRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "Tensor store like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWOffsSizeRegLdRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "OffsSize load like definition: " << MI);
+          return true;
+        }
+        if (TPC::HWOffsSizeRegStRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "OffsSize store like definition: " << MI);
+          return true;
+        }
         if (TPC::HWPCRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "PC-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HVRFRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "HVRF-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HVPRFRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "HVPRF-like definition: " << MI);
+          return true;
+        }
+        if (TPC::HSPRFRegClass.hasSubClassEq(RC)) {
+          LLVM_DEBUG(dbgs() << "HSPRF-like definition: " << MI);
           return true;
         }
       }
@@ -1935,7 +2554,7 @@ void TPCPipeliner::addQuadroRegs(MachineBasicBlock* Accum, unsigned Res, unsigne
       .addImm(Type)
       .addImm(0)
       .addReg(Res0, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   BuildMI(*Accum, Accum->end(), DebugLoc(), TII->get(AddOpc), Res1)
       .addReg(Op1, 0, TPC::sub_1)
@@ -1943,7 +2562,7 @@ void TPCPipeliner::addQuadroRegs(MachineBasicBlock* Accum, unsigned Res, unsigne
       .addImm(Type)
       .addImm(0)
       .addReg(Res1, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   BuildMI(*Accum, Accum->end(), DebugLoc(), TII->get(AddOpc), Res2)
       .addReg(Op1, 0, TPC::sub_2)
@@ -1951,7 +2570,7 @@ void TPCPipeliner::addQuadroRegs(MachineBasicBlock* Accum, unsigned Res, unsigne
       .addImm(Type)
       .addImm(0)
       .addReg(Res2, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   BuildMI(*Accum, Accum->end(), DebugLoc(), TII->get(AddOpc), Res3)
       .addReg(Op1, 0, TPC::sub_3)
@@ -1959,7 +2578,7 @@ void TPCPipeliner::addQuadroRegs(MachineBasicBlock* Accum, unsigned Res, unsigne
       .addImm(Type)
       .addImm(0)
       .addReg(Res3, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   BuildMI(*Accum, Accum->end(), DebugLoc(), TII->get(TargetOpcode::REG_SEQUENCE), Res)
       .addReg(Res0)
@@ -1983,7 +2602,7 @@ void TPCPipeliner::addDoubleRegs(MachineBasicBlock* Accum, unsigned Res, unsigne
       .addImm(Type)
       .addImm(0)
       .addReg(Res0, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   BuildMI(*Accum, Accum->end(), DebugLoc(), TII->get(AddOpc), Res1)
       .addReg(Op1, 0, TPC::sub_1)
@@ -1991,7 +2610,7 @@ void TPCPipeliner::addDoubleRegs(MachineBasicBlock* Accum, unsigned Res, unsigne
       .addImm(Type)
       .addImm(0)
       .addReg(Res1, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
 
   BuildMI(*Accum, Accum->end(), DebugLoc(), TII->get(TargetOpcode::REG_SEQUENCE), Res)

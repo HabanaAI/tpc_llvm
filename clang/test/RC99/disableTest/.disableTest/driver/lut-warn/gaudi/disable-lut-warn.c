@@ -7,8 +7,8 @@ void main(int x0, int x3, int dest0)
 
     float64 __local *res0 = (float64  __local *)dest0;
     float64 temp_res0 = 0;
-    temp_res0 = v_f32_lookup_1c_v_b(*ptr_x0, temp_res0, 1, e_fp32_tanh, x3, 0);
-    temp_res0 = v_f32_lookup_1c_v_b(*ptr_x0, temp_res0, 1, e_fp32_rsqrt, x3, 0);
+    temp_res0 = v_f32_lookup_1c(*ptr_x0, e_fp32_tanh, 1, temp_res0, x3, 0);
+    temp_res0 = v_f32_lookup_1c(*ptr_x0, e_fp32_rsqrt, 1, temp_res0, x3, 0);
     *res0 = temp_res0;
 }
 

@@ -1,6 +1,6 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99  %s -o - | FileCheck  %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck  %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck  %s
 
 void main(int dest, int src1, int vpredp, _Bool pred) {
   volatile short128 __local *dest_ptr = (short128 __local *)dest;
@@ -30,7 +30,7 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
 
     res = v_convert_i8_to_i16_b(x, SW_RHNE, res, 1, 0);
     *dest_ptr++ = res;
-// CHECK: convert.i8 target_type=int16 rhne [[DEST]], [[SRC]], %SP0
+// CHECK: convert.i8 target_type=int16 rhne [[DEST]], [[SRC]]
 
     income = res;
   }

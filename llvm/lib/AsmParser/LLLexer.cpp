@@ -531,6 +531,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(undef);
   KEYWORD(null);
   KEYWORD(none);
+  KEYWORD(poison);
   KEYWORD(to);
   KEYWORD(caller);
   KEYWORD(within);
@@ -624,6 +625,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(amdgpu_ps);
   KEYWORD(amdgpu_cs);
   KEYWORD(amdgpu_kernel);
+  KEYWORD(amdgpu_gfx);
   KEYWORD(tailcc);
 
   KEYWORD(cc);
@@ -651,6 +653,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(nest);
   KEYWORD(noalias);
   KEYWORD(nobuiltin);
+  KEYWORD(nocallback);
   KEYWORD(nocapture);
   KEYWORD(noduplicate);
   KEYWORD(nofree);
@@ -658,15 +661,20 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(noinline);
   KEYWORD(norecurse);
   KEYWORD(nonlazybind);
+  KEYWORD(nomerge);
   KEYWORD(nonnull);
+  KEYWORD(noprofile);
   KEYWORD(noredzone);
   KEYWORD(noreturn);
   KEYWORD(nosync);
   KEYWORD(nocf_check);
+  KEYWORD(noundef);
   KEYWORD(nounwind);
+  KEYWORD(null_pointer_is_valid);
   KEYWORD(optforfuzzing);
   KEYWORD(optnone);
   KEYWORD(optsize);
+  KEYWORD(preallocated);
   KEYWORD(readnone);
   KEYWORD(readonly);
   KEYWORD(returned);
@@ -693,6 +701,8 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(writeonly);
   KEYWORD(zeroext);
   KEYWORD(immarg);
+  KEYWORD(byref);
+  KEYWORD(mustprogress);
 
   KEYWORD(type);
   KEYWORD(opaque);
@@ -717,6 +727,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(vscale);
   KEYWORD(x);
   KEYWORD(blockaddress);
+  KEYWORD(dso_local_equivalent);
 
   // Metadata types.
   KEYWORD(distinct);
@@ -738,6 +749,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(name);
   KEYWORD(summaries);
   KEYWORD(flags);
+  KEYWORD(blockcount);
   KEYWORD(linkage);
   KEYWORD(notEligibleToImport);
   KEYWORD(live);
@@ -754,6 +766,8 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(alwaysInline);
   KEYWORD(calls);
   KEYWORD(callee);
+  KEYWORD(params);
+  KEYWORD(param);
   KEYWORD(hotness);
   KEYWORD(unknown);
   KEYWORD(hot);
@@ -788,6 +802,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(sizeM1);
   KEYWORD(bitMask);
   KEYWORD(inlineBits);
+  KEYWORD(vcall_visibility);
   KEYWORD(wpdResolutions);
   KEYWORD(wpdRes);
   KEYWORD(indir);
@@ -803,10 +818,12 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(byte);
   KEYWORD(bit);
   KEYWORD(varFlags);
+#ifdef LLVM_TPC_COMPILER
   KEYWORD(IndexSpace);
   KEYWORD(IndexSpaceb);
   KEYWORD(ReductionOrNormAxes);
   KEYWORD(UnrollInfo);
+#endif
 
 #undef KEYWORD
 
@@ -821,11 +838,11 @@ lltok::Kind LLLexer::LexIdentifier() {
 
   TYPEKEYWORD("void",      Type::getVoidTy(Context));
   TYPEKEYWORD("half",      Type::getHalfTy(Context));
+  TYPEKEYWORD("bfloat",    Type::getBFloatTy(Context));
 #ifdef LLVM_TPC_COMPILER
   TYPEKEYWORD("f8_143",    Type::getF8_143Ty(Context));
   TYPEKEYWORD("f8_152",    Type::getF8_152Ty(Context));
-  TYPEKEYWORD("bfloat",    Type::getBFloat16Ty(Context));
-  TYPEKEYWORD("bfloat16",  Type::getBFloat16Ty(Context));
+  TYPEKEYWORD("bfloat16",  Type::getBFloatTy(Context));
 #endif
   TYPEKEYWORD("float",     Type::getFloatTy(Context));
   TYPEKEYWORD("double",    Type::getDoubleTy(Context));
@@ -835,6 +852,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   TYPEKEYWORD("label",     Type::getLabelTy(Context));
   TYPEKEYWORD("metadata",  Type::getMetadataTy(Context));
   TYPEKEYWORD("x86_mmx",   Type::getX86_MMXTy(Context));
+  TYPEKEYWORD("x86_amx",   Type::getX86_AMXTy(Context));
   TYPEKEYWORD("token",     Type::getTokenTy(Context));
 
 #undef TYPEKEYWORD
@@ -992,24 +1010,19 @@ lltok::Kind LLLexer::LexIdentifier() {
 ///    HexFP128Constant  0xL[0-9A-Fa-f]+
 ///    HexPPC128Constant 0xM[0-9A-Fa-f]+
 ///    HexHalfConstant   0xH[0-9A-Fa-f]+
+///    HexBFloatConstant 0xR[0-9A-Fa-f]+
 /// LLVM_TPC_COMPILER:
 ///    HexF8_143Constant 0xG[0-9A-Fa-f]+
 ///    HexF8_152Constant 0xI[0-9A-Fa-f]+
-///    HexBFloat16Constant 0xR[0-9A-Fa-f]+
 lltok::Kind LLLexer::Lex0x() {
   CurPtr = TokStart + 2;
 
   char Kind;
+  if ((CurPtr[0] >= 'K' && CurPtr[0] <= 'M') || CurPtr[0] == 'H' ||
 #ifdef LLVM_TPC_COMPILER
-  if ((CurPtr[0] == 'G') || CurPtr[0] == 'I')
-    Kind = *CurPtr++;
-  else
+      CurPtr[0] == 'G' || CurPtr[0] == 'I' ||
 #endif
-  if ((CurPtr[0] >= 'K' && CurPtr[0] <= 'M') || CurPtr[0] == 'H'
-#ifdef LLVM_TPC_COMPILER
-      || CurPtr[0] == 'R'
-#endif
-  ) {
+      CurPtr[0] == 'R') {
     Kind = *CurPtr++;
   } else {
     Kind = 'J';
@@ -1055,12 +1068,12 @@ lltok::Kind LLLexer::Lex0x() {
     APFloatVal = APFloat(APFloat::IEEEhalf(),
                          APInt(16,HexIntToVal(TokStart+3, CurPtr)));
     return lltok::APFloat;
-#ifdef LLVM_TPC_COMPILER
   case 'R':
     // Brain floating point
-    APFloatVal = APFloat(APFloat::BFloat16(),
+    APFloatVal = APFloat(APFloat::BFloat(),
                          APInt(16, HexIntToVal(TokStart + 3, CurPtr)));
     return lltok::APFloat;
+#ifdef LLVM_TPC_COMPILER
   case 'G':
     APFloatVal = APFloat(APFloat::Float8_143(),
                          APInt(8, HexIntToVal(TokStart+3, CurPtr)));

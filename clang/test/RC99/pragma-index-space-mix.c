@@ -13,9 +13,9 @@ void main(tensor Tensor0_T, tensor Tensor1_T) {
 #pragma loop_unroll(4)
       for (int dim1 = index_space_start[1] * 4; dim1 < index_space_end[1] * 4; dim1 = dim1 + 1) {
         int5 coords = {dim0, dim1, dim2};
-        float64 Tensor0 = v_f32_ld_tnsr_i(coords, Tensor0_T);
+        float64 Tensor0 = v_f32_ld_tnsr_b(coords, Tensor0_T, 0, 0, 1, 0);
         int64 cast_f32_to_i32_ID_0 = (int64)(Tensor0);
-        i32_st_tnsr_i_v(coords, Tensor1_T, cast_f32_to_i32_ID_0);
+        v_i32_st_tnsr(coords, Tensor1_T, cast_f32_to_i32_ID_0, 0, 1, 0);
       }
     }
   }

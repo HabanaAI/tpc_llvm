@@ -1,8 +1,10 @@
 //===- TPCoptimization.cpp --- IR pipelined--------------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//                     The LLVM Compiler Infrastructure:
+//
+//              2019 - This pass is a property of Habana labs
+//
 //
 //===----------------------------------------------------------------------===//
 //   TPC-IR pipelined optimization
@@ -344,7 +346,7 @@ Instruction *TpcLoopOpt::incInstruction(BasicBlock *to, BasicBlock *from,
   SmallVector<Instruction *, 4> intrinsicList =
           extractIntrinFromList(get_list_of<Instruction, 16>(&to), idIntrin);
   LLVMContext &C = from->getContext();
-  Type *Int5Ty = VectorType::get(Type::getInt32Ty(C), 5);
+  Type *Int5Ty = FixedVectorType::get(Type::getInt32Ty(C), 5);
   //Value *undef = UndefValue::get(Int5Ty);
   Instruction *add = input;
   Function *func = Intrinsic::getDeclaration(to->getModule(),
@@ -445,9 +447,9 @@ Instruction *TpcLoopOpt::creatCloneIntrinsics(Instruction *after,
 
 static PHINode *insetPhiInst(Instruction *first, Instruction *second,
                              BasicBlock *firstBB, BasicBlock *secondBB,
-                             IRBuilder<> builder, Type *ptrType, int number,
+                             IRBuilder<> &builder, Type *ptrType, int number,
                              Instruction *after) {
-  PHINode *phiLoad = builder.CreatePHI(VectorType::get(ptrType, number), 2);
+  PHINode *phiLoad = builder.CreatePHI(FixedVectorType::get(ptrType, number), 2);
   phiLoad->addIncoming(first, firstBB);
   phiLoad->addIncoming(second, secondBB);
   phiLoad->moveAfter(after);
@@ -461,8 +463,8 @@ createPhiInstruction(vector<Instruction *> *selectItrin,
   SmallVector<Instruction *, 4> result;
   PHINode *phiLoad;
   for (unsigned i = 0; i < selectItrin[0].size(); i++) {
-    int number = selectItrin[0][i]->getType()->getVectorNumElements();
-    Type *ptrType = selectItrin[0][i]->getType()->getVectorElementType();
+    int number = cast<FixedVectorType>(selectItrin[0][i]->getType())->getNumElements();
+    Type *ptrType = cast<FixedVectorType>(selectItrin[0][i]->getType())->getElementType();
     phiLoad =
             insetPhiInst(selectItrin[0][i], selectItrin[1][i], basicBlockLoc[0],
                          basicBlockLoc[1], builder, ptrType, number, after);
@@ -643,8 +645,8 @@ void TpcLoopOpt::cleanUp(BasicBlock *BB2,
     auto *second = dyn_cast<Instruction>(PhiInst[i]->getOperand(1));
     after = insetPhiInst(first, second, first->getParent(),
                          WorkingLoop->getExitBlock(), builder,
-                         PhiInst[i]->getType()->getVectorElementType(),
-                         PhiInst[i]->getType()->getVectorNumElements(), after);
+                         cast<FixedVectorType>(PhiInst[i]->getType())->getElementType(),
+                         cast<FixedVectorType>(PhiInst[i]->getType())->getNumElements(), after);
   }
 
   // Duplicate the instruction between the load and the store to the cleanup block.

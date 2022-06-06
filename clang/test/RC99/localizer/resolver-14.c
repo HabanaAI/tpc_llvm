@@ -4,7 +4,7 @@ float64 gval[65];
 
 void main(int x, int y) {
   *(float64 __local *)x = gval[0];
-  gval[0] = v_f32_lookup_v((uint64)x, 1, 1);
+  gval[0] = v_f32_lookup((uint64)x, 1, 1, 0, 1, 0);
   *(float64 __local *)y = x;
 }
 

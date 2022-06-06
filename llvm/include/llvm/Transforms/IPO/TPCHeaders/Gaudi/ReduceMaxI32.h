@@ -1,12 +1,3 @@
-//===--------ReduceMaxI32.h-----------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 const llvm::StringRef GaudiReduceMaxI32LL = R"(
 ; Function Attrs: alwaysinline nounwind
 define  dso_local <64 x i32> @v_i32_reduce_max(<64 x i32> %x) local_unnamed_addr #4 {
@@ -19,10 +10,10 @@ entry:
   %5 = bitcast <64 x float> %1 to <256 x i8>
   %6 = bitcast <64 x float> %3 to <256 x i8>
   %7 = bitcast <64 x float> %4 to <256 x i8>
-  %8 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %x, i32 -1, i32 12544, <64 x i32> zeroinitializer, i1 true, i1 false)
-  %9 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %x, i32 -1, i32 15104, <64 x i32> %8, i1 true, i1 false)
+  %8 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %x, i32 -1, i32 0, i32 12544, <64 x i32> zeroinitializer, i1 true, i1 false)
+  %9 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %x, i32 -1, i32 0, i32 15104, <64 x i32> %8, i1 true, i1 false)
   %10 = call <64 x i32> @llvm.tpc.max.v64i32.v64i32.v64i32.i1(<64 x i32> %x, <64 x i32> %9, i8 2, i32 0, <64 x i32> undef, i1 true, i1 false)
-  %11 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %10, i32 -1, i32 12800, <64 x i32> %9, i1 true, i1 false)
+  %11 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %10, i32 -1, i32 0, i32 12800, <64 x i32> %9, i1 true, i1 false)
   %12 = call <64 x i32> @llvm.tpc.max.v64i32.v64i32.v64i32.i1(<64 x i32> %10, <64 x i32> %11, i8 2, i32 0, <64 x i32> undef, i1 true, i1 false)
   %13 = call <64 x i32> @llvm.tpc.mov.group.v64i32.v64i32.i1(<64 x i32> %12, i32 -1, i32 63, <64 x i32> %11, i1 true, i1 false)
   %14 = call <64 x i32> @llvm.tpc.max.v64i32.v64i32.v64i32.i1(<64 x i32> %12, <64 x i32> %13, i8 2, i32 0, <64 x i32> undef, i1 true, i1 false)
@@ -32,9 +23,9 @@ entry:
   %18 = call <64 x i32> @llvm.tpc.max.v64i32.v64i32.v64i32.i1(<64 x i32> %16, <64 x i32> %17, i8 2, i32 0, <64 x i32> undef, i1 true, i1 false)
   %19 = call <64 x i32> @llvm.tpc.shuffle.v64i32.i1(<64 x i32> %18, <256 x i8> %7, i8 2, i32 0, <64 x i32> %17, i1 true, i1 false)
   %20 = call <64 x i32> @llvm.tpc.max.v64i32.v64i32.v64i32.i1(<64 x i32> %18, <64 x i32> %19, i8 2, i32 0, <64 x i32> undef, i1 true, i1 false)
-  %21 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %20, i32 -1, i32 13312, <64 x i32> %20, i1 true, i1 false)
-  %22 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %21, i32 -1, i32 14336, <64 x i32> %21, i1 true, i1 false)
-  %23 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %22, i32 -1, i32 15360, <64 x i32> %22, i1 true, i1 false)
+  %21 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %20, i32 -1, i32 0, i32 13312, <64 x i32> %20, i1 true, i1 false)
+  %22 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %21, i32 -1, i32 0, i32 14336, <64 x i32> %21, i1 true, i1 false)
+  %23 = call <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32> %22, i32 -1, i32 0, i32 15360, <64 x i32> %22, i1 true, i1 false)
   ret <64 x i32> %23
 }
 
@@ -94,7 +85,7 @@ declare <64 x float> @llvm.tpc.lookup.c0.v64f32.v64i32(<64 x i32>, i32, i32, <64
 
 declare <128 x float> @llvm.tpc.lookup.c1c2.v128f32.v64i32(<64 x i32>, i32, i32, <128 x float>, i1, i1) #1
 
-declare <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32>, i32, i32, <64 x i32>, i1, i1) #1
+declare <64 x i32> @llvm.tpc.mov.dual.group.v64i32.i1(<64 x i32>, i32, i32, i32, <64 x i32>, i1, i1) #1
 
 declare <64 x i32> @llvm.tpc.mov.group.v64i32.v64i32.i1(<64 x i32>, i32, i32, <64 x i32>, i1, i1) #1
 

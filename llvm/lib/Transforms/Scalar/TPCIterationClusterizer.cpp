@@ -1,13 +1,3 @@
-//===- TPCIterationClusterizer.cpp------------------------------------------===//
-//
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 #include "TPCIterationClusterizer.h"
 
 using namespace llvm;
@@ -228,7 +218,7 @@ void IterationClusterizer::collectAccumulatorPhis(
     std::string DebugTag) {
   CLUSTER_INFO_DEBUG(DebugTag << "Collecting Accumulator Phis")
   Type *T5xi32 =
-      VectorType::get(Type::getInt32Ty(HeaderBlock->getContext()), 5);
+      FixedVectorType::get(Type::getInt32Ty(HeaderBlock->getContext()), 5);
   for (auto &PhiNode : HeaderBlock->phis()) {
     Instruction *I = cast<Instruction>(&PhiNode);
     CLUSTER_INFO_DEBUG(DebugTag << *I)

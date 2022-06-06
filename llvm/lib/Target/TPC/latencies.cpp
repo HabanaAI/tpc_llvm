@@ -1,55 +1,40 @@
-//===- latencies.cpp - TPC latencies database ---------------- ------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-// This file is the main database of the TPC hardware
-//
-//===----------------------------------------------------------------------===//
+/*****************************************************************************
+ * Copyright (C) 2018 HabanaLabs, Ltd.
+ * All Rights Reserved.
+ *
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ * Proprietary and confidential.
+ ******************************************************************************
+ */
 
 #define TPCSIM 0
-#define MISSING_LATENCIES_DB_ENTRY_IS_ERROR 0
-#define DEBUG_LATNECIES 0
+#define DEBUG_LATENCIES 0
 
 #if TPCSIM
 #include "DbgControl.h"
-#define LATENCIES_DB_LOG_INFO   LOG_INFO
-#define LATENCIES_DB_LOG_WARN  LOG_WARN
+#define LATENCIES_DB_LOG_INFO LOG_INFO
+#define LATENCIES_DB_LOG_WARN LOG_WARN
 #define LATENCIES_DB_LOG_ERROR LOG_ERROR
-#else 
+#else
 #include <cstdio>
-#define LATENCIES_DB_LOG_INFO   std::puts
-#define LATENCIES_DB_LOG_WARN  std::puts
+#define LATENCIES_DB_LOG_INFO std::puts
+#define LATENCIES_DB_LOG_WARN std::puts
 #define LATENCIES_DB_LOG_ERROR std::puts
 #endif
 
-#include <assert.h>
 #include "latencies.h" 
+#include <assert.h>
 #include <algorithm>
 #include <sstream>
 using namespace std;
 
-namespace TPCLatencyEvaluation {
+namespace TPCLatencyEvaluation
+{
 
 map<InstructionForLatencyDetermination, StageSopPair> latenciesDB;
 map<Sop, Stage> sopDB;
 
-//void buildInstructionLatenciesDB(uint8_t tpc_generation)
-//{
-    //switch (tpc_generation) {
-    //case 1: // 1=TPCGenerations::DALI
-        //dali_buildInstructionLatenciesDB();
-        //break;
-    //case 2: // 2=TPCGenerations::GAUDI
-        //gaudi_buildInstructionLatenciesDB();
-        //break;
-    //default:
-        //assert(false);
-    //}
-//}
+bool missing_latencies_db_entry_is_error = getenv("MISSING_LATENCIES_DB_ENTRY_IS_ERROR") != NULL;
 
 uint32_t tpc_default_latency = 4;
 
@@ -63,76 +48,78 @@ uint32_t calculateLatency(InstructionForLatencyDetermination &producer, Instruct
 	bool consumer_isAccFp32 = consumer.the_isAccFp32;
 	uint8_t producer_idxDst0 = producer.the_idxDst0;
 	uint8_t consumer_idxDst0 = consumer.the_idxDst0;
-	bool producer_is2xLookupAddSub = producer.the_is2xLookupAddSub;
-	if(tpc_generation>1)
+	bool producer_is2xLookupAddSub = producer.the_is2xLookup2xDnormAddSub;
+	if(tpc_generation>1) //GAUDI or GOYA2
 	{
 		producer.the_isAccFp32 = 0;
 		consumer.the_isAccFp32 = 0;
 		producer.the_idxDst0 = 0;
 		consumer.the_idxDst0 = 0;
 		if((producer.the_slotID == e_issue_slot_load) && ((producer.the_opCode == 7) || (producer.the_opCode == 9)))
-			producer.the_is2xLookupAddSub = 0;
+			producer.the_is2xLookup2xDnormAddSub = 0;
 	}
 	if (consumer.the_operandID == e_src_lfsr_reseed) 
 	{
-		if (DEBUG_LATNECIES) 
+		if (DEBUG_LATENCIES) 
 			LATENCIES_DB_LOG_INFO("returning latency of 4 due to lfsr_reseed");
 		return 4; //LFSR reseed always return 4
 	}
 	
-	if (!producer.the_isLFSRImplicitDst && (latenciesDB.find(producer) == latenciesDB.end()))
+	const auto producerLatenciesIt = latenciesDB.find(producer);
+	if (!producer.the_isLFSRImplicitDst && (producerLatenciesIt == latenciesDB.end()))
 	{
 #if TPCSIM
-		LATENCIES_DB_LOG_WARN("Warning: Producer wasn't found in latencies DB therefore returning defualt latency (4)");
+		LATENCIES_DB_LOG_WARN("Warning: Producer wasn't found in latencies DB therefore returning default latency (4)");
 #else // TPC_COMPILER
 		char buff[256];
-		sprintf(buff, "Warning: Producer wasn't found in latencies DB therefore returning defualt latency (%d)", tpc_default_latency);
+		sprintf(buff, "Warning: Producer wasn't found in latencies DB therefore returning default latency (%d)", tpc_default_latency);
 		LATENCIES_DB_LOG_WARN(buff);
 #endif
 		LATENCIES_DB_LOG_WARN("please contact Ron/Hilla with this example:");
         std::stringstream ss;
 		ss << "producer = " << producer;
         LATENCIES_DB_LOG_WARN(ss.str().c_str());
-		if (MISSING_LATENCIES_DB_ENTRY_IS_ERROR)
+        if (missing_latencies_db_entry_is_error)
 		{
 			assert(0);
 		}
 
-		if (tpc_generation > 1)
+		if (tpc_generation > 1) //GAUDI or GOYA2
 		{
 			producer.the_isAccFp32 = producer_isAccFp32;
 			consumer.the_isAccFp32 = consumer_isAccFp32;
 			producer.the_idxDst0 = producer_idxDst0;
 			consumer.the_idxDst0 = consumer_idxDst0;
-			producer.the_is2xLookupAddSub = producer_is2xLookupAddSub;
+			producer.the_is2xLookup2xDnormAddSub = producer_is2xLookupAddSub;
 		}
 		return tpc_default_latency;
 	}
-	if (latenciesDB.find(consumer) == latenciesDB.end()) 
+	const auto consumerLatenciesIt = latenciesDB.find(consumer);
+	if (consumerLatenciesIt == latenciesDB.end())
 	{
 #if TPCSIM
-		LATENCIES_DB_LOG_WARN("Warning: Consumer wasn't found in latencies DB therefore returning defualt latency (4)");
+		LATENCIES_DB_LOG_WARN("Warning: Consumer wasn't found in latencies DB therefore returning default latency (4)");
 #else // TPC_COMPILER
 		char buff[256];
-		sprintf(buff, "Warning: Consumer wasn't found in latencies DB therefore returning defualt latency (%d)", tpc_default_latency);
+		sprintf(buff, "Warning: Consumer wasn't found in latencies DB therefore returning default latency (%d)", tpc_default_latency);
 		LATENCIES_DB_LOG_WARN(buff);
 #endif
 		LATENCIES_DB_LOG_WARN("please contact Ron/Hilla with this example:");
                 std::stringstream ss;
 		ss << "consumer = " << consumer;
                 LATENCIES_DB_LOG_WARN(ss.str().c_str());
-		if (MISSING_LATENCIES_DB_ENTRY_IS_ERROR)
+        if (missing_latencies_db_entry_is_error)
 		{
 			assert(0);
 		}
 
-		if (tpc_generation > 1)
+		if (tpc_generation > 1) //GAUDI or GOYA2
 		{
 			producer.the_isAccFp32 = producer_isAccFp32;
 			consumer.the_isAccFp32 = consumer_isAccFp32;
 			producer.the_idxDst0 = producer_idxDst0;
 			consumer.the_idxDst0 = consumer_idxDst0;
-			producer.the_is2xLookupAddSub = producer_is2xLookupAddSub;
+			producer.the_is2xLookup2xDnormAddSub = producer_is2xLookupAddSub;
 		}
 		return tpc_default_latency;
 	}
@@ -154,18 +141,27 @@ uint32_t calculateLatency(InstructionForLatencyDetermination &producer, Instruct
     case 1: // 1=TPCGenerations::DALI
         shouldOverrideMulIRFToD2 = dali_overrideMulIRFToD2(producer, consumer);
         break;
-    case 2: // 2=TPCGenerations::GAUDI
+    case 2: // 2=TPCGenerations::GAUDI || 2=TPCGenerations::GAUDIB
       shouldOverrideMulIRFToD2 = gaudi_overrideMulIRFToD2(producer, consumer);
       break;
+    case 3: // 3=TPCGenerations::GOYA2
+      shouldOverrideMulIRFToD2 = goya2_overrideMulIRFToD2(producer, consumer);
+      break;
+    case 4: // 4=TPCGenerations::GAUDI2
+        shouldOverrideMulIRFToD2 = gaudi2_overrideMulIRFToD2(producer, consumer);
+      break;
+    case 6: // 6=TPCGenerations::Doron1
+        shouldOverrideMulIRFToD2 = doron1_overrideMulIRFToD2(producer, consumer);
+        break;
     default:
         assert(false);
     }
 
 	//For LFSR implicit dest, override producer stage to e4 without looking at the DB
-	Stage producerStage = producer.the_isLFSRImplicitDst ? e_stage_e3 : latenciesDB[producer].first;
+	Stage producerStage = producer.the_isLFSRImplicitDst ? e_stage_e3 : producerLatenciesIt->second.first;
 	consumer.the_isLFSRImplicitDst = false; //override LFSR implict dest from consumer POV as it isn't inlcuded in DB
-	Sop consumerSop = latenciesDB[consumer].second;
-	Stage consumerStage = shouldOverrideMulIRFToD2 ? e_stage_d2 : latenciesDB[consumer].first;
+	Sop consumerSop = consumerLatenciesIt->second.second;
+	Stage consumerStage = shouldOverrideMulIRFToD2 ? e_stage_d2 : consumerLatenciesIt->second.first;
 
 	Stage consumerSopStage = sopDB[consumerSop];
 	int latency;
@@ -174,21 +170,83 @@ uint32_t calculateLatency(InstructionForLatencyDetermination &producer, Instruct
 	else
 	{
 		latency =  std::max(1,producerStage - consumerStage + 1);
+		if (tpc_generation > 3) //Gaudi2 - CMP/MOV commit to VPRF at E2, ST_L_V is using it at E3, 0 latency is possible
+		{
+			if(consumer.the_slotID == e_issue_slot_store &&
+				(consumer.the_opCode == STORE_OP_ST_L_V || consumer.the_opCode == STORE_OP_ST_L_V_HIGH ||
+				 consumer.the_opCode == STORE_OP_ST_L_V_LOW) &&
+				consumer.the_registerFile == e_rf_vp &&
+				producer.the_registerFile == e_rf_vp && (producerStage - consumerStage + 1)==0)
+				latency = 0;
+		}
 	}
 		
+	//Gaudi2
+	if (tpc_generation > 3)
+	{
+		//no bypass to EVENT on STORE slot
+		if (consumer.the_slotID == e_issue_slot_store && consumer.the_opCode == STORE_OP_EVENT 
+		    && (consumer.the_operandID != TPCLatencyEvaluation::e_src_p))
+			latency = (producer.the_opCode == OP_UDIV) ? UDIV_LATENCY_TILL_COMMIT_CLOCKS 
+			                                           : VPE_INSTRUCTION_LATENCY_TILL_COMMIT_CLOCKS;
+	}
 
 	//special case for LOOKUP_* - latency+1 because instruction is taking 2 cycles
 	if ((producer.the_slotID == e_issue_slot_load) &&
 		((producer.the_opCode == 7) || (producer.the_opCode == 9)) && (producer_is2xLookupAddSub == 0))
 		latency = latency + 1;
 
-	if(tpc_generation>1)
+	if (tpc_generation > 2) //GOYA2
 	{
-		bool consumer_is_fma_accumulator = (((consumer.the_opCode == OP_MAC) || (consumer.the_opCode == OP_MADD)) && consumer.the_operandID == e_src_c && consumer.the_isOpTypeFloat == 1) ||
-			((consumer.the_opCode == OP_ADD || consumer.the_opCode == OP_SUB) && (consumer.the_isFp16 == true || consumer.the_isFp8 == true || consumer.the_is2xLookupAddSub == true) && consumer.the_operandID == e_src_a);
+		//LD_G with AUTO_INC - bypass to ADRF has latency of 1
+		if ((consumer.the_slotID == e_issue_slot_load && 
+			consumer.the_opCode == LOAD_OP_LD_G && 
+			producer.the_slotID == e_issue_slot_load && 
+			producer.the_opCode == LOAD_OP_LD_G && 
+			consumer.the_operandID == e_src_a) || 
+		   (consumer.the_slotID == e_issue_slot_load && 
+			consumer.the_opCode == LOAD_OP_PREFETCH && 
+			producer.the_slotID == e_issue_slot_load && 
+			producer.the_opCode == LOAD_OP_PREFETCH && 
+			consumer.the_operandID == e_src_a) || 
+			(consumer.the_slotID == e_issue_slot_store && 
+				consumer.the_opCode == STORE_OP_ST_G && 
+				producer.the_slotID == e_issue_slot_store && 
+				producer.the_opCode == STORE_OP_ST_G && 
+				consumer.the_operandID == e_src_a) ||
+			(consumer.the_slotID == e_issue_slot_load && 
+			(consumer.the_opCode == LOAD_OP_LD_L_V || consumer.the_opCode == LOAD_OP_LD_L_V_LOW || consumer.the_opCode == LOAD_OP_LD_L_V_HIGH) && 
+				producer.the_slotID == e_issue_slot_load && 
+				(producer.the_opCode == LOAD_OP_LD_L_V || producer.the_opCode == LOAD_OP_LD_L_V_LOW || producer.the_opCode == LOAD_OP_LD_L_V_HIGH) &&
+				consumer.the_operandID == e_src_a) ||
+				(consumer.the_slotID == e_issue_slot_store &&
+			(consumer.the_opCode == STORE_OP_ST_L_V || consumer.the_opCode == STORE_OP_ST_L_V_LOW || consumer.the_opCode == STORE_OP_ST_L_V_HIGH) &&
+					producer.the_slotID == e_issue_slot_store &&
+					(producer.the_opCode == STORE_OP_ST_L_V || producer.the_opCode == STORE_OP_ST_L_V_LOW || producer.the_opCode == STORE_OP_ST_L_V_HIGH) &&
+					consumer.the_operandID == e_src_a))
+			latency = 1;
+	}
+	if(tpc_generation>1) //GAUDI OR GOYA2
+	{
+		//Goya2 - fix latency to MAC integer - 
+		//ISA says SRC_C is taken at D2 (although HW takes it at E1),
+		//because RTL doesn't have bypass from E4 to E1 (to keep minimum regular latency of 4).
+		//However, bypasses from E5/E6 are connected, and latency should be fixed to be 1 less (to reflect E1 instead of D2)
+		//in Gaudi SRC_C for INT MAC is taken at D2, so no need to fix anything
+		if ((tpc_generation > 2) &&
+            (consumer.the_opCode == OP_MAC || consumer.the_opCode == OP_MADD) && consumer.the_isOpTypeFloat == 0 && consumer.the_operandID == e_src_c &&
+			(producerStage == e_stage_e4 || producerStage == e_stage_e5 || producerStage == e_stage_e6 || producerStage == e_stage_e11) &&
+			(consumer.the_slotID == producer.the_slotID))
+			latency = latency - 1;
+
+		bool consumer_is_fma_accumulator = (((consumer.the_opCode == OP_MAC) || (consumer.the_opCode == OP_MADD)) &&
+		                                    consumer.the_operandID == e_src_c && consumer.the_isOpTypeFloat == 1) ||
+			                                ((consumer.the_opCode == OP_ADD || consumer.the_opCode == OP_SUB) && 
+			                                (consumer.the_isFp16 == true || consumer.the_isFp8 == true || consumer.the_is2xLookup2xDnormAddSub == true) && 
+			                                consumer.the_operandID == e_src_a);
 
 		bool producer_is_fma_accumulator = ((((producer.the_opCode == OP_MAC) || (producer.the_opCode == OP_MADD) || (producer.the_opCode == OP_MUL)) && producer.the_isOpTypeFloat == 1) ||
-			((producer.the_opCode == OP_ADD || producer.the_opCode == OP_SUB) && (producer.the_isFp16 == true || producer.the_isFp8 == true || producer.the_is2xLookupAddSub == true))) && producer.the_operandID == e_dst;
+			((producer.the_opCode == OP_ADD || producer.the_opCode == OP_SUB) && (producer.the_isFp16 == true || producer.the_isFp8 == true || producer.the_is2xLookup2xDnormAddSub == true))) && producer.the_operandID == e_dst;
 
 	if (consumer_is_fma_accumulator) //bypass to MAC/MADD SRC_C - needs special treatment
 	{
@@ -197,7 +255,8 @@ uint32_t calculateLatency(InstructionForLatencyDetermination &producer, Instruct
 		//most instructions already do it because they are E3 and SOP min stage input for src_c is E4, 
 		//need to fix it only for instructions which are E4/E5 + UDIV_4STEP which is E6
 		if (!producer_is_fma_accumulator &&
-			(((producer.the_slotID == ISSUE_SLOT_ID_VPU) && (producer.the_opCode == OP_SHUFFLE ||
+			(((producer.the_slotID == ISSUE_SLOT_ID_VPU) && 
+			(producer.the_opCode == OP_SHUFFLE ||
 				producer.the_opCode == OP_PACK ||
 				producer.the_opCode == OP_UNPACK || 
 				producer.the_opCode == OP_MOV_GROUP ||
@@ -245,18 +304,18 @@ uint32_t calculateLatency(InstructionForLatencyDetermination &producer, Instruct
 					latency = 6;
 			}
 	      }
-	}	
+	   }	
     }
 
-	if (tpc_generation > 1)
+	if (tpc_generation > 1) //GAUDI or GOYA2
 	{
 		producer.the_isAccFp32 = producer_isAccFp32;
 		consumer.the_isAccFp32 = consumer_isAccFp32;
 		producer.the_idxDst0 = producer_idxDst0;
 		consumer.the_idxDst0 = consumer_idxDst0;
-		producer.the_is2xLookupAddSub = producer_is2xLookupAddSub;
+		producer.the_is2xLookup2xDnormAddSub = producer_is2xLookupAddSub;
 	}		
-	if (DEBUG_LATNECIES) {
+	if (DEBUG_LATENCIES) {
         std::stringstream ss;
         ss << "consumer = " << consumer;
         ss << " consumerStage = " << consumerStage;

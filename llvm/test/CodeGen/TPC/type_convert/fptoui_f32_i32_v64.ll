@@ -1,8 +1,8 @@
 ; RUN: llc -march=tpc -mcpu=dali -O0 %s -o - | FileCheck %s
 
-; CHECK: convert.f32 target_type=int32  [[V1:%V[0-9]+]], [[V0:%V[0-9]+]], [[SP0:%SP[0-9]+]]
-; CHECK: convert.i32 target_type=uint32 rhne [[V0]], [[V1]], [[SP0]]
-; CHECK: st_tnsr  0x1, {{%I[0-9]+}}, [[V0]], [[SP0]]
+; CHECK: convert.f32 target_type=int32  [[V1:%V[0-9]+]], [[V0:%V[0-9]+]]
+; CHECK: convert.i32 target_type=uint32 rhne [[V0]], [[V1]]
+; CHECK: st_tnsr  0x1, {{%I[0-9]+}}, [[V0]]
 ; CHECK: halt
 
 target triple = "tpc"

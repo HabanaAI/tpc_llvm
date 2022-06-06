@@ -9,7 +9,7 @@ void main(int x0, int x1, int x2, int dest0)
     
    short128 __local *res0 = (short128  __local *)dest0;
     short128 temp_res0 = 0;
-    temp_res0 = v_i16_or_v_v_b(*ptr_x0, *ptr_x1, temp_res0, x2, 0);
+    temp_res0 = v_i16_or_b(*ptr_x0, *ptr_x1, 0, temp_res0, x2, 0);
     *res0 = temp_res0;
 }
 //CHECK-ASM: .globl main

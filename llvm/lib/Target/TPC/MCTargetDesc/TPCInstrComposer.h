@@ -6,8 +6,6 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 
 
 #ifndef LLVM_TPCINSTRCOMPOSER_H
@@ -34,20 +32,29 @@ class TPCInstrComposer {
   const FeatureBitset &TPCFeatures;
   bool IsCompressed;
   CompressionType CT;
-  bool MayCompress = false;
+  bool MayCompress;
 
-  APInt getBinaryInst(uint64_t LLVMInstr, const std::map<Fields, Field> &Layout);
+  unsigned SPUPred;
+  unsigned VPUPred;
+  unsigned LoadPred;
+  unsigned StorePred;
+
+  APInt getBinaryInst(uint64_t LLVMInstr, const std::map<Fields, Field> &Layout, unsigned IsPredicated);
   APInt getIMM(uint32_t &IMM);
 
 public:
   TPCInstrComposer(uint64_t _SPUInst, uint64_t _VPUInst, uint64_t _LDInst, uint64_t _STInst, uint32_t _IMM,
-      const FeatureBitset &Features, bool _IsCompressed, CompressionType _CT) :
+      const FeatureBitset &Features, bool _IsCompressed, CompressionType _CT,
+      unsigned _SPUPred, unsigned _VPUPred, unsigned _LoadPred, unsigned _StorePred) :
       SPUInst(_SPUInst), VPUInst(_VPUInst), LDInst(_LDInst), STInst(_STInst), IMM(_IMM),
-      TPCFeatures(Features), IsCompressed(_IsCompressed), CT(_CT) {
+      TPCFeatures(Features), IsCompressed(_IsCompressed), CT(_CT),
+      SPUPred(_SPUPred), VPUPred(_VPUPred), LoadPred(_LoadPred), StorePred(_StorePred){
     if(IsCompressed) {
       InstructionSizeInBits = 128;
     }
-    MayCompress = false;
+    MayCompress = Features[TPC::FeatureCompress];
+    assert(!MayCompress || Features[TPC::FeatureGreco] ||
+           Features[TPC::FeatureGaudi2] || Features[TPC::FeatureDoron1]);
   }
 
   ~TPCInstrComposer() = default;

@@ -1,9 +1,9 @@
 //===- IterationInterleave.cpp - Interleave Iterations --------------------===//
 //
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure:
+//
+//              2020 - This pass is a property of Habana labs
 //
 //
 //===----------------------------------------------------------------------===//
@@ -72,7 +72,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsTPC.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/PassSupport.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Scalar.h"
 #include <deque>
@@ -125,7 +125,7 @@ static bool isCoordUpdate(const Instruction *I) {
 
   const auto *II = dyn_cast<InsertElementInst>(I);
   if (II) {
-    Type *Int5Ty = VectorType::get(Type::getInt32Ty(I->getContext()), 5);
+    Type *Int5Ty = FixedVectorType::get(Type::getInt32Ty(I->getContext()), 5);
     if (Int5Ty == II->getType()) {
       return true;
     }
@@ -584,7 +584,7 @@ class IterationInterleaver {
         }
 
         int InstLatency =
-            TTI->getInstructionCost(Inst, TargetTransformInfo::TCK_Latency);
+            *TTI->getInstructionCost(Inst, TargetTransformInfo::TCK_Latency).getValue();
         if (InstLatency == 0)
           continue;
 

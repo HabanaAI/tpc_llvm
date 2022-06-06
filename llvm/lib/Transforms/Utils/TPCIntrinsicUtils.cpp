@@ -1,8 +1,12 @@
-//===-TPCIntrinsicUtils.cpp-----------------------------------------------===//
+//===---------------------------- TPCIntrinsicUtils.cpp ------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//                     The LLVM Compiler Infrastructure:
+//
+//              2020 - This file is a property of Habana labs
+//
+// Author : Md Shahid
+// Email  : aashahid@habana.ai
 //
 //===----------------------------------------------------------------------===//
 //
@@ -131,13 +135,11 @@ static SwitchTbl SwTbl[] = {
      TPCII::SW_TO_BF16 | TPCII::SW_CSR | TPCII::SW_LANE_0 |
          TPCII::SW_ALL_LANES}};
 
-// Get the tpc intrinsic corresponding to \p IDNum and \p FType.
-static std::string getTPCIntrinsicName(Intrinsic::ID IDNum,
-                                       FunctionType *FType) {
+std::string getTPCIntrinsicName(const Intrinsic::ID IDNum,
+                                FunctionType *FType) {
   SmallVector<Intrinsic::IITDescriptor, 8> Table;
   Intrinsic::getIntrinsicInfoTableEntries(IDNum, Table);
   ArrayRef<Intrinsic::IITDescriptor> TableRef = Table;
-  (void)TableRef;
   SmallVector<Type *, 4> ArgTys;
   Intrinsic::matchIntrinsicSignature(FType, TableRef, ArgTys);
   return Intrinsic::getName(IDNum, ArgTys);
@@ -182,7 +184,7 @@ static ValueType getVT(Type *Ty) {
     llvm_unreachable("Unknown type!");
   case Type::IntegerTyID:
     return getIntegerVT(cast<IntegerType>(Ty)->getBitWidth());
-  case Type::BFloat16ID:
+  case Type::BFloatTyID:
     return ValueType::bf16;
   case Type::HalfTyID:
     return ValueType::f16;

@@ -7,8 +7,8 @@ void main(int x0, int dest0)
     
    float __local *res0 = (float  __local *)dest0;
     float temp_res0 = 0;
-    temp_res0 = s_convert_i32_to_f32_s(x0, e_round_down);
+    temp_res0 = s_convert_i32_to_f32(x0, SW_RD, 0, 1, 0);
     *res0 = temp_res0;
 }
 //CHECK-ASM: .globl main
-//CHECK-ASM-DAG: convert.i32 target_type=fp32 rd %S{{[0-9]+}}, %S{{[0-9]+}}, %SP0
+//CHECK-ASM-DAG: convert.i32 target_type=fp32 rd %S{{[0-9]+}}, %S{{[0-9]+}}

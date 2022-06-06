@@ -4,7 +4,7 @@ void main(int dest, int src, unsigned char divisor) {
   uint8_t_pair_t __local *sptr = (uint8_t_pair_t __local *) src;
   uint8_t_pair_t __local *dptr = (uint8_t_pair_t __local *) dest;
   uint8_t_pair_t quot_rem = *sptr;
-  quot_rem = s_u8_udiv_step_s(quot_rem, divisor, 5);
+  quot_rem = u8_udiv_step(divisor, 5, 0, quot_rem, 1, 0);
   *dptr = quot_rem;
 }
 
@@ -12,7 +12,7 @@ void main(int dest, int src, unsigned char divisor) {
 // CHECK-DAG: ld_l  %S[[ZN:[0-9]+]], %S1
 // CHECK-DAG: ld_l  %S[[ZNN:[0-9]+]], %S{{[0-9]+}}
 
-// CHECK:     udiv_step.u8 0x5 %Z[[ZN]], %S2, %SP0
+// CHECK:     udiv_step.u8 0x5 %Z[[ZN]], %S2
 
 // CHECK-DAG: st_l %S0,    %S[[ZN]]
 // CHECK-DAG: st_l %S{{[0-9]+}}, %S[[ZNN]]

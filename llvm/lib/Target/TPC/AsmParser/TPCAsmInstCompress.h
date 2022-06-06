@@ -1,13 +1,3 @@
-//===- TPCAsmInstCompress.h ----------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//
-//===----------------------------------------------------------------------===//
 #ifndef LLVM_LIB_TARGET_TPC_ASMPARSER_TPCASMINSTCOMPRESS_H
 #define LLVM_LIB_TARGET_TPC_ASMPARSER_TPCASMINSTCOMPRESS_H
 
@@ -50,6 +40,8 @@ private:
 
   bool IsStoreInBuffer;
   bool DoNotCompressNextInst;
+  
+  bool IsFirstInstrProcessed = false;
 
   void flushPendingLabels(MCStreamer &Out);
   void flushBuffer(MCStreamer &Out, const MCSubtargetInfo &STI,
@@ -61,6 +53,7 @@ private:
 
   bool isNopMCInst(const MCInst &MI) const;
   bool isVpuInstrWithSrcCD(const MCInst &MI) const;
+  bool isVPUInstWithVPUExtSwitch(const MCInst &MI) const;
   bool isSrcCIsStoreSrcC(const MCInst &MI) const;
   bool isLoopMCInst(const MCInst &MI, StringRef &Label) const;
   bool isJmpMCInst(const MCInst &MI, StringRef &Label) const;
@@ -68,7 +61,8 @@ private:
   void flushLoopsInsts(std::vector<Any>::iterator &Iter, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
   void rmOpcodeFromBundle(MCInst &MI, unsigned opcode) const;
-  bool maybeCompressInstr(MCInst &MI, bool doCompress) const;
+  bool maybeCompressInstr(MCInst &MI, bool doCompress,
+                          const MCSubtargetInfo &STI) const;
 };
 }
 

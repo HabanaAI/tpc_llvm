@@ -8,7 +8,7 @@ void main(int x0, int x1, int dest0)
     
    bfloat128 __local *res0 = (bfloat128  __local *)dest0;
     bfloat128 temp_res0 = 0;
-    temp_res0 = v_bf16_or_v_v(*ptr_x0, *ptr_x1);
+    temp_res0 = v_bf16_or_b(*ptr_x0, *ptr_x1, 0, 0, 1, 0);
     *res0 = temp_res0;
 }
 //CHECK-ASM: .globl main

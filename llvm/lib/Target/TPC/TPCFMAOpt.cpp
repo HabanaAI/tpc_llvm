@@ -1,9 +1,3 @@
-//===- TPCFMAOpt.cpp ------------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 // This pass
 // transforms a*b + c => ..mac..(a,b,c,0)
@@ -82,14 +76,16 @@ bool TPCFMAopt::runOnFunction(Function &Func) {
   IntegerType *I16Type = Type::getInt16Ty(Ctx);
   Type *F32Type = Type::getFloatTy(Ctx);
   Type *HalfType = Type::getHalfTy(Ctx);
-  Type *BF16Type = Type::getBFloat16Ty(Ctx);
-  VectorType* Int64Type = VectorType::get(I32Type, 64);
-  VectorType* Float64Type = VectorType::get(F32Type, 64);
-  VectorType* Short128Type = VectorType::get(I16Type, 128);
-  VectorType* Bfloat128Type = VectorType::get(BF16Type, 128);
-  VectorType* Char256Type = VectorType::get(I8Type, 256);
-  VectorType* Int5Type = VectorType::get(I32Type, 5);
+  Type *BFloatType = Type::getBFloatTy(Ctx);
 
+  /*
+  VectorType* Int64Type = FixedVectorType::get(I32Type, 64);
+  VectorType* Float64Type = FixedVectorType::get(F32Type, 64);
+  VectorType* Short128Type = FixedVectorType::get(I16Type, 128);
+  VectorType* Bfloat128Type = FixedVectorType::get(BFloatType, 128);
+  VectorType* Char256Type = FixedVectorType::get(I8Type, 256);
+  VectorType* Int5Type = FixedVectorType::get(I32Type, 5);
+  */
 
   for (auto BBIt = Func.begin(), BBEnd = Func.end(); BBIt != BBEnd;) {
     BasicBlock &BB = *BBIt;
@@ -152,7 +148,6 @@ bool TPCFMAopt::runOnFunction(Function &Func) {
                           usi->getOpcode() == Instruction::FSub);
 
           IRBuilder<> Builder(usi);
-          Value *ExtF;
           Type *mactype = (intop) ? I32Type : F32Type;
           unsigned swity = 0;
           unsigned swval = 0;
@@ -166,9 +161,9 @@ bool TPCFMAopt::runOnFunction(Function &Func) {
           } else if (floatop) {
             if (opnd_type == F32Type) {
               swity = 0;
-            } else if (opnd_type == BF16Type) {
+            } else if (opnd_type == BFloatType) {
               swity = 1;
-              mactype = BF16Type;
+              mactype = BFloatType;
             } else if (opnd_type == HalfType) {
               swity = 11;
               mactype = HalfType;
@@ -177,7 +172,7 @@ bool TPCFMAopt::runOnFunction(Function &Func) {
           } else {
             llvm_unreachable("unexpected opearion");
           }
-          ExtF = Intrinsic::getDeclaration(F->getParent(), Intrinsic::tpc_mac,
+          Function *ExtF = Intrinsic::getDeclaration(F->getParent(), Intrinsic::tpc_mac,
                                            {mactype, opnd_type, I1Type});
           Value *acc_opnd;
           Value *us_opnd0 = usi->getOperand(0);
@@ -200,8 +195,8 @@ bool TPCFMAopt::runOnFunction(Function &Func) {
               acc_opnd = us_opnd0;
             }
           }
-          Value *NewIns = Builder.CreateCall(
-              ExtF, {opnd0, opnd1, ConstantInt::get(I8Type, swity), // op_type
+          Value *NewIns = Builder.CreateCall(ExtF,
+              {opnd0, opnd1, ConstantInt::get(I8Type, swity), // op_type
                      ConstantInt::get(I32Type, swval),              // switch
                      acc_opnd, ConstantInt::get(I1Type, 1),
                      ConstantInt::get(I1Type, 0)});

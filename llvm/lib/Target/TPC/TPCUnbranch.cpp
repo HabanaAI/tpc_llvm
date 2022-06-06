@@ -1,9 +1,3 @@
-//===- TPCUnbranch.cpp ------------------------------------------*- C++ -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 // This pass try to remove condinal on statements with predicate
 // if (p) {s1;s2,..}   {s1(p);s2(p)
@@ -11,6 +5,7 @@
 #ifdef LLVM_TPC_COMPILER
 
 #include "TPCTargetMachine.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/InstIterator.h"
@@ -74,7 +69,18 @@ typedef struct {
   Value *polar;
 } tPredicPart;
 std::map<PHINode *, tPredicPart> PHIConform;
-    // returns true if conformed and operands which different
+
+static tPredicPart getPred(const IntrinsicInst &II) {
+  return {II.getOperand(II.getNumOperands() - 3),
+          II.getOperand(II.getNumOperands() - 2)};
+}
+
+static void setPred(IntrinsicInst &II, const tPredicPart PP) {
+  II.setOperand(II.getNumOperands() - 3, PP.predic);
+  II.setOperand(II.getNumOperands() - 2, PP.polar);
+}
+
+// returns true if conformed and operands which different
 static bool PHIOperandsAreConform(PHINode *phi, Value **PtrOpnd0,
                                   Value **PtrOpnd1,
                                   KindDecomposingContext kdc) {
@@ -130,24 +136,15 @@ static KindPhi DecomposePHIAccordingBranch(BranchInst *bi, PHINode *phi,
     return StopShow;
   } 
   Value *ConfOpnd0, *ConfOpnd1;
-  bool PhiSimilar;
-  PhiSimilar = PHIOperandsAreConform(phi, &ConfOpnd0, &ConfOpnd1, kdc);
+  bool PhiSimilar = PHIOperandsAreConform(phi, &ConfOpnd0, &ConfOpnd1, kdc);
   Type* PhiType = phi->getType();
   if (PhiSimilar) {
     if (kdc == Analysis) {
       if (PHIConform.find(phi) == PHIConform.end()) {
         IntrinsicInst* ii = dyn_cast<IntrinsicInst>(phi->getIncomingValue(0));     
         tPredicPart PP = {nullptr, nullptr};
-        if (ii) {
-          Intrinsic::ID inid= ii->getIntrinsicID();
-          if (inid >= Intrinsic::tpc_abs) {
-            int no = ii->getNumOperands();
-            int num_polar = no - 2;
-            int num_predic = num_polar - 1;
-            PP.polar = ii->getOperand(num_polar);
-            PP.predic = ii->getOperand(num_predic);
-          }
-        }
+        if (ii && ii->getIntrinsicID() >= Intrinsic::tpc_abs)
+            PP = getPred(*ii);
         PHIConform.insert(std::make_pair(phi, PP));
       }
     }
@@ -249,12 +246,9 @@ static bool DecomposeBranchInstWithNorm(BranchInst *bi, Value **cond,
                                         BasicBlock **suc0,
                                         BasicBlock **suc1) {
   if (bi->getNumSuccessors() == 2) {
-    BasicBlock *s0 = bi->getSuccessor(0);
-    BasicBlock *s1 = bi->getSuccessor(1);
-    Value *co = bi->getCondition();
-    *suc0 = s0;
-    *suc1 = s1;
-    *cond = co;
+    *suc0 = bi->getSuccessor(0);
+    *suc1 = bi->getSuccessor(1);
+    *cond = bi->getCondition();
     return false;
   }
   return true;
@@ -326,14 +320,10 @@ static bool BBBad(BasicBlock *bb_accept, BasicBlock *rbb) {
   int instr_count = 0;
   BranchInst *bia = dyn_cast<BranchInst>(bb_accept->getTerminator());
 
-  for (auto It = rbb->begin(), E = rbb->end(); It != E;) {
-    Instruction &I = *It;
-    ++It;
-    if (PHINode *phi = dyn_cast<PHINode>(&I)) {
-      Value *tv, *fv, *cond;
-      if (DecomposePHIAccordingBranch(bia, phi, &tv, &fv, &cond) == StopShow)
-        return true;
-    }
+  for (PHINode &Phi : rbb->phis()) {
+    Value *tv, *fv, *cond;
+    if (DecomposePHIAccordingBranch(bia, &Phi, &tv, &fv, &cond) == StopShow)
+      return true;
   }
 
   if (bbk[rbb] == EndBB) {
@@ -348,21 +338,14 @@ static bool BBBad(BasicBlock *bb_accept, BasicBlock *rbb) {
       if (inid < Intrinsic::tpc_abs) {
         return true;
       }
-      int no = intrins->getNumOperands();
-      int num_polar = no - 2;
-      int num_predic = num_polar - 1;
-      int num_income = num_predic - 1;
-      Value *polar = intrins->getOperand(num_polar);
-      Value *predic = intrins->getOperand(num_predic);
-      Type *predic_type = predic->getType();
-      if (predic_type->isVectorTy()) {
+      const tPredicPart PP = getPred(*intrins);
+      if (PP.predic->getType()->isVectorTy())
         return true;
-      }
-      ConstantInt *CPre = dyn_cast<ConstantInt>(predic);
-      ConstantInt *CPol = cast<ConstantInt>(polar);
+      ConstantInt *CPre = dyn_cast<ConstantInt>(PP.predic);
+      ConstantInt *CPol = cast<ConstantInt>(PP.polar);
       unsigned vpola = CPol->getZExtValue();
       if (HasIncome(inid)) {
-        Value *income = intrins->getOperand(num_income);
+        Value *income = intrins->getOperand(intrins->getNumOperands() - 4);
         Type *ti = income->getType();
         if ((!(CPre && CPre->getZExtValue() == 1) || vpola == 1 ||
              ti->isVectorTy()) &&
@@ -415,25 +398,16 @@ static void NormalizeIntrinPredic(IntrinsicInst *intrins, bool invert,
                                     LLVMContext &Ctx) {
   // do intrinsic with normal(0) polarity if invert - 0 and in turn
   // do polarity as invert
-  int no = intrins->getNumOperands();
-  int num_polar = no - 2;
-  int num_predic = num_polar - 1;
-  Value *polar = intrins->getOperand(num_polar);
-  Value *predic = intrins->getOperand(num_predic);
+  const tPredicPart PP = getPred(*intrins);
   // Start with trivial cases
-  Constant *cv = dyn_cast<Constant>(polar);
+  Constant *cv = dyn_cast<Constant>(PP.polar);
   unsigned polarity = cv->isZeroValue() ? 0 : 1;
-  if (polarity == invert) {
+  if (polarity == invert)
     return;
-  } else {
-    unsigned neg_polar = ~polarity & 1;
-    IRBuilder<> Builder(BuildInstr);
- 
-    intrins->setOperand(num_polar,
-                        ConstantInt::get(Type::getInt1Ty(Ctx), neg_polar));
-    Value *NewPred = Builder.CreateNot(predic);
-    intrins->setOperand(num_predic, NewPred);
-  }
+
+  unsigned neg_polar = ~polarity & 1;
+  setPred(*intrins, {IRBuilder<>(BuildInstr).CreateNot(PP.predic),
+                     ConstantInt::get(Type::getInt1Ty(Ctx), neg_polar)});
 }
 
 static Value* ReplacePHI(PHINode* phino, Instruction* build_instr,
@@ -450,12 +424,11 @@ static Value* ReplacePHI(PHINode* phino, Instruction* build_instr,
   Module *Mod = Func.getParent();
   Type *tbool = IntegerType::get(Ctx, 1);
   Type *Int32Ty = Type::getInt32Ty(Ctx);
-  VectorType *Int5Ty = VectorType::get(Int32Ty, 5);
+  VectorType *Int5Ty = FixedVectorType::get(Int32Ty, 5);
   Type *tt = truval->getType();
-  Value *ExtF;
   Value *NewIns;
   if (tt == Int5Ty) {
-    ExtF = Intrinsic::getDeclaration(Mod, Intrinsic::tpc_mov_mask, tt);
+    Function *ExtF = Intrinsic::getDeclaration(Mod, Intrinsic::tpc_mov_mask, tt);
     NewIns =
         Builder.CreateCall(ExtF, {truval, ConstantInt::get(Int32Ty, 31), // mask
                                   ConstantInt::get(Int32Ty, 0), // switch
@@ -467,16 +440,11 @@ static Value* ReplacePHI(PHINode* phino, Instruction* build_instr,
   }
 
   if (PHIConform.find(phino) != PHIConform.end()) { // need to repeat by with new argument
-    tPredicPart PP = PHIConform[phino];
     Instruction*orig = cast<Instruction>(phino->getIncomingValue(0));
     Instruction *cloni = orig->clone();
     if (const IntrinsicInst *intrins = dyn_cast<IntrinsicInst>(orig)) {
       assert(intrins->getIntrinsicID() >= Intrinsic::tpc_abs);
-      int no = intrins->getNumOperands();
-      int num_polar = no - 2;
-      int num_predic = num_polar - 1;
-      cloni->setOperand(num_polar, PP.polar);
-      cloni->setOperand(num_predic, PP.predic);
+      setPred(*dyn_cast<IntrinsicInst>(cloni), PHIConform[phino]);
     }
     cloni->setOperand(0, NewIns);
     cloni->insertBefore(build_instr);
@@ -485,10 +453,19 @@ static Value* ReplacePHI(PHINode* phino, Instruction* build_instr,
   return NewIns;
 }
 
-//move instruction from bb to it's predecessor. Predicate is taken into account
+/// How to process branch instruction to end basic block.
+enum class ActionForBranchToEnd {
+  // Move to acceptor basic block.
+  Move,
+  // Ignore. Left untouched.
+  Ignore,
+};
+
+// move instruction from bb to it's predecessor. Predicate is taken into account
 static void MoveInstructionsUp(BasicBlock *bb_donor, BasicBlock *bb_accept,
-                                 int kind_pred,
-                                 Function &Func) {
+                               int kind_pred,
+                               const ActionForBranchToEnd BTEAction,
+                               Function &Func) {
   LLVMContext &Ctx = Func.getContext();
   Instruction *lasti = bb_accept->getTerminator();
   assert(lasti);
@@ -501,27 +478,22 @@ static void MoveInstructionsUp(BasicBlock *bb_donor, BasicBlock *bb_accept,
         I.moveBefore(lasti);
       } else {
         NormalizeIntrinPredic(intrins, kind_pred == FalsePred, lasti, Ctx);
-        Value *NewPred;
         BranchInst *bi = dyn_cast<BranchInst>(lasti);
         assert(bi && bi->isConditional());
         Value *cond = bi->getCondition();
-        int no = intrins->getNumOperands();
-        int num_polar = no - 2;
-        int num_predic = num_polar - 1;
-        int num_income = num_predic - 1;
-        Value *polar = intrins->getOperand(num_polar);
-        Value *predic = intrins->getOperand(num_predic);
-        Type *predic_type = predic->getType();
-        if (predic_type->isVectorTy()) {
+        const tPredicPart PP = getPred(*intrins);
+        if (PP.predic->getType()->isVectorTy()) {
           llvm_unreachable("not yet");
         }
+        const unsigned num_predic = intrins->getNumOperands() - 3;
+        const unsigned num_income = intrins->getNumOperands() - 4;
 
-        ConstantInt *CPre = dyn_cast<ConstantInt>(predic);
-        ConstantInt *CPol = cast<ConstantInt>(polar);
+        ConstantInt *CPre = dyn_cast<ConstantInt>(PP.predic);
+        ConstantInt *CPol = cast<ConstantInt>(PP.polar);
         unsigned vpola = CPol->getZExtValue();
         Intrinsic::ID inid = intrins->getIntrinsicID();
         bool via_select = false;
-        Value *income = intrins->getOperand(num_income);       
+        Value *income = intrins->getOperand(num_income);
         if (IsMac(inid)) {
           if (CPre == nullptr) {
             via_select = true;
@@ -556,28 +528,64 @@ static void MoveInstructionsUp(BasicBlock *bb_donor, BasicBlock *bb_accept,
             SelIns->setFalseValue(intrins);
           }         
         } else {
+          Value *NewPred;
           if (kind_pred == TruePred) {
             NewPred=(CPre && CPre->getZExtValue() == 1)
                 ? cond
-                : Builder.CreateAnd(predic, cond);
+                : Builder.CreateAnd(PP.predic, cond);
           } else {
             NewPred = (CPre && CPre->getZExtValue() == 0)
                            ? cond
-                           : Builder.CreateOr(predic, cond);
+                           : Builder.CreateOr(PP.predic, cond);
           }
           intrins->removeFromParent();
           intrins->setOperand(num_predic, NewPred);
           intrins->insertBefore(lasti);
         }
       }
-    } else if (PHINode *phino = dyn_cast<PHINode>(&I)) {
-      assert(kind_pred == NoPred);     
+      continue;
+    }
+
+    if (PHINode *phino = dyn_cast<PHINode>(&I)) {
+      assert(kind_pred == NoPred);
       Value *NewIns = ReplacePHI(phino, lasti, lasti, Func);
       phino->replaceAllUsesWith(NewIns);
-      phino->eraseFromParent();         
-    } else {
-      I.moveBefore(lasti);
+      phino->eraseFromParent();
+      continue;
     }
+
+    // Example:
+    //
+    //    entry:
+    //      %cmp = ...
+    //      br i1 %cmp, label %if.then, label %if.else
+    //
+    //    if.then:                                          ; preds = %entry
+    //      ...
+    //      br label %if.end  ; <----! this is a branch to end BB
+    //
+    //    if.else:                                          ; preds = %entry
+    //      ...
+    //      br label %if.end  ; <----! this is a branch to end BB.
+    //
+    //    if.end:                                           ; preds = %if.else, %if.then, ...
+    //      ...
+    if (BranchInst* BranchI = dyn_cast<BranchInst>(&I)) {
+      if (BranchI->getNumSuccessors() == 1 &&
+          bbk[BranchI->getSuccessor(0)] == EndBB) {
+        if (BTEAction == ActionForBranchToEnd::Ignore) {
+          I.eraseFromParent();
+          continue;
+        }
+        if (BTEAction == ActionForBranchToEnd::Move) {
+          I.moveBefore(lasti);
+          continue;
+        }
+        llvm_unreachable("All BTEActions must be processed at this point");
+      }
+    }
+
+    I.moveBefore(lasti);
   }
 }
 
@@ -602,13 +610,8 @@ static KindPhi CheckOutEdges(BranchInst *bia, BasicBlock *babl) {
   SmallSetVector<PHINode *, 16> phiset;
 
   for (auto *bb : successors(babl)) {
-    for (auto It = bb->begin(), E = bb->end(); It != E;) {
-      Instruction &I = *It;
-      ++It;
-      if (PHINode *phino = dyn_cast<PHINode>(&I)) {
-        phiset.insert(phino);
-      }
-    }
+    for (PHINode &Phi : bb->phis())
+      phiset.insert(&Phi);
   }
 
   // phi must be good
@@ -622,7 +625,6 @@ static KindPhi CheckOutEdges(BranchInst *bia, BasicBlock *babl) {
       was_dont_move = true;
       notmovebb.insert(phii->getParent());
     }  
-    continue;
   }
     
    return was_dont_move ? DontMove : good;
@@ -662,22 +664,8 @@ bool TPCUnbranch::runOnFunction(Function &Func) {
           if (dyn_cast<BranchInst>(elseo->getFirstNonPHI())) {
             continue;
           }
-          bool looping = false;
-          for (auto *bb : successors(theno)) {
-            if (bb == predeb) {
-              looping = true;
-              break;
-            }
-          }
-          if (looping)
-            continue;
-          for (auto *bb : successors(elseo)) {
-            if (bb == predeb) {
-              looping = true;
-              break;
-            }
-          }
-          if (looping)
+          if (is_contained(successors(theno), predeb) ||
+              is_contained(successors(elseo), predeb))
             continue;
           int nuo = bi->getNumSuccessors();
           if (theno != predeb && elseo != predeb && 
@@ -689,6 +677,7 @@ bool TPCUnbranch::runOnFunction(Function &Func) {
     }
   }
 
+  SmallPtrSet<BasicBlock*, 8> BBsToFree;
   for (auto *bi : make_range(iflist.rbegin(), iflist.rend())) {
     BasicBlock *accept = bi->getParent();
     BasicBlock *suc_true, *suc_false;
@@ -727,19 +716,9 @@ bool TPCUnbranch::runOnFunction(Function &Func) {
     } else {
       continue;
     }
-    BasicBlock *predecessor_true;
-    if (bbk[suc_true] == ThenBB) {
-      predecessor_true = suc_true->getSinglePredecessor();
-      if (!predecessor_true)
-        continue;
-    }
-    BasicBlock *predecessor_false;
-
-    if (bbk[suc_false]==ElseBB) {
-      predecessor_false = suc_false->getSinglePredecessor();
-      if (!predecessor_false)
-        continue;
-    }
+    if ((bbk[suc_true] == ThenBB && !suc_true->getSinglePredecessor()) ||
+        (bbk[suc_false] == ElseBB && !suc_false->getSinglePredecessor()))
+      continue;
 
     if (bbk[suc_false] == EndBB) {
       if (suc_true->getSingleSuccessor() != suc_false)
@@ -786,43 +765,35 @@ bool TPCUnbranch::runOnFunction(Function &Func) {
     }
 
     if (bbk[suc_true]==ThenBB && bbk[suc_false]==ElseBB) {
-      MoveInstructionsUp(suc_true, accept, TruePred, Func);
+      assert(bb_end == term_false->getSuccessor(0));
+      MoveInstructionsUp(suc_true, accept, TruePred, ActionForBranchToEnd::Ignore, Func);
       suc_true->dropAllReferences();
       suc_true->removeFromParent();
-      MoveInstructionsUp(suc_false, accept, FalsePred, Func);
+      BBsToFree.insert(suc_true);
+      MoveInstructionsUp(suc_false, accept, FalsePred, ActionForBranchToEnd::Move, Func);
       suc_false->dropAllReferences();
       suc_false->removeFromParent();
-      assert(bb_end == term_false->getSuccessor(0));
-      } else if (bbk[suc_true] == ThenBB && bbk[suc_false] == EndBB) {
-        MoveInstructionsUp(suc_true, accept, TruePred, Func);
-        suc_true->dropAllReferences();
-        suc_true->removeFromParent();
-        assert(bb_end == suc_false);
-      } else if (bbk[suc_true] == EndBB && bbk[suc_false] == ElseBB) {
-        MoveInstructionsUp(suc_false, accept, FalsePred, Func);
-        suc_false->dropAllReferences();
-        suc_false->removeFromParent();
-        assert(bb_end == suc_true);
-      } else {
-        llvm_unreachable("bad combination");
-      }
-        // may end block dragged inside?
-    BasicBlock *predecessor_end = nullptr;
-    // must be single after dragging then/else
-    // and all preds must be accept
-    for (auto *bb : predecessors(bb_end)) {
-      if (bb != accept) {
-        predecessor_end = nullptr;
-        break;
-      } else {
-        predecessor_end = accept;
-      }
+      BBsToFree.insert(suc_false);
+    } else if (bbk[suc_true] == ThenBB && bbk[suc_false] == EndBB) {
+      assert(bb_end == suc_false);
+      MoveInstructionsUp(suc_true, accept, TruePred, ActionForBranchToEnd::Move, Func);
+      suc_true->dropAllReferences();
+      suc_true->removeFromParent();
+      BBsToFree.insert(suc_true);
+    } else if (bbk[suc_true] == EndBB && bbk[suc_false] == ElseBB) {
+      assert(bb_end == suc_true);
+      MoveInstructionsUp(suc_false, accept, FalsePred, ActionForBranchToEnd::Move, Func);
+      suc_false->dropAllReferences();
+      suc_false->removeFromParent();
+      BBsToFree.insert(suc_false);
+    } else {
+      llvm_unreachable("bad combination");
     }
-    bool mov_end = notmovebb.empty();
-    
-    if (predecessor_end == accept) {
+
+    const SmallVector<BasicBlock *, 8> BBEndPredecessors(predecessors(bb_end));
+    if (is_splat(BBEndPredecessors) && BBEndPredecessors.front() == accept) {
       // need to check no ref beside branches (phi) in ref BB
-      if (!mov_end) { 
+      if (!notmovebb.empty()) {
         // can not move,but suc_true already moved
         // so we must transform phi with such block
         for (auto It = bb_end->begin(), E = bb_end->end(); It != E;) {
@@ -834,19 +805,35 @@ bool TPCUnbranch::runOnFunction(Function &Func) {
             phino->eraseFromParent();
           }
         }
-      }
-      else { // tail can be moved
-        MoveInstructionsUp(bb_end, accept, NoPred, Func);
+      } else { // tail can be moved
+        // If accept BB has a branch to end BB, this branch must be deleted.
+        for (auto It = accept->begin(), E = accept->end(); It != E;) {
+          Instruction &II = *It;
+          ++It;
+
+          BranchInst *BI = dyn_cast<BranchInst>(&II);
+          if (BI && BI->getNumSuccessors() == 1 &&
+              BI->getSuccessor(0) == bb_end)
+            BI->eraseFromParent();
+        }
+
+        MoveInstructionsUp(bb_end, accept, NoPred, ActionForBranchToEnd::Ignore, Func);
         bb_end->dropAllReferences();
         bb_end->removeFromParent();
+        BBsToFree.insert(bb_end);
       }
     }
+
     bi->replaceAllUsesWith(UndefValue::get(bi->getType()));
     bi->eraseFromParent();
     NumTransformed++;
   }
 
- //Func.dump();
+  for (BasicBlock *BB : BBsToFree) {
+    assert(BB->getParent() == nullptr);
+    delete BB;
+  }
+
   return NumTransformed > 0;
 }
 #endif // LLVM_TPC_COMPILER

@@ -19,7 +19,7 @@ void main(int dest, float xx)
     float y, z, x = xx;
     int i, j;
     int sign = 1;
-    x = s_f32_abs_s_b(xx, 1, x, 0);
+    x = s_f32_abs(xx, 0, 1, x, 0);
 
     if( xx < 0 )
     {

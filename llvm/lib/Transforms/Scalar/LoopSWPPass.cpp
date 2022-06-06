@@ -1,19 +1,24 @@
-//===- LoopSWPPass.cpp : TPC IR Software Pipelining -----------------------===//
+// ============= LoopSWPPass.cpp : TPC IR Software Pipelining ============= //
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-//===-----------------------------------------------------------------------===//
+//                     The LLVM Compiler Infrastructure:
 //
-//===-----------------------------------------------------------------------===//
+//            2020,2021 - This pass is a property of Habana labs
+//
+// Author : Vinay V. Vasista
+// Email  : vvasista@habana.ai
+//
+// ======================================================================== //
+
 #include "llvm/Transforms/Scalar/LoopSWPPass.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 
@@ -1109,7 +1114,7 @@ bool LoopSWP::isPrologueOrEpilogueLoop() {
 bool LoopSWP::checkUniformCoordUpdates(std::string Indent) {
   std::string DebugTag = BAIL_OUT_TAG + Indent;
   Type *T5xi32 =
-      VectorType::get(Type::getInt32Ty(HeaderBlock->getContext()), 5);
+      FixedVectorType::get(Type::getInt32Ty(HeaderBlock->getContext()), 5);
   int MaxIntVal = 0x7fffffff;
 
   // for each Coord phi node
@@ -1236,7 +1241,7 @@ bool LoopSWP::hasUnclusteredCompute(std::string Indent) {
 bool LoopSWP::checkRequirements(std::string Indent) {
   std::string DebugTag = BAIL_OUT_TAG + Indent;
   Type *T5xi32 =
-      VectorType::get(Type::getInt32Ty(HeaderBlock->getContext()), 5);
+      FixedVectorType::get(Type::getInt32Ty(HeaderBlock->getContext()), 5);
 
   bool HasStoreTensor = false;
   for (Instruction &Inst : *HeaderBlock) {

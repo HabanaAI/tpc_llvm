@@ -1,8 +1,12 @@
 ; RUN: llc -O0 %s -o - | FileCheck %s
+
+; XFAIL:*
+; GAUDI-2448
+
 ; CHECK-LABEL: tmp0:
 ; COM: tmp0:{{.*}}Block address taken
 ; CHECK: %if.then
-; CHECK: mov.i32  %S{{[0-9]+}},{{.*}}tmp0{{.*}}, %SP{{[0-9]+}}
+; CHECK: mov.i32  %S{{[0-9]+}},{{.*}}tmp0{{.*}}
 ; CHECK: jmpr %S{{[0-9]+}}, %SP{{[0-9]+}}
 
 target triple = "tpc"

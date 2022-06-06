@@ -7,11 +7,11 @@ void main(int x0, int x1, int dest0)
     uint64 __local *ptr_x0 = (uint64 __local *)x0;
     uint64 __local *ptr_x1 = (uint64 __local *)x1;
     bool256 pred2;
-    pred2 =  bv_mov_b(1);
+    pred2 =  v_i1_mov_i1_b(1, 0, (bool256){0}, 1, 0);
     
    uint64 __local *res0 = (uint64  __local *)dest0;
     uint64 temp_res0 = 0;
-    temp_res0 = v_u32_xor_v_v_vb(*ptr_x0, *ptr_x1, temp_res0, pred2, 0);
+    temp_res0 = v_u32_xor_vb(*ptr_x0, *ptr_x1, 0, temp_res0, to_bool64(pred2), 0);
     *res0 = temp_res0;
 }
 //CHECK-ASM: .globl main

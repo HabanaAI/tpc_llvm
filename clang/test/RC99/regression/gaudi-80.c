@@ -7,7 +7,7 @@ void main(tensor out) {
   int5 space = {0, 0, 0, 0, 0};
   volatile int t = a;//23534;
 //  a = t;
-//  i32_st_tnsr_i_v_b(out, space, a, 1, 0);
+//  v_i32_st_tnsr(out, space, a, 0, 1, 0);
 }
 // CHECK: mov.i32 [[A:%S[0-9]+]], 0x1e4b9
 // CHECK: st_l  [[ADDR_A:0x[0-9]+]], [[A]]

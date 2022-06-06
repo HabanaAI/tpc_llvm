@@ -7,4 +7,4 @@ void main(int src, int dest) {
   *dptr = convert_char256_to_float256(src_val, 0);
 }
 
-// CHECK-IR: sitofp <256 x i8> {{.*}} to <256 x float>
+// CHECK-IR: call <256 x float> @llvm.tpc.convert.v256f32.v256i8.i1(<256 x i8> {{.*}}, i8 4, i32 0, <256 x float> undef, i1 true, i1 false)

@@ -4,7 +4,7 @@ void main(int dest, int src, unsigned short divisor) {
   uint16_t_pair_t __local *sptr = (uint16_t_pair_t __local *) src;
   uint16_t_pair_t __local *dptr = (uint16_t_pair_t __local *) dest;
   uint16_t_pair_t quot_rem = *sptr;
-  quot_rem = s_u16_udiv_step_s(quot_rem, divisor, 5);
+  quot_rem = u16_udiv_step(divisor, 5, 0, quot_rem, 1, 0);
   *dptr = quot_rem;
 }
 
@@ -12,7 +12,7 @@ void main(int dest, int src, unsigned short divisor) {
 // CHECK-DAG: ld_l  %S[[ZN:[0-9]+]], %S1
 // CHECK-DAG: ld_l  %S[[ZNN:[0-9]+]], %S{{[0-9]+}}
 
-// CHECK:     udiv_step.u16 0x5 %Z[[ZN]], %S2, %SP0
+// CHECK:     udiv_step.u16 0x5 %Z[[ZN]], %S2
 
 // CHECK-DAG: st_l %S0,    %S[[ZN]]
 // CHECK-DAG: st_l %S{{[0-9]+}}, %S[[ZNN]]

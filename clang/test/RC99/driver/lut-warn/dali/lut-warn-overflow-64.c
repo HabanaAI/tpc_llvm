@@ -7,11 +7,11 @@ void main(int x0, int x3, int dest0)
 
    float64 __local *res0 = (float64  __local *)dest0;
     float64 temp_res0 = 0;
-    temp_res0 = v_f32_lookup_c0_v_b(*ptr_x0, temp_res0, 1, e_fp32_pow2, x3, 0);
-    temp_res0 = v_f32_lookup_c0_v_b(*ptr_x0, temp_res0, 1, e_fp16_tanh, x3, 0);
-    temp_res0 = v_f32_lookup_c0_v_b(*ptr_x0, temp_res0, 1, e_i16_rcp, x3, 0);
-    temp_res0 = v_f32_lookup_c0_v_b(*ptr_x0, temp_res0, 1, e_i16_tanh, x3, 0);
-    temp_res0 = v_f32_lookup_c0_v_b(*ptr_x0, temp_res0, 1, e_i8_exp_linear, x3, 0);
+    temp_res0 = v_f32_lookup_c0(*ptr_x0, e_fp32_pow2, 1, temp_res0, x3, 0);
+    temp_res0 = v_f32_lookup_c0(*ptr_x0, e_fp16_tanh, 1, temp_res0, x3, 0);
+    temp_res0 = v_f32_lookup_c0(*ptr_x0, e_i16_rcp, 1, temp_res0, x3, 0);
+    temp_res0 = v_f32_lookup_c0(*ptr_x0, e_i16_tanh, 1, temp_res0, x3, 0);
+    temp_res0 = v_f32_lookup_c0(*ptr_x0, e_i8_exp_linear, 1, temp_res0, x3, 0);
  
     *res0 = temp_res0;
 }

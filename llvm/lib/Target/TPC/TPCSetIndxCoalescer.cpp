@@ -1,9 +1,5 @@
 //===---- TPCSetIndxCoalescer.cpp ------ Optimizes SET_INDX ---------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 //===----------------------------------------------------------------------===//
@@ -98,7 +94,7 @@ static bool isUnpredicatedMOV(const MachineInstr *MI) {
     return false;
   if (MI->getOperand(NMovType).getImm() != TPCII::OpType::INT32)
     return false;
-  if (MI->getOperand(NMovPredicate).getReg() != TPC::SP0)
+  if (MI->getOperand(NMovPredicate).getReg() != TPC::SPRF_TRUE)
     return false;
   if (MI->getOperand(NMovPolarity).getImm() != 0)
     return false;
@@ -201,7 +197,7 @@ MachineInstr *TPCSetIndxCoalescer::skipRegisterLoad(MachineInstr *I) {
                                .addImm(OpVal)
                                .addImm(I->getOperand(NMask).getImm())
                                .addImm(0)
-                               .addReg(TPC::SP0)
+                               .addReg(TPC::SPRF_TRUE)
                                .addImm(0);
       
   assert(NewSetIndx->getNumOperands() == I->getNumOperands());

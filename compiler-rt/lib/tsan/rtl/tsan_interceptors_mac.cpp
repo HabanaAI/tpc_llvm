@@ -23,11 +23,8 @@
 #include <errno.h>
 #include <libkern/OSAtomic.h>
 #include <objc/objc-sync.h>
-#include <sys/ucontext.h>
-
-#if defined(__has_include) && __has_include(<os/lock.h>)
 #include <os/lock.h>
-#endif
+#include <sys/ucontext.h>
 
 #if defined(__has_include) && __has_include(<xpc/xpc.h>)
 #include <xpc/xpc.h>
@@ -250,8 +247,6 @@ TSAN_INTERCEPTOR(void, os_lock_unlock, void *lock) {
   REAL(os_lock_unlock)(lock);
 }
 
-#if defined(__has_include) && __has_include(<os/lock.h>)
-
 TSAN_INTERCEPTOR(void, os_unfair_lock_lock, os_unfair_lock_t lock) {
   if (!cur_thread()->is_inited || cur_thread()->is_dead) {
     return REAL(os_unfair_lock_lock)(lock);
@@ -290,8 +285,6 @@ TSAN_INTERCEPTOR(void, os_unfair_lock_unlock, os_unfair_lock_t lock) {
   Release(thr, pc, (uptr)lock);
   REAL(os_unfair_lock_unlock)(lock);
 }
-
-#endif  // #if defined(__has_include) && __has_include(<os/lock.h>)
 
 #if defined(__has_include) && __has_include(<xpc/xpc.h>)
 
@@ -445,6 +438,7 @@ struct fake_shared_weak_count {
   virtual void on_zero_shared() = 0;
   virtual void _unused_0x18() = 0;
   virtual void on_zero_shared_weak() = 0;
+  virtual ~fake_shared_weak_count() = 0;  // suppress -Wnon-virtual-dtor
 };
 }  // namespace
 

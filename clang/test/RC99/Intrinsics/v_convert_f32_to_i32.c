@@ -1,6 +1,6 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,CHECK-BF16 %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,CHECK-BF16 %s
 
 void main(int dest, int src1, int vpredp, _Bool pred) {
   volatile int64 __local *dest_ptr = (int64 __local *)dest;
@@ -35,7 +35,7 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
     *dest_ptr++ = res;
 // CHECK: convert.f32 target_type=int32 rhne [[DEST]], [[SRC]], %SP1
 
-#if defined(__gaudi__)
+#if defined(__gaudi__) || defined(__goya2__)
     res = v_convert_f32_to_i32_b(x, SW_RZ, res, pred, 0);
     *dest_ptr++ = res;
 // CHECK-BF16: convert.f32 target_type=int32 rz [[DEST]], [[SRC]], [[PRED]]

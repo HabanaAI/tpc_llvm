@@ -1,8 +1,10 @@
 //===- TPCIndexSpace.cpp --- TPC INDEX SPACE ------------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//                     The LLVM Compiler Infrastructure:
+//
+//              2019 - This pass is a property of Habana labs
+//
 //
 //===----------------------------------------------------------------------===//
 //===----------------------------------------------------------------------===//
@@ -15,7 +17,6 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"

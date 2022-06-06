@@ -1,8 +1,9 @@
 //===-- TPCRegisterInfo.h - Sparc Register Information Impl ---*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -44,14 +45,13 @@ struct TPCRegisterInfo : public TPCGenRegisterInfo {
 
   bool trackLivenessAfterRegAlloc(const MachineFunction &MF) const override { return true; }
 
-  bool getRegAllocationHints(unsigned VirtReg,
-                             ArrayRef<MCPhysReg> Order,
+  bool getRegAllocationHints(Register VirtReg, ArrayRef<MCPhysReg> Order,
                              SmallVectorImpl<MCPhysReg> &Hints,
                              const MachineFunction &MF,
                              const VirtRegMap *VRM = nullptr,
-                             const LiveRegMatrix *Matrix = nullptr)
-    const override;
-  bool isConstantPhysReg(unsigned PhysReg) const override;
+                             const LiveRegMatrix *Matrix = nullptr) const override;
+  bool isConstantPhysReg(MCRegister PhysReg) const override;
+  
 };
 
 } // end namespace llvm

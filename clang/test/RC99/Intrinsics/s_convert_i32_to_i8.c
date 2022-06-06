@@ -1,6 +1,6 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN2P %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN2P %s
 
 void main(int dest, int x, int shift, _Bool pred) {
   volatile char __local *dest_ptr = (char __local *)dest;
@@ -36,7 +36,7 @@ void main(int dest, int x, int shift, _Bool pred) {
   *dest_ptr++ = res;
 // CHECK: convert_int32 sr to_8 [[DEST]], %S1, 0x4, [[PRED]]
 
-#if defined(__gaudi__)
+#if defined(__gaudi__) || defined(__goya2__)
   res = s_convert_int32_to_i8(x, 4, SW_RZ, res, pred, 0);
   *dest_ptr++ = res;
 // GEN2P: convert_int32 rz to_8 [[DEST]], %S1, 0x4, [[PRED]]

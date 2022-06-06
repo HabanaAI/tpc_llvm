@@ -1,6 +1,7 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99  -mllvm -tpc-hwwa-conv-maxint=0 %s -o - | FileCheck  %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16  -mllvm -tpc-hwwa-conv-maxint=0 %s -o - | FileCheck --check-prefixes=CHECK,GEN23 %s
-
+// RUN_UNCOMMIT_AFTER_GAUDI_1911: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudib -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN23 %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN23 %s
 
 void main(int dest, int src1, int vpredp, _Bool pred) {
   volatile char256 __local *dest_ptr = (char256 __local *)dest;
@@ -33,14 +34,14 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
 
     res = v_convert_f32_to_i8_b(x, 2, SW_RHNE, res, 1, 0);
     *dest_ptr++ = res;
-    // CHECK: convert.f32 lane_sel=2 target_type=int8 rhne [[DEST]], [[SRC]], %SP0
+    // CHECK: convert.f32 lane_sel=2 target_type=int8 rhne [[DEST]], [[SRC]]
 
     res = v_convert_f32_to_i8_b(x, 1, SW_RZ, res, pred, 0);
     *dest_ptr++ = res;
     // CHECK: convert.f32 lane_sel=1 target_type=int8 rz [[DEST]], [[SRC]], [[PRED]]
 
 
-#if defined(__gaudi__)
+#if  defined(__gaudib__) || defined(__goya2__) || defined(__gaudi__)
     res = v_convert_f32_to_i8_b(x, 1, SW_RD, res, pred, 0);
     *dest_ptr++ = res;
     // GEN23: convert.f32 lane_sel=1 target_type=int8 rd [[DEST]], [[SRC]], [[PRED]]
@@ -72,7 +73,7 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
     *dest_ptr++ = res;
     // CHECK: convert.f32 lane_sel=3 target_type=int8 rz [[DEST]], [[SRC]], ![[VPRED]]
 
-#if defined(__gaudi__)
+#if defined(__gaudib__) || defined(__goya2__) || defined(__gaudi__)
     res = v_convert_f32_to_i8_vb(x, 1, SW_RD, res, vpred, 0);
     *dest_ptr++ = res;
     // GEN23: convert.f32 lane_sel=1 target_type=int8 rd [[DEST]], [[SRC]], [[VPRED]]

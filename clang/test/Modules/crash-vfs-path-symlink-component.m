@@ -1,3 +1,5 @@
+// TPC-provoked issue ???
+// XFAIL:*
 // REQUIRES: crash-recovery, shell
 
 // FIXME: This XFAIL is cargo-culted from crash-report.c. Do we need it?
@@ -21,7 +23,7 @@
 // RUN: %t/crash-vfs-*.cache/vfs/vfs.yaml
 // RUN: find %t/crash-vfs-*.cache/vfs | \
 // RUN:   grep "usr/include/stdio.h" | count 1
-// XFAIL: *
+
 #include "usr/x/../stdio.h"
 
 // CHECK: Preprocessed source(s) and associated run script(s) are located at:

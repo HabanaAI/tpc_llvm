@@ -12,6 +12,6 @@ entry:
   ret void
 }
 
-; CHECK: ld_l_v   [[VPR1:%VP[0-9]+]], %S1,{{.*}} %SP0
-; CHECK: not.b    [[VPR2:%VP[0-9]+]], [[VPR1]], %SP0
-; CHECK: st_l_v   %S0,{{.*}} [[VPR2]], %SP0
+; CHECK: ld_l_v   [[VPR1:%VP[0-9]+]], %S1,{{.*}}
+; CHECK: not.b    [[VPR2:%VP[0-9]+]], [[VPR1]]
+; CHECK: st_l_v   %S0,{{.*}} [[VPR2]]

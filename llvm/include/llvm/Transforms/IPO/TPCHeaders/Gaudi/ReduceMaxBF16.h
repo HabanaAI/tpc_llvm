@@ -1,12 +1,3 @@
-//===--------ReduceMaxBF16.h-----------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 const llvm::StringRef GaudiReduceMaxBF16LL = R"(
 ; Function Attrs: alwaysinline nounwind
 define  dso_local <128 x bfloat16> @v_bf16_reduce_max(<128 x bfloat16> %x) local_unnamed_addr #4 {
@@ -23,9 +14,9 @@ entry:
   %8 = bitcast <64 x float> %3 to <256 x i8>
   %9 = bitcast <64 x float> %5 to <256 x i8>
   %10 = bitcast <64 x float> %6 to <256 x i8>
-  %11 = call <128 x bfloat16> @llvm.tpc.mov.dual.group.all.v128bf16.i1(<128 x bfloat16> %x, i32 -1, i32 16756992, <128 x bfloat16> zeroinitializer, i1 true, i1 false)
+  %11 = call <128 x bfloat16> @llvm.tpc.mov.dual.group.all.v128bf16.i1(<128 x bfloat16> %x, i32 -1, i32 0, i32 16756992, <128 x bfloat16> zeroinitializer, i1 true, i1 false)
   %12 = call <128 x bfloat16> @llvm.tpc.max.v128bf16.v128bf16.v128bf16.i1(<128 x bfloat16> %x, <128 x bfloat16> %11, i8 1, i32 0, <128 x bfloat16> undef, i1 true, i1 false)
-  %13 = call <128 x bfloat16> @llvm.tpc.mov.dual.group.all.v128bf16.i1(<128 x bfloat16> %12, i32 -1, i32 16731648, <128 x bfloat16> %11, i1 true, i1 false)
+  %13 = call <128 x bfloat16> @llvm.tpc.mov.dual.group.all.v128bf16.i1(<128 x bfloat16> %12, i32 -1, i32 0, i32 16731648, <128 x bfloat16> %11, i1 true, i1 false)
   %14 = call <128 x bfloat16> @llvm.tpc.max.v128bf16.v128bf16.v128bf16.i1(<128 x bfloat16> %12, <128 x bfloat16> %13, i8 1, i32 0, <128 x bfloat16> undef, i1 true, i1 false)
   %15 = call <128 x bfloat16> @llvm.tpc.mov.group.v128bf16.v128bf16.i1(<128 x bfloat16> %14, i32 -1, i32 63, <128 x bfloat16> %13, i1 true, i1 false)
   %16 = call <128 x bfloat16> @llvm.tpc.max.v128bf16.v128bf16.v128bf16.i1(<128 x bfloat16> %14, <128 x bfloat16> %15, i8 1, i32 0, <128 x bfloat16> undef, i1 true, i1 false)
@@ -68,7 +59,7 @@ declare <64 x i32> @llvm.read_register.v64i32(metadata) #2
 
 declare <128 x float> @llvm.tpc.lookup.2c.v128f32.v64i32(<64 x i32>, i32, i32, <128 x float>, i1, i1) #1
 
-declare <128 x bfloat16> @llvm.tpc.mov.dual.group.all.v128bf16.i1(<128 x bfloat16>, i32, i32, <128 x bfloat16>, i1, i1) #1
+declare <128 x bfloat16> @llvm.tpc.mov.dual.group.all.v128bf16.i1(<128 x bfloat16>, i32, i32, i32, <128 x bfloat16>, i1, i1) #1
 
 declare <128 x bfloat16> @llvm.tpc.max.v128bf16.v128bf16.v128bf16.i1(<128 x bfloat16>, <128 x bfloat16>, i8, i32, <128 x bfloat16>, i1, i1) #1
 
@@ -93,8 +84,6 @@ declare <128 x bfloat16> @llvm.tpc.fclass.v128bf16.i1(<128 x bfloat16>, i8, i32,
 declare <128 x bfloat16> @llvm.tpc.calc.fp.special.v128bf16.i1(<128 x bfloat16>, <128 x bfloat16>, i8, i32, <128 x bfloat16>, i1, i1) #1
 
 declare <64 x float> @llvm.tpc.lookup.1c.v64f32.v64i32(<64 x i32>, i32, i32, <64 x float>, i1, i1) #1
-
-declare <64 x float> @llvm.tpc.mov.dual.group.all.v64f32.i1(<64 x float>, i32, i32, <64 x float>, i1, i1) #1
 
 declare <64 x float> @llvm.tpc.mov.group.v64f32.v64f32.i1(<64 x float>, i32, i32, <64 x float>, i1, i1) #1
 

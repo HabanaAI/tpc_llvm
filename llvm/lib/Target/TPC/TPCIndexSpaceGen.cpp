@@ -1,13 +1,16 @@
 //===- TPCIndexSpace.cpp --- TPC INDEX SPACE ------------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//                     The LLVM Compiler Infrastructure:
+//
+//              2020 - This pass is a property of Habana labs
+//
 //
 //===----------------------------------------------------------------------===//
 //===----------------------------------------------------------------------===//
 
 #include "TPCIndexSpaceGen.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 
 #define INVALID_SCEV 9999
@@ -18,9 +21,12 @@ static cl::opt<bool> IndexSpaceWarning("index-space-warn", cl::init(false),
 
 static cl::opt<bool> IndexSpaceMLIR("index-space-mlir", cl::init(false),
                                        cl::Hidden);
+
+static cl::opt<bool> IndexSpacePadGCCustom("enable-pad-gccustom",
+                                           cl::init(true), cl::Hidden);
 static cl::opt<bool>
     EmitIndexFactors("emit-index-factors",
-                     cl::desc("Enable index space generation."), cl::init(true),
+                     cl::desc("Enable index space generation."), cl::init(false),
                      cl::ZeroOrMore, cl::Hidden);
 
 char TPCIndexGen::ID = 0;
@@ -72,6 +78,10 @@ unsigned fetchIndexFromOperand(unsigned Operand) {
     return Count;
 }
 
+bool sortByTensorId(const struct TensorInfo &Elem1, const struct TensorInfo &Elem2) {
+  return Elem1.Order < Elem2.Order;
+}
+
 bool TPCIndexGen::runOnFunction(Function &F) {
   bool InnerUpdatesOnly = 0, ZeroLoopCount = 0;
   if (!EmitIndexFactors)
@@ -79,7 +89,7 @@ bool TPCIndexGen::runOnFunction(Function &F) {
 
   SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-  Int5Ty = VectorType::get(Type::getInt32Ty(F.getContext()), 5);
+  Int5Ty = FixedVectorType::get(Type::getInt32Ty(F.getContext()), 5);
 
   findTensorLoops(F);
 
@@ -116,16 +126,14 @@ bool TPCIndexGen::runOnFunction(Function &F) {
   if(!IndexSpaceMLIR){
     TAA.analyseGenAddr();
     TAA.updateAddMask();
-    TAA.padGCCustom();
+    if (IndexSpacePadGCCustom)
+      TAA.padGCCustom();
   }
+  TAA.sortVectorsByID();
   for (const auto &Input : TAA.getInputVector())
     IndexMapString += Input.Name;
   for (const auto &Output : TAA.getOutputVector())
     IndexMapString += Output.Name;
-  for (const auto &Aux : TAA.getAuxVector())
-    IndexMapString += Aux.Name;
-  for (const auto &GC : TAA.getGCCustomVec())
-    IndexMapString += GC.Name;
   IndexMapString += " #SCEVEND";
   if (F.getMetadata("reduction_or_norm_axes")) {
     IndexMapString += " ReductionNormAxes- IDs : { ";
@@ -204,54 +212,34 @@ bool TPCIndexGen::runOnFunction(Function &F) {
   return false;
 }
 
+void TensorAccessAnalysis::sortVectorsByID() {
+  auto &InputVec = TensorInfos[unsigned(TensorType::Input)];
+  std::sort(InputVec.begin(), InputVec.end(), sortByTensorId);
+  auto &OutputVec = TensorInfos[unsigned(TensorType::Output)];
+  std::sort(OutputVec.begin(), OutputVec.end(), sortByTensorId);
+}
+
 void TensorAccessAnalysis::padGCCustom() {
   bool FallBack = false;
   int TensorID = -1;
-  for (const auto &CurrInput : Input) {
-    auto IndexMapString = CurrInput.Name;
-    if (IndexMapString.find("GC_CUSTOM") != std::string::npos) {
-      FallBack = true;
-      break;
-    }
-  }
-  for (const auto &CurrOutput : Output) {
-    auto IndexMapString = CurrOutput.Name;
-    if (IndexMapString.find("GC_CUSTOM") != std::string::npos) {
-      FallBack = true;
-      break;
-    }
-  }
-  if (FallBack) {
-    for (auto &TensorInfo : Input) {
-      auto IndexMapString = TensorInfo.Name;
-      if (IndexMapString.find("GC_CUSTOM") == std::string::npos) {
-        if (TensorInfo.Order >= FakeTensorIdPad) { // FakeTensorId
-          std::string Temp =
-              "x" + std::to_string(TensorInfo.Order - FakeTensorIdPad);
-          TensorInfo.Name = "[" + Temp + "].";
-        } else
-          TensorInfo.Name = "[" + std::to_string(TensorInfo.Order) + "].";
-        TensorInfo.Name += "{ GC_CUSTOM";
-        // prepare TensorName
-        for (unsigned i = 1; i < TensorInfo.IndexFactor.capacity(); i++)
-          TensorInfo.Name += ", GC_CUSTOM";
-        TensorInfo.Name += " }";
+  for (unsigned i = 0; i <= 1 && !FallBack; i++) {
+    for (const auto &CurrTensor : TensorInfos[i]) {
+      if (CurrTensor.Name.find("GC_CUSTOM") != std::string::npos) {
+        FallBack = true;
+        break;
       }
     }
-    for (auto &TensorInfo : Output) {
-      auto IndexMapString = TensorInfo.Name;
-      if (IndexMapString.find("GC_CUSTOM") == std::string::npos) {
-        if (TensorInfo.Order >= FakeTensorIdPad) { // FakeTensorId
-          std::string Temp =
-              "x" + std::to_string(TensorInfo.Order - FakeTensorIdPad);
-          TensorInfo.Name = "[" + Temp + "].";
-        } else
-          TensorInfo.Name = "[" + std::to_string(TensorInfo.Order) + "].";
-        TensorInfo.Name += "{ GC_CUSTOM";
-        // prepare TensorName
-        for (unsigned i = 1; i < TensorInfo.IndexFactor.capacity(); i++)
-          TensorInfo.Name += ", GC_CUSTOM";
-        TensorInfo.Name += " }";
+  }
+
+  if (FallBack) {
+    for (unsigned i = 0; i <= 1; i++) {
+      for (auto &TensorInfo : TensorInfos[i]) {
+        if (TensorInfo.Name.find("GC_CUSTOM") == std::string::npos) {
+          TensorInfo.Name = "";
+          appendTensorIdString(TensorInfo.Order, TensorInfo);
+          TensorInfo.Name += "[" + TensorTypeString[i] + "].";
+          appendTensorIndexString(TensorInfo);
+        }
       }
     }
   }
@@ -259,34 +247,15 @@ void TensorAccessAnalysis::padGCCustom() {
 
 void TensorAccessAnalysis::updateAddMask() {
   for (auto CurrTensor : FallBackVec) {
-    auto TensorInfo = getTensorInfo(CurrTensor);
-    // change Tensor Access Pattern
     if (TensorTypeMap.find(CurrTensor) == TensorTypeMap.end())
       continue;
+    auto TensorInfo = getTensorInfo(CurrTensor);
     if (TensorInfo.Order == INVALID_SCEV)
       continue;
-    if (CurrTensor >= FakeTensorIdPad) { // FakeTensorId
-      std::string Temp = "x" + std::to_string(CurrTensor - FakeTensorIdPad);
-      TensorInfo.Name = "[" + Temp + "].";
-    } else
-      TensorInfo.Name = "[" + std::to_string(CurrTensor) + "].";
     if (BailoutReason.empty())
       BailoutReason = "Add mask has pred dependency";
-    std::string IndexStr = "{ GC_CUSTOM";
-    // prepare TensorName
-    for (unsigned i = 1; i < TensorInfo.IndexFactor.capacity(); i++)
-      IndexStr += ", GC_CUSTOM";
-    IndexStr += " }";
-    if (TensorInfo.Type == TensorType::Input) {
-      TensorInfo.Name += "[Input].";
-      TensorInfo.Name += IndexStr;
-      Input.push_back(TensorInfo);
-    }
-    if (TensorInfo.Type == TensorType::Output) {
-      TensorInfo.Name += "[Output].";
-      TensorInfo.Name += IndexStr;
-      Output.push_back(TensorInfo);
-    }
+    // change Tensor Access Pattern
+    prepareTensorName(CurrTensor, TensorInfo);
   }
 }
 
@@ -311,36 +280,18 @@ void TensorAccessAnalysis::analyseGenAddr() {
         break;
       User *GenAddrUser = GenAddrUse->getUser();
       if (auto *ICmp = dyn_cast<ICmpInst>(GenAddrUser)) {
-        // change Tensor Access Pattern
         if (TensorTypeMap.find(CurrTensor) == TensorTypeMap.end())
           break;
         auto Tensor1Info = getTensorInfo(CurrTensor);
         if (Tensor1Info.Order == INVALID_SCEV)
           break;
-        if (CurrTensor >= FakeTensorIdPad) { // FakeTensorId
-          std::string Temp = "x" + std::to_string(CurrTensor - FakeTensorIdPad);
-          Tensor1Info.Name = "[" + Temp + "].";
-        } else
-          Tensor1Info.Name = "[" + std::to_string(CurrTensor) + "].";
-        std::string IndexStr = "{ GC_CUSTOM";
         if (BailoutReason.empty())
           BailoutReason = "Gen Addr Determines Loop Bounds";
-        // prepare TensorName
-        for (unsigned i = 1; i < Tensor1Info.IndexFactor.capacity(); i++)
-          IndexStr += ", GC_CUSTOM";
-        IndexStr += " }";
-        if (Tensor1Info.Type == TensorType::Input) {
-          Tensor1Info.Name += "[Input].";
-          Tensor1Info.Name += IndexStr;
-          Input.push_back(Tensor1Info);
-        }
-        if (Tensor1Info.Type == TensorType::Output) {
-          Tensor1Info.Name += "[Output].";
-          Tensor1Info.Name += IndexStr;
-          Output.push_back(Tensor1Info);
-        }
+        // change Tensor Access Pattern
+        prepareTensorName(CurrTensor, Tensor1Info);
         break;
-      } else if (auto *InstrPtr = dyn_cast<Instruction>(GenAddrUser)) {
+      }
+      if (auto *InstrPtr = dyn_cast<Instruction>(GenAddrUser)) {
         if (InstrPtr->getParent() != I->getParent()) {
           bool FindOneUse = false;
           for (const Use &IUse : I->uses()) {
@@ -377,31 +328,18 @@ void TensorAccessAnalysis::analyseGenAddr() {
 
 TensorInfo TensorAccessAnalysis::getTensorInfo(unsigned TensorId) {
   auto Type1 = TensorTypeMap.at(TensorId);
-  if (Type1 == TensorType::Input) {
-    for (auto InputIt = Input.begin(); InputIt != Input.end(); ++InputIt) {
-      TensorInfo Temp = *InputIt;
-      if (Temp.Order == TensorId) {
-        if (!Temp.IndexFactor.size())
-          continue;
-        Input.erase(InputIt);
-        return Temp;
-      }
+  auto &CurrTensor = TensorInfos[unsigned(Type1)];
+  for (auto It = CurrTensor.begin(); It != CurrTensor.end(); ++It) {
+    if (It->Order == TensorId && !It->IndexFactor.empty()) {
+      TensorInfo Temp = std::move(*It);
+      CurrTensor.erase(It);
+      return Temp;
     }
-    TensorInfo *Temp = new TensorInfo;
-    Temp->Order = INVALID_SCEV;
-    return *Temp;
-  } else if (Type1 == TensorType::Output) {
-    for (auto OutputIt = Output.begin(); OutputIt != Output.end(); ++OutputIt) {
-      TensorInfo Temp = *OutputIt;
-      if (Temp.Order == TensorId) {
-        Output.erase(OutputIt);
-        return Temp;
-      }
-    }
-    TensorInfo *Temp = new TensorInfo;
-    Temp->Order = INVALID_SCEV;
-    return *Temp;
   }
+  TensorInfo Temp;
+  Temp.Order = INVALID_SCEV;
+  Temp.AccessGranularity = 64; // Initialize to some valid value.
+  return Temp;
 }
 
 void TensorAccessAnalysis::updateIndSpaceCoords() {
@@ -418,62 +356,40 @@ void TensorAccessAnalysis::updateIndSpaceCoords() {
     }
 
     Tensor1Info.Name = "[" + std::to_string(Iter->first) + "].";
-    std::string IndexStr = "";
     auto Formula = Tensor1Info.umap.find(0);
-    if (Formula != Tensor1Info.umap.end()) {
-      IndexStr = "{ " + Formula->second + "*";
-      IndexStr += std::to_string(Tensor1Info.IndexFactor[0]);
-    } else
-      IndexStr = "{ " + std::to_string(Tensor1Info.IndexFactor[0]);
+    std::string IndexStr = "{ ";
+    if (Formula != Tensor1Info.umap.end())
+      IndexStr += (Formula->second + "*");
+    IndexStr += std::to_string(Tensor1Info.IndexFactor[0]);
     for (unsigned i = 1; i < Tensor1Info.IndexFactor.size(); i++) {
+      IndexStr += ", ";
       Formula = Tensor1Info.umap.find(i);
-      if (Formula != Tensor1Info.umap.end()) {
-        IndexStr += ", " + Formula->second + "*";
-        IndexStr += std::to_string(Tensor1Info.IndexFactor[i]);
-      } else
-        IndexStr += ", " + std::to_string(Tensor1Info.IndexFactor[i]);
+      if (Formula != Tensor1Info.umap.end())
+        IndexStr += (Formula->second + "*");
+      IndexStr += std::to_string(Tensor1Info.IndexFactor[i]);
     }
-
     IndexStr += " }";
-    if (Tensor1Info.Type == TensorType::Input) {
-      Tensor1Info.Name += "[Input].";
-      Tensor1Info.Name += IndexStr;
-      Input.push_back(Tensor1Info);
-    }
-    if (Tensor1Info.Type == TensorType::Output) {
-      Tensor1Info.Name += "[Output].";
-      Tensor1Info.Name += IndexStr;
-      Output.push_back(Tensor1Info);
-    }
+    Tensor1Info.Name += "["+TensorTypeString[unsigned(Tensor1Info.Type)]+"].";
+    Tensor1Info.Name += IndexStr;
+    TensorInfos[unsigned(Tensor1Info.Type)].push_back(Tensor1Info);
 
     Tensor2Info.Name = "[" + std::to_string(Iter->second) + "].";
     Formula = Tensor2Info.umap.find(0);
-    if (Formula != Tensor2Info.umap.end()) {
-      IndexStr = "{ " + Formula->second + "*";
-      IndexStr += std::to_string(Tensor2Info.IndexFactor[0]);
-    } else
-      IndexStr = "{ " + std::to_string(Tensor2Info.IndexFactor[0]);
-
+    IndexStr = "{ ";
+    if (Formula != Tensor2Info.umap.end())
+      IndexStr += (Formula->second + "*");
+    IndexStr += std::to_string(Tensor2Info.IndexFactor[0]);
     for (unsigned i = 1; i < Tensor2Info.IndexFactor.size(); i++) {
       Formula = Tensor2Info.umap.find(i);
-      if (Formula != Tensor2Info.umap.end()) {
-        IndexStr += ", " + Formula->second + "*";
-        IndexStr += std::to_string(Tensor2Info.IndexFactor[i]);
-      } else
-        IndexStr += ", " + std::to_string(Tensor2Info.IndexFactor[i]);
+      IndexStr += ", ";
+      if (Formula != Tensor2Info.umap.end())
+        IndexStr += (Formula->second + "*");
+      IndexStr += std::to_string(Tensor2Info.IndexFactor[i]);
     }
-
     IndexStr += " }";
-    if (Tensor2Info.Type == TensorType::Input) {
-      Tensor2Info.Name += "[Input].";
-      Tensor2Info.Name += IndexStr;
-      Input.push_back(Tensor2Info);
-    }
-    if (Tensor2Info.Type == TensorType::Output) {
-      Tensor2Info.Name += "[Output].";
-      Tensor2Info.Name += IndexStr;
-      Output.push_back(Tensor2Info);
-    }
+    Tensor2Info.Name += "["+TensorTypeString[unsigned(Tensor2Info.Type)]+"].";
+    Tensor2Info.Name += IndexStr;
+    TensorInfos[unsigned(Tensor2Info.Type)].push_back(Tensor2Info);
   }
 }
 
@@ -507,7 +423,7 @@ void TensorAccessAnalysis::processPragmaInfo(Function &F) {
         }
       }
       if (auto *IndSpacePtr = dyn_cast<MDString>(PragmaIdxAxis->getOperand(i)))
-        ReductionOrNormAxes.push_back(IndSpacePtr->getString());
+        ReductionOrNormAxes.push_back(IndSpacePtr->getString().str());
     }
   }
   // End Reduction/Norm Axes Evaluation
@@ -538,7 +454,7 @@ void TensorAccessAnalysis::processPragmaInfo(Function &F) {
         for (auto TensorID : TensorIDVec)
           StartBEndBCoords.insert(
               {TensorID,
-               std::make_tuple(DimIndex, StringRepStartB, StringRepEndB)});
+               std::make_tuple(DimIndex, StringRepStartB.str(), StringRepEndB.str())});
         ++DimIndex;
         prevOperandString = true;
         i += 2;
@@ -574,7 +490,7 @@ void TensorAccessAnalysis::processPragmaInfo(Function &F) {
             updateCoordFactor(Iter, DimIndex, IntegerRep, "", nullptr);
         } else { // Handle formula here
           for (auto Iter : TensorIDVec)
-            updateCoordFactor(Iter, DimIndex, 1, StringRep, nullptr);
+            updateCoordFactor(Iter, DimIndex, 1, StringRep.str(), nullptr);
         }
         ++DimIndex;
         prevOperandString = true;
@@ -707,13 +623,17 @@ void TensorAccessAnalysis::processSetIndexNode(int TensorId, Loop *CurrLoop,
       // Attempt at fetching proper index stride
       int64_t DiffStep = setIndexStepVar(StepVar, CurrLoop);
       if (DiffStep != INVALID_SCEV) {
-        DiffCoords.insert(
-            {TensorId, std::make_tuple(Index, DiffStep, "", nullptr, PHI)});
+        // The DiffCoords should be updated with the formula
+        // This helps in the dumping part of the pass
+        // Solves cases where the actual loop pointer might be nullptr
+        DiffCoords.insert({TensorId, std::make_tuple(Index, DiffStep, Formula,
+                                                     nullptr, PHI)});
         prepareLoopIvCoordMap(TensorId, nullptr, Index, Formula);
         processNestedInstructions(SetIndexInst, CurrLoop, PHI, TensorId, false,
                                   F);
         return;
-      }
+      } else
+        updateCoordFactor(TensorId, Index, INVALID_SCEV, "", nullptr);
     }
     // Now check whether set index depends on the loop induction variable
     if (LI->isLoopHeader(PHI->getParent())) {
@@ -723,119 +643,303 @@ void TensorAccessAnalysis::processSetIndexNode(int TensorId, Loop *CurrLoop,
   }
 }
 
+bool manipulatesOtherIndices(Instruction *StrideArg, int index) {
+  for (const Use &StrideArgUse : StrideArg->uses()) {
+    User *StrideArgUser = StrideArgUse.getUser();
+    if (auto *InsertInst = dyn_cast<InsertElementInst>(StrideArgUser)) {
+      if (dyn_cast<llvm::ConstantInt>(InsertInst->getOperand(2))) {
+        int index1 = dyn_cast<llvm::ConstantInt>(InsertInst->getOperand(2))
+                         ->getZExtValue();
+        if (index1 != index)
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Any runtime value that may originate from livein function arguments
+// or ld.g intrinsics affecting the coordinate values prevents the
+// generation of index space coordinates.
+//
+// This function is used to detect such patterns, and remembers the values
+// leading to them.
+bool TensorAccessAnalysis::hasRuntimeDep(Value *V, std::string Indent) {
+  LLVM_DEBUG(dbgs() << Indent << "----" << "\n");
+  LLVM_DEBUG(dbgs() << Indent << "V = " << *V << "\n");
+  if (!V)
+    return false;
+  if (isa<Constant>(V))
+    return false;
+
+  // if this value is already found to be runtime-unknown
+  auto It = RuntimeDepValues.find(V);
+  if (It != RuntimeDepValues.end())
+    return true;
+
+  if (isa<llvm::Argument>(V)) {
+    LLVM_DEBUG(dbgs() << Indent << "Found an argument, returning ...\n");
+    return true;
+  }
+
+  auto I = dyn_cast<Instruction>(V);
+  if (!I)
+    return false;
+  if (auto *Intrin = dyn_cast<IntrinsicInst>(I)) {
+    Intrinsic::ID inid = Intrin->getIntrinsicID();
+    if (inid == Intrinsic::tpc_ld_g) {
+      LLVM_DEBUG(dbgs() << Indent << "Found ld_g, returning ...\n");
+      return true;
+    }
+  }
+
+  // skip analyzing PHIs the second time
+  if (isa<PHINode>(I)) {
+    if (RuntimeDepAnalyzedPHIs.find(I) != RuntimeDepAnalyzedPHIs.end()) {
+      LLVM_DEBUG(dbgs() << Indent << "PHI revisited, returning ...\n");
+      return false;
+    }
+    RuntimeDepAnalyzedPHIs.insert(I);
+  }
+
+  for (unsigned i = 0; i < I->getNumOperands(); i++) {
+    LLVM_DEBUG(dbgs() << Indent << "Op #" << i << "\n");
+    auto O = dyn_cast<Value>(I->getOperand(i));
+    if (hasRuntimeDep(O, Indent+"\t")) {
+      RuntimeDepValues.insert(O);
+      LLVM_DEBUG(dbgs() << Indent << "Has runtime dep, returning ...\n");
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void TensorAccessAnalysis::processInsertElementNode(Instruction *InsertInst,
                                                     Loop *CurrLoop,
                                                     PHINode *PHI,
                                                     unsigned TensorId) {
-  if (dyn_cast<llvm::ConstantInt>(InsertInst->getOperand(2))) {
-    int index =
-        dyn_cast<llvm::ConstantInt>(InsertInst->getOperand(2))->getZExtValue();
-    if (LI->isLoopHeader(PHI->getParent())) {
-      Loop *ParentLoop = getLoopPointerForOperand(InsertInst);
-      if (ParentLoop) {
-        if (auto *StrideArg =
-                dyn_cast<Instruction>(InsertInst->getOperand(1))) {
-          // check if the operand 1 is itself a binary instruction
-          if (auto BO = dyn_cast<BinaryOperator>(StrideArg)) {
-            if (dyn_cast<llvm::ConstantInt>(BO->getOperand(1))) {
-              int Val = dyn_cast<llvm::ConstantInt>(BO->getOperand(1))
-                            ->getZExtValue();
-              if (BO->getOpcode() == Instruction::Add) {
-                unsigned UnrollCount = 0;
-                if (getScevInfo(ParentLoop)) {
-                  UnrollCount =
-                      getScevInfo(ParentLoop)->getLoopUnrollCount(ParentLoop);
-                }
-                if (UnrollCount)
-                  Val = Val * UnrollCount;
-                // We have this block for only negative updates
-                if (Val < 0) {
-                  UpdateDiffCoords(TensorId, index, Val, "", CurrLoop, PHI);
-                  prepareLoopIvCoordMap(TensorId, nullptr, index);
-                  return;
-                } else
-                  return;
-              } else if (BO->getOpcode() == Instruction::Or) {
-                // Or is present for strength reduction only
-                // Ignore the updates here and acknowledge only
-                // the loop stride increment
-                return;
-              } else if (BO->getOpcode() == Instruction::Shl) {
-                auto ShiftVal =
-                    dyn_cast<ConstantInt>(BO->getOperand(1))->getZExtValue();
-                UpdateDiffCoords(
-                    TensorId, index,
-                    (getScevInfo(CurrLoop)->getSCEVStep() << ShiftVal), "",
-                    CurrLoop, PHI);
-                prepareLoopIvCoordMap(TensorId, nullptr, index);
-                return;
-              }
-            } else
-              updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
-          }
-          for (const Use &StrideArgUse : StrideArg->uses()) {
-            User *StrideArgUser = StrideArgUse.getUser();
-            if (auto *InstrPtr = dyn_cast<Instruction>(StrideArgUser)) {
-              if (auto BO = dyn_cast<BinaryOperator>(StrideArgUser)) {
-                if (!dyn_cast<llvm::ConstantInt>(BO->getOperand(1))) {
-                  updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
-                  continue;
-                }
-                int Val = dyn_cast<llvm::ConstantInt>(BO->getOperand(1))
-                              ->getZExtValue();
-                if (BO->getOpcode() == Instruction::Add) {
-                  unsigned UnrollCount = 0;
-                  if(getScevInfo(ParentLoop)){
-                  UnrollCount =
-                      getScevInfo(ParentLoop)->getLoopUnrollCount(ParentLoop);
-                  }
-                  if (UnrollCount)
-                    Val = Val * UnrollCount;
-                  DiffCoords.insert({TensorId, std::make_tuple(index, Val, "",
-                                                               nullptr, PHI)});
-                  prepareLoopIvCoordMap(TensorId, nullptr, index);
-                  return;
-                }
-              }
+  assert(isa<InsertElementInst>(InsertInst) && "Not an insertelement instruction");
+  if (!dyn_cast<llvm::ConstantInt>(InsertInst->getOperand(2)))
+    return;
+
+  int index =
+      dyn_cast<llvm::ConstantInt>(InsertInst->getOperand(2))->getZExtValue();
+
+  // check if the insertelement instruction has runtime dependence
+  if (hasRuntimeDep(InsertInst->getOperand(1))) {
+    RuntimeDepValues.insert(InsertInst->getOperand(1));
+    updateCoordFactor(TensorId, index, INVALID_SCEV, "",
+                      nullptr);
+    return;
+  }
+  LLVM_DEBUG(dbgs() << "No runtime dep found in insertelement\n");
+
+  Loop *ParentLoop = getLoopPointerForOperand(InsertInst);
+  if (LI->isLoopHeader(PHI->getParent())) {
+    if (!ParentLoop)
+      return;
+
+    if (auto *StrideArg =
+            dyn_cast<Instruction>(InsertInst->getOperand(1))) {
+      // check if the operand 1 is itself a binary instruction
+      if (auto BO = dyn_cast<BinaryOperator>(StrideArg)) {
+        if (dyn_cast<llvm::ConstantInt>(BO->getOperand(1))) {
+          int Val = dyn_cast<llvm::ConstantInt>(BO->getOperand(1))
+                        ->getZExtValue();
+          if (BO->getOpcode() == Instruction::Add) {
+            unsigned UnrollCount = 0;
+            if (getScevInfo(ParentLoop)) {
+              UnrollCount =
+                  getScevInfo(ParentLoop)->getLoopUnrollCount(ParentLoop);
             }
-          }
-          // Let's check if operand 1 is Phi node then use this as SCEV
-          if (Instruction *Phi = dyn_cast<PHINode>(InsertInst->getOperand(1))) {
-            if (Phi == CurrLoop->getInductionVariable(*SE))
-              prepareLoopIvCoordMap(TensorId, ParentLoop, index);
+            if (UnrollCount)
+              Val = Val * UnrollCount;
+            // We have this block for only negative updates
+            if (Val < 0) {
+              UpdateDiffCoords(TensorId, index, Val, "", CurrLoop, PHI);
+              prepareLoopIvCoordMap(TensorId, nullptr, index);
+              return;
+            } else
+              return;
+          } else if (BO->getOpcode() == Instruction::Or) {
+            // Or is present for strength reduction only
+            // Ignore the updates here and acknowledge only
+            // the loop stride increment
             return;
+          } else if (BO->getOpcode() == Instruction::Shl) {
+            BailOut = true;
+            updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
+            return;
+            // TODO : add fix for scaling
+            /*
+            auto ShiftVal =
+                dyn_cast<ConstantInt>(BO->getOperand(1))->getZExtValue();
+            UpdateDiffCoords(
+                TensorId, index,
+                (getScevInfo(CurrLoop)->getSCEVStep() << ShiftVal), "",
+                CurrLoop, PHI);
+            prepareLoopIvCoordMap(TensorId, nullptr, index);
+            return;
+            */
+          }
+        } else
+          updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
+      } // if BinaryOp End
+      for (const Use &StrideArgUse : StrideArg->uses()) {
+        User *StrideArgUser = StrideArgUse.getUser();
+        if (auto *InstrPtr = dyn_cast<Instruction>(StrideArgUser)) {
+          if (auto BO = dyn_cast<BinaryOperator>(StrideArgUser)) {
+            if (!dyn_cast<llvm::ConstantInt>(BO->getOperand(1))) {
+              updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
+              continue;
+            }
+            int Val = dyn_cast<llvm::ConstantInt>(BO->getOperand(1))
+                          ->getZExtValue();
+            if (BO->getOpcode() == Instruction::Add) {
+              Optional<Loop::LoopBounds> LB = CurrLoop->getBounds(*SE);
+              PHINode *LoopPHI = CurrLoop->getInductionVariable(*SE);
+              // Since loop bounds cannot be calculated, bailout
+              // Required when the InitialIVValue of loop bound is not
+              // fetched
+              if (!LB && !LoopPHI) {
+                updateCoordFactor(TensorId, index, INVALID_SCEV, "",
+                                  nullptr);
+                return;
+              }
+              if (LB && (LoopPHI != nullptr)) {
+                Value &Initial = LB->getInitialIVValue();
+                Value &Final = LB->getFinalIVValue();
+                if (auto BinOp = dyn_cast<BinaryOperator>(&Final)) {
+                  if (BinOp->getOpcode() == Instruction::Add) {
+                    if (dyn_cast<llvm::ConstantInt>(BinOp->getOperand(1))) {
+                      int Val1 =
+                          dyn_cast<llvm::ConstantInt>(BinOp->getOperand(1))
+                              ->getZExtValue();
+                      if (Val1 < 0) {
+                        updateCoordFactor(TensorId, index, INVALID_SCEV, "",
+                                          nullptr);
+                        return;
+                      }
+                    }
+                  }
+                }
+                if (auto *MovInst = dyn_cast<IntrinsicInst>(&Final)) {
+                  Intrinsic::ID inid = MovInst->getIntrinsicID();
+                  if (inid == Intrinsic::tpc_mov ||
+                      inid == Intrinsic::tpc_and ||
+                      inid == Intrinsic::tpc_ld_l) {
+                    updateCoordFactor(TensorId, index, INVALID_SCEV, "",
+                                      nullptr);
+                    return;
+                  }
+                }
+              }
+              unsigned UnrollCount = 0;
+              if(getScevInfo(ParentLoop)){
+              UnrollCount =
+                  getScevInfo(ParentLoop)->getLoopUnrollCount(ParentLoop);
+              }
+              if (UnrollCount)
+                Val = Val * UnrollCount;
+              if (index == 1 && Val > 4) {
+                updateCoordFactor(TensorId, index, INVALID_SCEV, "",
+                                  nullptr);
+                return;
+              }
+              // check for bailout
+              if (manipulatesOtherIndices(StrideArg, index)) {
+                updateCoordFactor(TensorId, index, INVALID_SCEV, "",
+                                  nullptr);
+                return;
+              }
+              DiffCoords.insert({TensorId, std::make_tuple(index, Val, "",
+                                                           nullptr, PHI)});
+              prepareLoopIvCoordMap(TensorId, nullptr, index);
+              return;
+            }
           }
         }
-        // failsafe
-        updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
-      } else {
-        if (auto *StrideArg =
-                dyn_cast<Instruction>(InsertInst->getOperand(1))) {
-          for (const Use &StrideArgUse : StrideArg->uses()) {
-            User *StrideArgUser = StrideArgUse.getUser();
-            if (auto *InstrPtr = dyn_cast<Instruction>(StrideArgUser)) {
-              if (auto BO = dyn_cast<BinaryOperator>(StrideArgUser)) {
-                if (!dyn_cast<llvm::ConstantInt>(BO->getOperand(1))) {
-                  continue;
-                }
-                int Val = dyn_cast<llvm::ConstantInt>(BO->getOperand(1))
-                              ->getZExtValue();
-                if (BO->getOpcode() == Instruction::Add) {
-                  unsigned UnrollCount = 0;
-                  if (getScevInfo(ParentLoop)) {
-                    UnrollCount =
-                        getScevInfo(ParentLoop)->getLoopUnrollCount(ParentLoop);
-                  }
-                  if (UnrollCount)
-                    Val = Val * UnrollCount;
-                  DiffCoords.insert({TensorId, std::make_tuple(index, Val, "",
-                                                               nullptr, PHI)});
-                  prepareLoopIvCoordMap(TensorId, nullptr, index);
-                  return;
-                }
-              }
-            }
+      }
+      // Let's check if operand 1 is Phi node then use this as SCEV
+      if (Instruction *Phi = dyn_cast<PHINode>(InsertInst->getOperand(1))) {
+        LLVM_DEBUG(dbgs() << "Phi node reached\n");
+        if (Phi == CurrLoop->getInductionVariable(*SE))
+          if (index == 1 && getScevInfo(CurrLoop)->getSCEVStep() > 4)
+            prepareLoopIvCoordMap(TensorId, ParentLoop, index);
+        return;
+      }
+    }
+    LLVM_DEBUG(dbgs() << "Reached failsafe() ...\n");
+    // failsafe
+    updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
+
+    return;
+  }
+
+  auto *StrideArg = dyn_cast<Instruction>(InsertInst->getOperand(1));
+  if (!StrideArg)
+    return;
+
+  if (auto BO = dyn_cast<BinaryOperator>(StrideArg)) {
+    if (dyn_cast<llvm::ConstantInt>(BO->getOperand(1))) {
+      int Val =
+          dyn_cast<llvm::ConstantInt>(BO->getOperand(1))->getZExtValue();
+      if (BO->getOpcode() == Instruction::Add) {
+        unsigned UnrollCount = 0;
+        if (getScevInfo(ParentLoop)) {
+          UnrollCount =
+              getScevInfo(ParentLoop)->getLoopUnrollCount(ParentLoop);
+        }
+        if (UnrollCount)
+          Val = Val * UnrollCount;
+        // We have this block for only negative updates
+        if (Val < 0) {
+          UpdateDiffCoords(TensorId, index, Val, "", CurrLoop, PHI);
+          prepareLoopIvCoordMap(TensorId, nullptr, index);
+          return;
+        } else
+          return;
+      } else if (BO->getOpcode() == Instruction::Or) {
+        // Or is present for strength reduction only
+        // Ignore the updates here and acknowledge only
+        // the loop stride increment
+        return;
+      } else if (BO->getOpcode() == Instruction::Shl) {
+        auto ShiftVal =
+            dyn_cast<ConstantInt>(BO->getOperand(1))->getZExtValue();
+        UpdateDiffCoords(
+            TensorId, index,
+            (getScevInfo(CurrLoop)->getSCEVStep() << ShiftVal), "",
+            CurrLoop, PHI);
+        prepareLoopIvCoordMap(TensorId, nullptr, index);
+        return;
+      }
+    } else
+      updateCoordFactor(TensorId, index, INVALID_SCEV, "", nullptr);
+  } // if BinaryOp End
+
+  for (const Use &StrideArgUse : StrideArg->uses()) {
+    User *StrideArgUser = StrideArgUse.getUser();
+    if (auto *InstrPtr = dyn_cast<Instruction>(StrideArgUser)) {
+      if (auto BO = dyn_cast<BinaryOperator>(StrideArgUser)) {
+        if (!dyn_cast<llvm::ConstantInt>(BO->getOperand(1))) {
+          continue;
+        }
+        int Val = dyn_cast<llvm::ConstantInt>(BO->getOperand(1))
+                      ->getZExtValue();
+        if (BO->getOpcode() == Instruction::Add) {
+          unsigned UnrollCount = 0;
+          if (getScevInfo(ParentLoop)) {
+            UnrollCount =
+                getScevInfo(ParentLoop)->getLoopUnrollCount(ParentLoop);
           }
+          if (UnrollCount)
+            Val = Val * UnrollCount;
+          DiffCoords.insert(
+              {TensorId, std::make_tuple(index, Val, "", nullptr, PHI)});
+          prepareLoopIvCoordMap(TensorId, nullptr, index);
+          return;
         }
       }
     }
@@ -1021,36 +1125,71 @@ std::string TensorAccessAnalysis::getFormula(IntrinsicInst *Intrins,
   return formula;
 }
 
+void TensorAccessAnalysis::appendTensorIdString(
+  unsigned TensorId, TensorInfo &TnsrInfo) {
+  TnsrInfo.Name += "[";
+  if (TensorId >= FakeTensorIdPad) // FakeTensorId
+    TnsrInfo.Name += "x" + std::to_string(TensorId - FakeTensorIdPad);
+  else
+    TnsrInfo.Name += std::to_string(TensorId);
+  TnsrInfo.Name += "].";
+
+  return;
+}
+
+void TensorAccessAnalysis::appendTensorIndexString(
+    TensorInfo &TnsrInfo, bool FillGCCustom) {
+  std::string Index = (FillGCCustom ? "GC_CUSTOM" : "0");
+  TnsrInfo.Name += "{ " + Index;
+  for (unsigned i = 1; i < TnsrInfo.IndexFactor.capacity(); i++)
+    TnsrInfo.Name += ", " + Index;
+  TnsrInfo.Name += " }";
+
+  return;
+}
+
+void TensorAccessAnalysis::prepareTensorName(
+    unsigned TensorId, TensorInfo &TnsrInfo, bool FillGCCustom) {
+  TnsrInfo.Name = "";
+  appendTensorIdString(TensorId, TnsrInfo);
+  TnsrInfo.Name += "["+TensorTypeString[unsigned(TnsrInfo.Type)]+"].";
+  appendTensorIndexString(TnsrInfo, FillGCCustom);
+  TensorInfos[unsigned(TnsrInfo.Type)].push_back(TnsrInfo);
+
+  return;
+}
+
+void TensorAccessAnalysis::prepareTensorName(
+    unsigned TensorId, TensorInfo &TnsrInfo,
+    const std::string IndexStr) {
+  TnsrInfo.Name = "";
+  appendTensorIdString(TensorId, TnsrInfo);
+  TnsrInfo.Name += "["+TensorTypeString[unsigned(TnsrInfo.Type)]+"].";
+  TnsrInfo.Name += IndexStr;
+  TensorInfos[unsigned(TnsrInfo.Type)].push_back(TnsrInfo);
+
+  return;
+}
+
 void TensorAccessAnalysis::dumpIntoASM_MLIR() {
   // Prepare TensorInfo
   for (auto &TensorId : TensorTypeMap) {
-    if (TensorCordInfoMap.find(TensorId.first) == TensorCordInfoMap.end()) {
+    if (TensorCordInfoMap.find(TensorId.first) == TensorCordInfoMap.end() ||
+        HasLoadAndStore || BailOut) {
       TensorInfo TnsrInfo;
       TnsrInfo.Type = TensorTypeMap.at(TensorId.first);
       TnsrInfo.Order = TensorId.first;
-      std::string IndexStr = "{ 0";
-      for (unsigned i = 1; i < TnsrInfo.IndexFactor.capacity(); i++)
-        IndexStr += ", " + std::to_string(0);
-
-      IndexStr += " }";
-      // prepare TensorName
-      if (TensorId.first >= FakeTensorIdPad) { // FakeTensorId
-        std::string Temp =
-            "x" + std::to_string(TensorId.first - FakeTensorIdPad);
-        TnsrInfo.Name = "[" + Temp + "].";
-      } else
-        TnsrInfo.Name = "[" + std::to_string(TensorId.first) + "].";
-      if (TnsrInfo.Type == TensorType::Input) {
-        TnsrInfo.Name += "[Input].";
-        TnsrInfo.Name += IndexStr;
-        Input.push_back(TnsrInfo);
-      }
-      if (TnsrInfo.Type == TensorType::Output) {
-        TnsrInfo.Name += "[Output].";
-        TnsrInfo.Name += IndexStr;
-        Output.push_back(TnsrInfo);
-      }
+      prepareTensorName(TnsrInfo.Order, TnsrInfo, false);
     }
+  }
+  if (BailOut)
+    return;
+
+  if (HasLoadAndStore) {
+    auto WarningStr = "Warning : One or more tensors is/are both of Input and "
+                      "Output types\n";
+    errs() << WarningStr;
+    return;
   }
 
   for (auto Tlinfo : TensorCordInfoMap) {
@@ -1140,64 +1279,31 @@ void TensorAccessAnalysis::dumpIntoASM_MLIR() {
       warn += " Coord: " + std::to_string(0);
       TnsrInfo.IndexFactor[0] = 0;
     }
-    if (got != TnsrInfo.umap.end()) {
-      formula = got->second;
-      if (formula.length() > 0) {
-        IndexStr = "{ " + formula + "*";
-        IndexStr += std::to_string(TnsrInfo.IndexFactor[0]);
-      } else {
-        IndexStr = "{ " + std::to_string(TnsrInfo.IndexFactor[0]);
-      }
-    } else {
-      IndexStr = "{ " + std::to_string(TnsrInfo.IndexFactor[0]);
-    }
+    IndexStr = "{ ";
+    if (got != TnsrInfo.umap.end() && got->second.length() > 0)
+      IndexStr += (got->second + "*");
+    IndexStr += std::to_string(TnsrInfo.IndexFactor[0]);
+
     for (unsigned i = 1; i < TnsrInfo.IndexFactor.size(); i++) {
-      got = TnsrInfo.umap.find(i);
       if (TnsrInfo.IndexFactor[i] == INVALID_SCEV) {
         InvalidScev = true;
         warn += " Coord: " + std::to_string(i);
         TnsrInfo.IndexFactor[i] = 0;
       }
-      if (got != TnsrInfo.umap.end()) {
-        formula = got->second;
-        if (formula.length() > 0) {
-          IndexStr += ", " + formula + "*";
-          IndexStr += std::to_string(TnsrInfo.IndexFactor[i]);
-        } else {
-          IndexStr += ", " + std::to_string(TnsrInfo.IndexFactor[i]);
-        }
-      } else {
-        IndexStr += ", " + std::to_string(TnsrInfo.IndexFactor[i]);
-      }
+      IndexStr += ", ";
+      got = TnsrInfo.umap.find(i);
+      if (got != TnsrInfo.umap.end() && got->second.length() > 0)
+        IndexStr += (got->second + "*");
+      IndexStr += std::to_string(TnsrInfo.IndexFactor[i]);
     }
+    IndexStr += " }";
 
     warn += " Setting it zero, but Please use Pragma"
             " for better performance\n";
     if (InvalidScev && IndexSpaceWarning)
       errs() << warn;
+    prepareTensorName(TnsrInfo.Order, TnsrInfo, IndexStr);
 
-    IndexStr += " }";
-    // prepare TensorName
-    if (TnsrInfo.Order >= FakeTensorIdPad) { // FakeTensorId
-      std::string Temp = "x" + std::to_string(TnsrInfo.Order - FakeTensorIdPad);
-      TnsrInfo.Name = "[" + Temp + "].";
-    } else
-      TnsrInfo.Name = "[" + std::to_string(TnsrInfo.Order) + "].";
-    if (TnsrInfo.Type == TensorType::Input) {
-      TnsrInfo.Name += "[Input].";
-      TnsrInfo.Name += IndexStr;
-      Input.push_back(TnsrInfo);
-    }
-    if (TnsrInfo.Type == TensorType::Output) {
-      TnsrInfo.Name += "[Output].";
-      TnsrInfo.Name += IndexStr;
-      Output.push_back(TnsrInfo);
-    }
-    if (TnsrInfo.Type == TensorType::Aux) {
-      TnsrInfo.Name += "[Aux].";
-      TnsrInfo.Name += IndexStr;
-      Aux.push_back(TnsrInfo);
-    }
     LLVM_DEBUG(dbgs() << "\n" << TnsrInfo.Name);
   }
 }
@@ -1205,234 +1311,161 @@ void TensorAccessAnalysis::dumpIntoASM_MLIR() {
 
 void TensorAccessAnalysis::dumpIntoASM() {
   // Prepare TensorInfo
-  if (StLTensors.size()) {
+  if (StLTensors.size() || HasLoadAndStore || BailOut) {
     for (auto &TensorId : TensorTypeMap) {
       TensorInfo TnsrInfo;
       TnsrInfo.Type = TensorTypeMap.at(TensorId.first);
       TnsrInfo.Order = TensorId.first;
-      std::string IndexStr = "{ GC_CUSTOM";
-      // prepare TensorName
-      for (unsigned i = 1; i < TnsrInfo.IndexFactor.capacity(); i++)
-        IndexStr += ", GC_CUSTOM";
-      IndexStr += " }";
-      if (TensorId.first >= FakeTensorIdPad) { // FakeTensorId
-        std::string Temp =
-            "x" + std::to_string(TensorId.first - FakeTensorIdPad);
-        TnsrInfo.Name = "[" + Temp + "].";
-      } else
-        TnsrInfo.Name = "[" + std::to_string(TensorId.first) + "].";
-      if (TnsrInfo.Type == TensorType::Input) {
-        TnsrInfo.Name += "[Input].";
-        TnsrInfo.Name += IndexStr;
-        Input.push_back(TnsrInfo);
-      }
-      if (TnsrInfo.Type == TensorType::Output) {
-        TnsrInfo.Name += "[Output].";
-        TnsrInfo.Name += IndexStr;
-        Output.push_back(TnsrInfo);
-      }
+      prepareTensorName(TnsrInfo.Order, TnsrInfo);
     }
-  } else {
-    for (auto &TensorId : TensorTypeMap) {
-      if (TensorCordInfoMap.find(TensorId.first) == TensorCordInfoMap.end()) {
-        TensorInfo TnsrInfo;
-        TnsrInfo.Type = TensorTypeMap.at(TensorId.first);
-        TnsrInfo.Order = TensorId.first;
-        std::string IndexStr;
-        if (LdStLTensors.find(TensorId.first) != LdStLTensors.end()) {
-          if (BailoutReason.empty())
-            BailoutReason = "GetDimSize followed by SetDimSize present";
-          IndexStr = "{ GC_CUSTOM";
-          // prepare TensorName
-          for (unsigned i = 1; i < TnsrInfo.IndexFactor.capacity(); i++)
-            IndexStr += ", GC_CUSTOM";
-          IndexStr += " }";
-        } else {
-          IndexStr = "{ 0";
-          // prepare TensorName
-          for (unsigned i = 1; i < TnsrInfo.IndexFactor.capacity(); i++)
-            IndexStr += ", 0";
-          IndexStr += " }";
-        }
-        // prepare TensorName
-        if (TensorId.first >= FakeTensorIdPad) { // FakeTensorId
-          std::string Temp =
-              "x" + std::to_string(TensorId.first - FakeTensorIdPad);
-          TnsrInfo.Name = "[" + Temp + "].";
-        } else
-          TnsrInfo.Name = "[" + std::to_string(TensorId.first) + "].";
-        if (TnsrInfo.Type == TensorType::Input) {
-          TnsrInfo.Name += "[Input].";
-          TnsrInfo.Name += IndexStr;
-          Input.push_back(TnsrInfo);
-        }
-        if (TnsrInfo.Type == TensorType::Output) {
-          TnsrInfo.Name += "[Output].";
-          TnsrInfo.Name += IndexStr;
-          Output.push_back(TnsrInfo);
-        }
-      }
-    }
-    // continue normal processing of asm
-    for (auto Tlinfo : TensorCordInfoMap) {
-      TensorInfo TnsrInfo;
-      if (TensorTypeMap.find(Tlinfo.first) == TensorTypeMap.end() &&
-          (std::find(PragmaTensors.begin(), PragmaTensors.end(),
-                     Tlinfo.first) != PragmaTensors.end())) {
-        auto WarningStr = "Warning : Pragma defined for an unused Tensor. "
-                          "Skipping pragma notation for ID " +
-                          std::to_string(Tlinfo.first) + "\n";
-        errs() << WarningStr;
-        continue;
-      }
-      TnsrInfo.Type = TensorTypeMap.at(Tlinfo.first);
-      TnsrInfo.Order = Tlinfo.first;
-      for (unsigned i = 0; i < TnsrInfo.IndexFactor.capacity(); i++)
-        TnsrInfo.IndexFactor.emplace_back(0);
-      for (auto Linfo : Tlinfo.second) { // Loop over vector per TensorId
-        Loop *Loopit = std::get<0>(Linfo);
-        int indexit = std::get<1>(Linfo);
-        auto SCEVInfo = getScevInfo(Loopit); // Fetch the required loop pointer
-        // Populate stride
-        if (SCEVInfo) {
-          TnsrInfo.IndexFactor[indexit] = SCEVInfo->getSCEVStep();
-          std::string formula = std::get<2>(Linfo);
-          if (formula.length() > 0) {
-            // push the formula
-            TnsrInfo.umap.insert({indexit, formula});
-          }
-        } else {
-          auto DiffCBegin = DiffCoords.lower_bound(Tlinfo.first);
-          auto DiffCEnd = DiffCoords.upper_bound(Tlinfo.first);
-          int MaxVal = -1;
-          std::string Formula = "";
-          while (DiffCBegin != DiffCEnd) {
-            int Diffindex = std::get<0>(DiffCBegin->second);
-            int DiffVal = std::get<1>(DiffCBegin->second);
-            if (Diffindex == indexit) {
-              if (DiffVal > MaxVal) {
-                MaxVal = DiffVal;
-                Formula = std::get<2>(DiffCBegin->second);
-              }
-            }
-            DiffCBegin++;
-          }
-          if (MaxVal >= 0) { // To bar any invalid access to TnsrInfo
-            TnsrInfo.IndexFactor[indexit] = MaxVal;
-            if (Formula.length() > 0)
-              TnsrInfo.umap.insert({indexit, Formula});
-          }
-        }
-        // Check if the Tensor ID is manipulated zero it out
-        for (auto i = Tensor_ids.begin(); i != Tensor_ids.end(); ++i) {
-          if (*i == TnsrInfo.Order) {
-            for (unsigned i = 0; i < TnsrInfo.IndexFactor.size(); i++) {
-              TnsrInfo.IndexFactor[i] = 0;
-            }
-          }
-        }
-      }
 
-      // prepare IndexString
-      std::string IndexStr = "";
-      std::string formula = "";
-      std::string warn = "";
-      bool InvalidScev = false;
-      for (unsigned i = 0; i < TnsrInfo.IndexFactor.size(); i++) {
-        if (TnsrInfo.IndexFactor[i] == INVALID_SCEV) {
-          InvalidScev = true;
-          break;
-        }
-      }
-      // Making the Whole tensor zero if Invalid scev found, this
-      // is temp work around and will be removed later
-      if (InvalidScev) {
-        for (unsigned i = 0; i < TnsrInfo.IndexFactor.size(); i++) {
-          TnsrInfo.IndexFactor[i] = 0;
-        }
-      }
-      warn = "Warning: Auto Index Space could not be generated"
-             " for Tensor ID: " +
-             std::to_string(Tlinfo.first);
-      std::unordered_map<int, std::string>::const_iterator got =
-          TnsrInfo.umap.find(0);
-      if (TnsrInfo.IndexFactor[0] == INVALID_SCEV) {
-        InvalidScev = true;
-        warn += " Coord: " + std::to_string(0);
-        TnsrInfo.IndexFactor[0] = 0;
-      }
-      if (got != TnsrInfo.umap.end()) {
-        formula = got->second;
+    if (HasLoadAndStore) {
+      auto WarningStr = "Warning : One or more tensors is/are of both Input and "
+                        "Output types\n";
+      errs() << WarningStr;
+    }
+    return;
+  }
+
+  for (auto &TensorId : TensorTypeMap) {
+    if (TensorCordInfoMap.find(TensorId.first) == TensorCordInfoMap.end()) {
+      TensorInfo TnsrInfo;
+      TnsrInfo.Type = TensorTypeMap.at(TensorId.first);
+      TnsrInfo.Order = TensorId.first;
+      bool IsLdStTensor =
+        (LdStLTensors.find(TensorId.first) != LdStLTensors.end());
+      if (IsLdStTensor && BailoutReason.empty())
+          BailoutReason = "GetDimSize followed by SetDimSize present";
+      prepareTensorName(TnsrInfo.Order, TnsrInfo, IsLdStTensor);
+    }
+  }
+
+  // continue normal processing of asm
+  for (auto Tlinfo : TensorCordInfoMap) {
+    TensorInfo TnsrInfo;
+    if (TensorTypeMap.find(Tlinfo.first) == TensorTypeMap.end() &&
+        (std::find(PragmaTensors.begin(), PragmaTensors.end(),
+                   Tlinfo.first) != PragmaTensors.end())) {
+      auto WarningStr = "Warning : Pragma defined for an unused Tensor. "
+                        "Skipping pragma notation for ID " +
+                        std::to_string(Tlinfo.first) + "\n";
+      errs() << WarningStr;
+      continue;
+    }
+    TnsrInfo.Type = TensorTypeMap.at(Tlinfo.first);
+    TnsrInfo.Order = Tlinfo.first;
+    for (unsigned i = 0; i < TnsrInfo.IndexFactor.capacity(); i++)
+      TnsrInfo.IndexFactor.emplace_back(0);
+    for (auto Linfo : Tlinfo.second) { // Loop over vector per TensorId
+      Loop *Loopit = std::get<0>(Linfo);
+      int indexit = std::get<1>(Linfo);
+      auto SCEVInfo = getScevInfo(Loopit); // Fetch the required loop pointer
+      // Populate stride
+      if (SCEVInfo) {
+        TnsrInfo.IndexFactor[indexit] = SCEVInfo->getSCEVStep();
+        std::string formula = std::get<2>(Linfo);
         if (formula.length() > 0) {
-          IndexStr = "{ " + formula + "*";
-          IndexStr += std::to_string(TnsrInfo.IndexFactor[0]);
-        } else {
-          IndexStr = "{ " + std::to_string(TnsrInfo.IndexFactor[0]);
+          // push the formula
+          TnsrInfo.umap.insert({indexit, formula});
         }
       } else {
-        IndexStr = "{ " + std::to_string(TnsrInfo.IndexFactor[0]);
-      }
-      for (unsigned i = 1; i < TnsrInfo.IndexFactor.size(); i++) {
-        got = TnsrInfo.umap.find(i);
-        if (TnsrInfo.IndexFactor[i] == INVALID_SCEV) {
-          InvalidScev = true;
-          warn += " Coord: " + std::to_string(i);
-          TnsrInfo.IndexFactor[i] = 0;
-        }
-        if (got != TnsrInfo.umap.end()) {
-          formula = got->second;
-          if (formula.length() > 0) {
-            IndexStr += ", " + formula + "*";
-            IndexStr += std::to_string(TnsrInfo.IndexFactor[i]);
-          } else {
-            IndexStr += ", " + std::to_string(TnsrInfo.IndexFactor[i]);
+        auto DiffCBegin = DiffCoords.lower_bound(Tlinfo.first);
+        auto DiffCEnd = DiffCoords.upper_bound(Tlinfo.first);
+        int MaxVal = -1;
+        std::string Formula = "";
+        while (DiffCBegin != DiffCEnd) {
+          int Diffindex = std::get<0>(DiffCBegin->second);
+          int DiffVal = std::get<1>(DiffCBegin->second);
+          if (Diffindex == indexit) {
+            if (DiffVal > MaxVal) {
+              MaxVal = DiffVal;
+              Formula = std::get<2>(DiffCBegin->second);
+            }
           }
-        } else {
-          IndexStr += ", " + std::to_string(TnsrInfo.IndexFactor[i]);
+          DiffCBegin++;
+        }
+        if (MaxVal >= 0) { // To bar any invalid access to TnsrInfo
+          TnsrInfo.IndexFactor[indexit] = MaxVal;
+          if (Formula.length() > 0)
+            TnsrInfo.umap.insert({indexit, Formula});
         }
       }
-
-      warn += " Setting it zero, but Please use Pragma"
-              " for better performance\n";
-
-      if (InvalidScev && IndexSpaceWarning)
-        errs() << warn;
-
-      if (InvalidScev) {
-        if (BailoutReason.empty())
-          BailoutReason =
-              "Invalid Scev present (Runtime args in coord manipulation)";
-        IndexStr = "{ GC_CUSTOM";
-        // prepare TensorName
-        for (unsigned i = 1; i < TnsrInfo.IndexFactor.capacity(); i++)
-          IndexStr += ", GC_CUSTOM";
+      // Check if the Tensor ID is manipulated zero it out
+      for (auto i = Tensor_ids.begin(); i != Tensor_ids.end(); ++i) {
+        if (*i == TnsrInfo.Order) {
+          for (unsigned i = 0; i < TnsrInfo.IndexFactor.size(); i++) {
+            TnsrInfo.IndexFactor[i] = 0;
+          }
+        }
       }
-
-      IndexStr += " }";
-      // prepare TensorName
-      if (TnsrInfo.Order >= FakeTensorIdPad) { // FakeTensorId
-        std::string Temp =
-            "x" + std::to_string(TnsrInfo.Order - FakeTensorIdPad);
-        TnsrInfo.Name = "[" + Temp + "].";
-      } else
-        TnsrInfo.Name = "[" + std::to_string(TnsrInfo.Order) + "].";
-      if (TnsrInfo.Type == TensorType::Input) {
-        TnsrInfo.Name += "[Input].";
-        TnsrInfo.Name += IndexStr;
-        Input.push_back(TnsrInfo);
-      }
-      if (TnsrInfo.Type == TensorType::Output) {
-        TnsrInfo.Name += "[Output].";
-        TnsrInfo.Name += IndexStr;
-        Output.push_back(TnsrInfo);
-      }
-      if (TnsrInfo.Type == TensorType::Aux) {
-        TnsrInfo.Name += "[Aux].";
-        TnsrInfo.Name += IndexStr;
-        Aux.push_back(TnsrInfo);
-      }
-      LLVM_DEBUG(dbgs() << "\n" << TnsrInfo.Name);
     }
+
+    // prepare IndexString
+    std::string IndexStr = "";
+    std::string formula = "";
+    std::string warn = "";
+    bool InvalidScev = false;
+    for (unsigned i = 0; i < TnsrInfo.IndexFactor.size(); i++) {
+      if (TnsrInfo.IndexFactor[i] == INVALID_SCEV) {
+        InvalidScev = true;
+        break;
+      }
+    }
+    // Making the Whole tensor zero if Invalid scev found, this
+    // is temp work around and will be removed later
+    if (InvalidScev) {
+      for (unsigned i = 0; i < TnsrInfo.IndexFactor.size(); i++) {
+        TnsrInfo.IndexFactor[i] = 0;
+      }
+    }
+    warn = "Warning: Auto Index Space could not be generated"
+           " for Tensor ID: " +
+           std::to_string(Tlinfo.first);
+    // TODO : this could be dead code
+    if (TnsrInfo.IndexFactor[0] == INVALID_SCEV) {
+      InvalidScev = true;
+      warn += " Coord: " + std::to_string(0);
+      TnsrInfo.IndexFactor[0] = 0;
+    }
+
+    std::unordered_map<int, std::string>::const_iterator got =
+        TnsrInfo.umap.find(0);
+    IndexStr = "{ ";
+    if (got != TnsrInfo.umap.end() && got->second.length() > 0)
+      IndexStr += (got->second + "*");
+    IndexStr += std::to_string(TnsrInfo.IndexFactor[0]);
+
+    for (unsigned i = 1; i < TnsrInfo.IndexFactor.size(); i++) {
+      if (TnsrInfo.IndexFactor[i] == INVALID_SCEV) {
+        InvalidScev = true;
+        warn += " Coord: " + std::to_string(i);
+        TnsrInfo.IndexFactor[i] = 0;
+        continue;  // IndexStr will not be used further
+      }
+
+      got = TnsrInfo.umap.find(i);
+      IndexStr += ", ";
+      if (got != TnsrInfo.umap.end() && got->second.length() > 0)
+        IndexStr += (got->second + "*");
+      IndexStr += std::to_string(TnsrInfo.IndexFactor[i]);
+    }
+
+    warn += " Setting it zero, but Please use Pragma"
+            " for better performance\n";
+
+    if (InvalidScev && IndexSpaceWarning)
+      errs() << warn;
+
+    if (InvalidScev && BailoutReason.empty())
+      BailoutReason =
+          "Invalid Scev present (Runtime args in coord manipulation)";
+
+    if (InvalidScev)
+      prepareTensorName(TnsrInfo.Order, TnsrInfo);
+    else
+      prepareTensorName(TnsrInfo.Order, TnsrInfo, IndexStr+" }");
+
+    LLVM_DEBUG(dbgs() << "\n" << TnsrInfo.Name);
   }
 }
 
@@ -1476,9 +1509,17 @@ void TensorAccessAnalysis::processPHIUses(int TensorId, PHINode *PHI,
             if (!dyn_cast<ICmpInst>(Intrins->getOperand(6)))
               FallBackVec.insert(TensorId);
             else {
-              if (auto *Icmp = dyn_cast<ICmpInst>(Intrins->getOperand(6)))
+              if (auto *Icmp = dyn_cast<ICmpInst>(Intrins->getOperand(6))) {
                 if (!dyn_cast<ConstantInt>(Icmp->getOperand(1)))
                   FallBackVec.insert(TensorId);
+
+                if (auto *polarity =
+                        dyn_cast<llvm::ConstantInt>(Intrins->getOperand(7))) {
+                  int polarity_val = polarity->getZExtValue();
+                  if (polarity_val == 1)
+                    FallBackVec.insert(TensorId);
+                }
+              }
             }
           }
           IndexShl = dyn_cast<llvm::ConstantInt>(Intrins->getOperand(2))
@@ -1507,6 +1548,9 @@ void TensorAccessAnalysis::processPHIUses(int TensorId, PHINode *PHI,
             processNestedInstructions(Intrins, CurrLoop, PHI, TensorId, CopyPHI,
                                       F);
             continue;
+          } else {
+            FallBackVec.insert(TensorId);
+            BailOut = true;
           }
         } else {
           IncorrectIndexSpace = true;
@@ -1890,6 +1934,9 @@ void TensorAccessAnalysis::processNestedInstructions(Instruction *RootInst,
                 RootInst = Intrins;
                 Nested_Ins = true;
                 break;
+              } else {
+                FallBackVec.insert(TensorId);
+                BailOut = true;
               }
             } else {
               IncorrectIndexSpace = true;

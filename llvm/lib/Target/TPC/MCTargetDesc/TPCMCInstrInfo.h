@@ -1,9 +1,3 @@
-//===--------TPCMCInstrInfo.H---------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // Utility functions for TPC specific MCInst queries
@@ -142,6 +136,16 @@ const uint64_t HasSrcCMask = 1ULL;
 const unsigned HasSrcDStart = 63;
 const uint64_t HasSrcDMask = 1ULL;
 
+// MCInst Flags
+const unsigned MCFlagSPU       = 0;
+const unsigned MCFlagVPU       = 1;
+const unsigned MCFlagLDU       = 2;
+const unsigned MCFlagSTU       = 3;
+const unsigned MCFlagLOOP      = 5;
+const unsigned MCSlotFlagMask  = 0b111;
+
+const unsigned MCFlagIsUnpredDoron1 = 8;
+
 // Accessors to the data in TSFlags.
 
 inline unsigned getInstrType(const MCInstrDesc &MCInstD) {
@@ -267,20 +271,20 @@ const unsigned LdOpCodeStart    = 16;
 const unsigned LdOpCodeEnd      = 20;
 const unsigned LdOpCodeSize     = LdOpCodeEnd - LdOpCodeStart + 1;
 
-const unsigned LdPolarityBit    = 42;
+const unsigned LdPolarityBit    = 21;
 
-const unsigned LdPredicateStart = 43;
-const unsigned LdPredicateEnd   = 46;
+const unsigned LdPredicateStart = 22;
+const unsigned LdPredicateEnd   = 25;
 const unsigned LdPredicateSize  = LdPredicateEnd - LdPredicateStart + 1;
 
-const unsigned LdVectorPredBit  = 47;
+const unsigned LdVectorPredBit  = 26;
 
-const unsigned LdSrcBStart      = 48;
-const unsigned LdSrcBEnd        = 56;
+const unsigned LdSrcBStart      = 28;
+const unsigned LdSrcBEnd        = 36;
 const unsigned LdSrcBSize       = LdSrcBEnd - LdSrcBStart + 1;
 
-const unsigned LdSwitchesStart  = 57;
-const unsigned LdSwitchesEnd    = 63;
+const unsigned LdSwitchesStart  = 37;
+const unsigned LdSwitchesEnd    = 43;
 const unsigned LdSwitchesSize   = LdSwitchesEnd - LdSwitchesStart + 1;
 
 // SPU slot.
@@ -289,29 +293,29 @@ const unsigned SpuOpCodeEnd       = 5;
 const unsigned SpuOpCodeSize      = SpuOpCodeEnd - SpuOpCodeStart + 1;
 
 const unsigned SpuSrcAStart       = 6;
-const unsigned SpuSrcAEnd         = 12;
+const unsigned SpuSrcAEnd         = 13;
 const unsigned SpuSrcASize        = SpuSrcAEnd - SpuSrcAStart + 1;
 
-const unsigned SpuSrcBStart       = 13;
-const unsigned SpuSrcBEnd         = 19;
+const unsigned SpuSrcBStart       = 14;
+const unsigned SpuSrcBEnd         = 21;
 const unsigned SpuSrcBSize        = SpuSrcBEnd - SpuSrcBStart + 1;
 
-const unsigned SpuDestStart       = 20;
-const unsigned SpuDestEnd         = 26;
+const unsigned SpuDestStart       = 22;
+const unsigned SpuDestEnd         = 29;
 const unsigned SpuDestSize        = SpuDestEnd - SpuDestStart + 1;
 
-const unsigned SpuOpTypeStart     = 27;
-const unsigned SpuOpTypeEnd       = 30;
+const unsigned SpuOpTypeStart     = 30;
+const unsigned SpuOpTypeEnd       = 33;
 const unsigned SpuOpTypeSize      = SpuOpTypeEnd - SpuOpTypeStart + 1;
 
-const unsigned SpuPolarityBit     = 31;
+const unsigned SpuPolarityBit     = 34;
 
-const unsigned SpuPredicateStart  = 32;
-const unsigned SpuPredicateEnd    = 35;
+const unsigned SpuPredicateStart  = 35;
+const unsigned SpuPredicateEnd    = 39;
 const unsigned SpuPredicateSize   = SpuPredicateEnd - SpuPredicateStart + 1;
 
-const unsigned SpuSwitchesStart   = 36;
-const unsigned SpuSwitchesEnd     = 42;
+const unsigned SpuSwitchesStart   = 40;
+const unsigned SpuSwitchesEnd     = 46;
 const unsigned SpuSwitchesSize    = SpuSwitchesEnd - SpuSwitchesStart + 1;
 
 // VPU slot.
@@ -381,16 +385,16 @@ const unsigned StPredicateSize    = StPredicateEnd - StPredicateStart + 1;
 
 const unsigned StVectorPredBit    = 26;
 
-const unsigned StSrcCStart        = 27;
-const unsigned StSrcCEnd          = 34;
+const unsigned StSrcCStart        = 28;
+const unsigned StSrcCEnd          = 35;
 const unsigned StSrcCSize         = StSrcCEnd - StSrcCStart + 1;
 
-const unsigned StSwitchesStart    = 35;
-const unsigned StSwitchesEnd      = 40;
+const unsigned StSwitchesStart    = 36;
+const unsigned StSwitchesEnd      = 41;
 const unsigned StSwitchesSize     = StSwitchesEnd - StSwitchesStart + 1;
 
-const unsigned Gen4StSwitchesStart = 35;
-const unsigned Gen4StSwitchesEnd   = 41;
+const unsigned Gen4StSwitchesStart = 36;
+const unsigned Gen4StSwitchesEnd   = 42;
 const unsigned Gen4StSwitchesSize  = Gen4StSwitchesEnd - Gen4StSwitchesStart + 1;
 
 // Instruction physic layout.
@@ -483,6 +487,17 @@ const unsigned STSwitchStart = 187;
 const unsigned STSwitchEnd = 190;
 const unsigned STSwitchSize = STSwitchEnd - STSwitchStart + 1;
 
+//
+// Gen3 (Goya2) layout of LD/ST switches differs from Gen1 (Goya, aka Dali) and Gen2 (Gaudi)
+// So let's differentiate them by adding Gen3 prefix.
+//
+const unsigned Gen3LDSwitchStart = 166;
+const unsigned Gen3LDSwitchEnd = 171;
+const unsigned Gen3LDSwitchSize = Gen3LDSwitchEnd - Gen3LDSwitchStart + 1;
+const unsigned Gen3STSwitchStart = 202;
+const unsigned Gen3STSwitchEnd = 207;
+const unsigned Gen3STSwitchSize = Gen3STSwitchEnd - Gen3STSwitchStart + 1;
+
 
 const unsigned InstructionSize = 256;
 
@@ -499,25 +514,20 @@ const unsigned cmpr1Start  = 0;
 const unsigned cmpr2Start  = 128;
 
 // LOOP fields
-const unsigned LOOPEncStart = 0;
-const unsigned LOOPEncEnd = 35;
-
-const unsigned LoopEncSize = LOOPEncEnd - LOOPEncStart + 1;
 const unsigned LoopStartImmStart = 151;
 const unsigned LoopBoundaryImmStart = 36;
 const unsigned LoopStepImmStart = 68;
 const unsigned LoopOffsetStart = 100;
-const unsigned LoopCmpStart = 116;
 
-const unsigned Gen3LOOPEncStart = 2;
-const unsigned Gen3LOOPEncEnd = 37;
-
-const unsigned Gen3LoopEncSize = Gen3LOOPEncEnd - Gen3LOOPEncStart + 1;
 const unsigned Gen3LoopStartImmStart = 96;
 const unsigned Gen3LoopBoundaryImmStart = 38;
 const unsigned Gen3LoopStepImmStart = 128;
 const unsigned Gen3LoopOffsetStart = 70;
-const unsigned Gen3LoopCmpStart = 160;
+
+const unsigned Gen4LoopStartImmStart = 96;
+const unsigned Gen4LoopBoundaryImmStart = 42;
+const unsigned Gen4LoopStepImmStart = 128;
+const unsigned Gen4LoopOffsetStart = 74;
 
 
 // Return whether insn is LOOKUP_C1C2 or LOOKUP_C0
@@ -525,6 +535,7 @@ inline bool isLookupC(const MCInstrDesc &MCInstD) {
   if (!isLoadInst(MCInstD))
     return false;
   unsigned opc = TPCII::getSlotOpCode(MCInstD);
+  // Also LOOKUP_1C and LOOKUP_2C
   return (opc == TPCII::LOOKUP_C1C2) || (opc == TPCII::LOOKUP_C0);
 }
 
@@ -549,6 +560,42 @@ inline bool isMac(const MCInstrDesc &MCInstD) {
   } else {
     return false;
   }
+}
+
+inline bool isAdd(const MCInstrDesc &MCInstD) {
+  if (isSPUInst(MCInstD))
+    return getSlotOpCode(MCInstD) == spuADD;
+  if (isVPUInst(MCInstD))
+    return getSlotOpCode(MCInstD) == vpuADD;
+  return false;
+}
+
+inline bool isSub(const MCInstrDesc &MCInstD) {
+  if (isSPUInst(MCInstD))
+    return getSlotOpCode(MCInstD) == spuSUB;
+  if (isVPUInst(MCInstD))
+    return getSlotOpCode(MCInstD) == vpuSUB;
+  return false;
+}
+
+inline bool isMul(const MCInstrDesc &MCInstD) {
+  if (isSPUInst(MCInstD))
+    return getSlotOpCode(MCInstD) == spuMUL;
+  if (isVPUInst(MCInstD))
+    return getSlotOpCode(MCInstD) == vpuMUL;
+  return false;
+}
+
+inline bool isMadd(const MCInstrDesc &MCInstD) {
+  if (isVPUInst(MCInstD))
+    return getSlotOpCode(MCInstD) == vpuMADD;
+
+  return false;
+}
+
+inline bool isFMA(const MCInstrDesc &MCInstD) {
+  return isMac(MCInstD) || isMul(MCInstD) ||
+      isAdd(MCInstD) || isSub(MCInstD) || isMadd(MCInstD);
 }
 
 inline bool isVpuConvert(const MCInstrDesc &MCInstD) {
@@ -580,75 +627,109 @@ inline bool isSel2(const MCInstrDesc &MCInstD) {
   }
 }
 
+inline bool isStoreForSlotOpcode(const MCInstrDesc &Desc,
+                                 const std::uint64_t Slot) {
+  return isStoreInst(Desc) && getSlotOpCode(Desc) == Slot;
+}
+
+inline bool isLoadForSlotOpcode(const MCInstrDesc &Desc,
+                                const std::uint64_t Slot) {
+  return isLoadInst(Desc) && getSlotOpCode(Desc) == Slot;
+}
+
+inline bool isEvent(const MCInstrDesc &MCInstD) {
+  return isStoreForSlotOpcode(MCInstD, ST_EVENT) ||
+         isLoadForSlotOpcode(MCInstD, LD_EVENT);
+}
+
 inline bool is_ld_l_v(const MCInstrDesc &MCInstD) {
-  if (!isLoadInst(MCInstD))
-    return false;
-  switch (getSlotOpCode(MCInstD)) {
-  case LD_L_V:return true;
-  }
-  return false;
+  return isLoadForSlotOpcode(MCInstD, LD_L_V);
 }
 
 inline bool is_st_l_v(const MCInstrDesc &MCInstD) {
-  if (!isStoreInst(MCInstD))
-    return false;
-  switch (getSlotOpCode(MCInstD)) {
-  case ST_L_V:return true;
-  }
-  return false;
+  return isStoreForSlotOpcode(MCInstD, ST_L_V);
 }
 
 inline bool is_st_l(const MCInstrDesc &MCInstD) {
-  if (!isStoreInst(MCInstD))
-    return false;
-  switch (getSlotOpCode(MCInstD)) {
-  case ST_L:
-    return true;
-  }
-  return false;
+  return isStoreForSlotOpcode(MCInstD, ST_L);
 }
 
 inline bool is_ld_l(const MCInstrDesc &MCInstD) {
+  return isLoadForSlotOpcode(MCInstD, LD_L);
+}
+
+inline bool is_st_g(const MCInstrDesc &MCInstD) {
+    return isStoreForSlotOpcode(MCInstD, ST_G);
+}
+
+inline bool is_ld_g(const MCInstrDesc &MCInstD) {
+    return isLoadForSlotOpcode(MCInstD, LD_G);
+}
+
+inline bool is_ld_l_v_family(const MCInstrDesc &MCInstD) {
   if (!isLoadInst(MCInstD))
     return false;
   switch (getSlotOpCode(MCInstD)) {
-  case LD_L:
+  case LD_L_V:
+  case LD_L_V_LOW:
+  case LD_L_V_HIGH:
     return true;
   }
   return false;
 }
 
-inline bool is_ld_tnsr(const MCInstrDesc &MCInstD) {
-  if (!isLoadInst(MCInstD))
+inline bool is_st_l_v_family(const MCInstrDesc &MCInstD) {
+  if (!isStoreInst(MCInstD))
     return false;
   switch (getSlotOpCode(MCInstD)) {
-  case LD_TNSR:      // same encoding for stLD_TNSR
-  case LD_TNSR_LOW:  // same encoding for stLD_TNSR_LOW
-  case LD_TNSR_HIGH: // same encoding for stLD_TNSR_HIGH
+  case ST_L_V:
+  case ST_L_V_LOW:
+  case ST_L_V_HIGH:
     return true;
   }
   return false;
 }
 
-inline bool is_st_tnsr(const MCInstrDesc &MCInstD) {
+inline bool isLdTnsr(const MCInstrDesc &MCInstD, bool IsGen3Plus) {
+  unsigned Opcode = getSlotOpCode(MCInstD);
+  if (TPCII::isLoadInst(MCInstD) &&
+      (Opcode == LD_TNSR ||
+       Opcode == LD_TNSR_LOW ||
+       Opcode == LD_TNSR_HIGH ||
+       Opcode == LD_TNSR_CNVRT))
+    return true;
+  else if (IsGen3Plus && TPCII::isStoreInst(MCInstD) &&
+           (Opcode == stLD_TNSR ||
+            Opcode == stLD_TNSR_LOW ||
+            Opcode == stLD_TNSR_HIGH ||
+            Opcode == stLD_TNSR_CNVRT))
+    return true;
+  else
+    return false;
+}
+
+inline bool isStTnsr(const MCInstrDesc &MCInstD) {
   if (!isStoreInst(MCInstD))
     return false;
   switch (getSlotOpCode(MCInstD)) {
   case ST_TNSR:
   case ST_TNSR_LOW:
   case ST_TNSR_HIGH:
+  case ST_TNSR_S:
+  case ST_TNSR_SQZ:
     return true;
   }
   return false;
 }
 
-inline bool isAdd(const MCInstrDesc &MCInstD) {
-  if (isSPUInst(MCInstD))
-    return getSlotOpCode(MCInstD) == spuADD;
-  if (isVPUInst(MCInstD))
-    return getSlotOpCode(MCInstD) == vpuADD;
+inline bool isGenAddr(const MCInstrDesc &MCInstD) {
+  if (isLoadInst(MCInstD))
+    return getSlotOpCode(MCInstD) == TPCII::ldGEN_ADDR;
+  if (isStoreInst(MCInstD))
+    return getSlotOpCode(MCInstD) == TPCII::stGEN_ADDR;
   return false;
 }
+
 }
 
 
@@ -724,8 +805,11 @@ bool isInstTypeSigned(const MCInstrDesc &Desc, const MCInst &I);
 bool isInstTypeSigned(const MCInstrDesc &Desc, const MachineInstr &I);
 bool useImmSlotForImm(const MCOperandInfo &IInfo, int64_t imm, bool isSigned);
 
-bool isVpuInstrWithSrcCD(unsigned opcode);
-}
+std::tuple<int, bool> getPredicatePolarity(const MachineInstr &MI);
+bool HasPredicate(const MCInst &MI, const MCInstrDesc &MD, bool isDoron1Plus);
+bool hasPredicate(const MachineInstr &MI, bool isDoron1Plus);
+
+} // namespace TPCMCInstrInfo
 
 // Return whether insn is LOOKUP_C1C2 or LOOKUP_C0
 bool isLookupC(MCInstrInfo const &MCII, MCInst const &MCI);

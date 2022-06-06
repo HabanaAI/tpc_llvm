@@ -14,5 +14,5 @@ void main(int dest, int src) {
 // NOTE: the first line may absent from gerenated ll file, if debug info will be
 // implemented differently and global symbol will not be needed.
 
-// CHECK: @coeff = external local_unnamed_addr addrspace(1) constant [3 x i32]
+// CHECK: @coeff = external dso_local local_unnamed_addr addrspace(1) constant [3 x i32]
 // CHECK-NOT: @coeff

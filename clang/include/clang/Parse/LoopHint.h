@@ -36,6 +36,8 @@ struct LoopHint {
 
   IdentifierLoc *TakenLoc = nullptr;
   IdentifierLoc *PipelinedLoc = nullptr;
+  IdentifierLoc *UnalignedTripCountLoc = nullptr;
+
 
   LoopHint()
       : PragmaNameLoc(nullptr), OptionLoc(nullptr), StateLoc(nullptr),

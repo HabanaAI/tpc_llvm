@@ -3,16 +3,16 @@
 void main(tensor input, int pred) {
   int5 indx = {0, 0, 0, 0, 0};
   int __global *ptr;
-  ptr = a_gen_addr_i(indx, input);
-  prefetch_a_b(ptr, pred, 0);
+  ptr = gen_addr(indx, input, 0, 0, 1, 0);
+  prefetch(ptr, 0, pred, 0);
   ++indx[0];    
-  ptr = a_gen_addr_i(indx, input);
-  prefetch_a_b(ptr, pred, 1);
+  ptr = gen_addr(indx, input, 0, 0, 1, 0);
+  prefetch(ptr, 0, pred, 1);
   ++indx[0];    
-  ptr = a_gen_addr_i(indx, input);
-  prefetch_a(ptr);
+  ptr = gen_addr(indx, input, 0, 0, 1, 0);
+  prefetch(ptr, 0, 1, 0);
 }
 
 // CHECK: prefetch %AD{{[0-9]+}}, %SP{{[0-9]+}}
 // CHECK: prefetch %AD{{[0-9]+}}, !%SP{{[0-9]+}}
-// CHECK: prefetch %AD{{[0-9]+}}, %SP0
+// CHECK: prefetch %AD{{[0-9]+}}

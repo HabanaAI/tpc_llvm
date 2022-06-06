@@ -1,12 +1,12 @@
-//====------------------------ CoordUpdateSimplifyPass.h ------------------===//
+// ===------------------ CoordUpdateSimplifyPass.h ------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-//===----------------------------------------------------------------------===//
+//                     The LLVM Compiler Infrastructure:
 //
-//===----------------------------------------------------------------------===//
+//              2020 - This pass is a property of Habana labs
+//
+//
+// ===------------------ CoordUpdateSimplifyPass.h ------------------===//
 
 #ifndef LLVM_TRANSFORMS_SCALAR_COORDUPDATESIMPLIFYPASS_H
 #define LLVM_TRANSFORMS_SCALAR_COORDUPDATESIMPLIFYPASS_H

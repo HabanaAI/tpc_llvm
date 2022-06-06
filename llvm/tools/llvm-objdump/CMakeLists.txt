@@ -1,5 +1,4 @@
 set(LLVM_LINK_COMPONENTS
-  AllTargetsAsmPrinters
   AllTargetsDescs
   AllTargetsDisassemblers
   AllTargetsInfos
@@ -22,6 +21,7 @@ add_llvm_tool(llvm-objdump
   MachODump.cpp
   WasmDump.cpp
   TPCDump.cpp
+  XCOFFDump.cpp
   )
 
 if(HAVE_LIBXAR)

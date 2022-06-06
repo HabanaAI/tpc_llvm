@@ -13,5 +13,5 @@ entry:
   ret void
 }
 
-; CHECK: convert.i32 target_type=fp32  %S{{[0-9]+}}, %S{{[0-9}+}, %SP{{[0-9]+}}
-; CHECK: st_l %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK: convert.i32 target_type=fp32  %S{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK: st_l %S{{[0-9]+}}, %S{{[0-9]+}}

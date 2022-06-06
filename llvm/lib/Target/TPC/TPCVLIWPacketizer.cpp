@@ -1,15 +1,3 @@
-//===- TPCVLIWPacketizer.cpp ----------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//
-//
-//===----------------------------------------------------------------------===//
-
 #include "TPCRegisterInfo.h"
 #include "TPCSubtarget.h"
 #include "TPCTargetMachine.h"
@@ -316,7 +304,7 @@ bool TPCPacketizerList::hasDeadDependence(const MachineInstr &I,
   if (HII->isPredicated(I) || HII->isPredicated(J))
     return false;
 
-  BitVector DeadDefs(256); // TODO: need to put a named constant here
+  BitVector DeadDefs(TPC::NUM_TARGET_REGS);
   for (auto &MO : I.operands()) {
     if (!MO.isReg() || !MO.isDef() || !MO.isDead())
       continue;
@@ -348,6 +336,8 @@ bool TPCPacketizerList::hasControlDependence(const MachineInstr &I,
 
 bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
                                                  const MachineInstr &J) {
+  const TPCSubtarget &Subtarget = MF.getSubtarget<TPCSubtarget>();
+  
   // Immediate sharing
   bool hasImmI = (HII->instHasImm(I));
   bool hasImmJ = (HII->instHasImm(J));
@@ -356,28 +346,46 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
     uint64_t immI = HII->getInstImm(I);
     uint64_t immJ = HII->getInstImm(J);
     if (immI != immJ) {
-      LLVM_DEBUG(dbgs() << "Imm field dependency between " << I << " and " << J << "\n");
-      return true;
+      bool immHasSpecialEncoding = Subtarget.hasShortImm() &&
+        (!useImmSlotForImm(I, immI) || !useImmSlotForImm(J, immJ));
+      if (!immHasSpecialEncoding) {
+        LLVM_DEBUG(dbgs() << "Imm field dependency between " << I << " and " << J << "\n");
+        return true;
+      }
     }
   }
 
   // LD/ST predicate sharing
-  unsigned pI = 0;
-  unsigned pJ = 0;
-  unsigned ppI = 0;
-  unsigned ppJ = 0;
-  bool ldstI = (HII->isLDSTInstrWithPredicate(I, pI, ppI));
-  bool ldstJ = (HII->isLDSTInstrWithPredicate(J, pJ, ppJ));
-  if (ldstI && ldstJ) {
-    if ((pI != pJ) || (ppI != ppJ)) {
-      LLVM_DEBUG(dbgs() << "Predicate dependency between " << I << " and " << J << "\n");
-      return true;
+  // Doron1 has separate fields in the VLIW for LD and ST predicates,
+  // so it is allowed to schedule predicated LD and ST in the same VLIW.
+  if (!Subtarget.hasDoron1ISA()) {
+    unsigned pI = 0;
+    unsigned pJ = 0;
+    unsigned ppI = 0;
+    unsigned ppJ = 0;
+    bool ldstI = (HII->isLDSTInstrWithPredicate(I, pI, ppI));
+    bool ldstJ = (HII->isLDSTInstrWithPredicate(J, pJ, ppJ));
+    if (ldstI && ldstJ) {
+      if ((pI != pJ) || (ppI != ppJ)) {
+        LLVM_DEBUG(dbgs() << "Predicate dependency between " << I << " and " << J << "\n");
+        return true;
+      }
     }
+  }
+
+  // THREAD_SYNC must be scheduled alone in a bundle [GAUDI-2468]
+  if (I.getOpcode() == TPC::THREAD_SYNC || J.getOpcode() == TPC::THREAD_SYNC) {
+    LLVM_DEBUG(dbgs() << "THREAD_SYNC must be alone (" << I << " and " << J << ")\n");
+    return true;
   }
 
   // 1.3.4. General Restrictions
   // CACHE FLUSH/INVALIDATE or ASO with Evict and LD_G cannot be scheduled in the same VLIW instruction
   //
+  // For Gaudi2, this restriction looks as follows:
+  //   CACHE FLUSH and LD_G/PREFETCH cannot be scheduled in the same VLIW instruction.
+  //   CACHE INVALIDATE.D/CACHE INVALIDATE.RST_D_PREF and LD_G/PREFETCH cannot be
+  //   scheduled in the same VLIW instruction.
   {
     bool restrict1 = false;
     bool restrict2 = false;
@@ -389,10 +397,21 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
     else  if (TPCII::isLoadInst(J.getDesc()) && TPCII::getSlotOpCode(J.getDesc()) == TPCII::LD_G) {
       r_restrict1 = true;
     }
+    if (Subtarget.hasGaudi2ISA()) {
+      if (TPCII::isLoadInst(I.getDesc()) && TPCII::getSlotOpCode(I.getDesc()) == TPCII::PREFETCH) {
+        restrict1 = true;
+      }
+      else if (TPCII::isLoadInst(J.getDesc()) && TPCII::getSlotOpCode(J.getDesc()) == TPCII::PREFETCH) {
+        r_restrict1 = true;
+      }
+    }
     if (restrict1) {
       switch (J.getOpcode()) {
         case TPC::CACHE_FLUSH:
         case TPC::CACHE_INVALIDATE:
+          // For Gaudi2 CACHE_INVALIDATE, we should have checked the 'switch' value
+          // to be either D or RST_D_PREF. However, there are some more restrictions
+          // for CACHE_INVALIDATE with other switches, so let's restrict the whole instruction.
         case TPC::ASO:
           restrict2 = true;
           break;
@@ -403,6 +422,9 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
       switch (I.getOpcode()) {
         case TPC::CACHE_FLUSH:
         case TPC::CACHE_INVALIDATE:
+          // For Gaudi2 CACHE_INVALIDATE, we should have checked the 'switch' value
+          // to be either D or RST_D_PREF. However, there are some more restrictions
+          // for CACHE_INVALIDATE with other switches, so let's restrict the whole instruction.
         case TPC::ASO:
           r_restrict2 = true;
           break;
@@ -418,6 +440,81 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
 
   unsigned sopcI = TPCII::getSlotOpCode(I.getDesc());
   unsigned sopcJ = TPCII::getSlotOpCode(J.getDesc());
+
+  // It is not allowed to schedule a CACHE_INVALIDATE.LU/RST_LU together
+  // with LOOKUP* in the same VLIW.
+  if (Subtarget.hasGaudi2ISA() &&
+      ((TPCII::isStoreInst(I.getDesc()) && sopcI == TPCII::CACHE_INVALIDATE &&
+        (I.getOperand(0).getImm() & TPCII::SW_LU ||
+         I.getOperand(0).getImm() & TPCII::SW_RST_LU) &&
+        TPCII::isLookup(J.getDesc()))
+       ||
+       (TPCII::isStoreInst(J.getDesc()) && sopcJ == TPCII::CACHE_INVALIDATE &&
+        (J.getOperand(0).getImm() & TPCII::SW_LU ||
+         J.getOperand(0).getImm() & TPCII::SW_RST_LU) &&
+        TPCII::isLookup(I.getDesc())))) {
+    LLVM_DEBUG(dbgs() << "CACHE_INVALIDATE.LU/RST_LU and LOOKUP* "
+                         "dependency between " << I << " and " << J << "\n");
+    return true;
+  }
+
+  //It is not allowed to schedule a ST_TNSR/ST_TNSR_SQZ/ST_TNSR_S with RMW
+  //in the same VLIW with the following VPU FP8_143 operations:
+  //  MAC/MUL/ADD/SUB/MADD
+  //  NEARBYINT
+  //  CONVERT TO/FROM FP8_143
+  //  EXTRACT_EXP
+  //  FORM_FP_NUMBER
+  if (Subtarget.hasGaudi2ISA()) {
+    auto IsVpuWithFp8_143 = [](const MachineInstr &Inst) -> bool {
+      const MCInstrDesc &InstDesc = Inst.getDesc();
+
+      if (TPCII::isVPUInst(InstDesc)) {
+        unsigned SlotOp = TPCII::getSlotOpCode(InstDesc);
+
+        switch (SlotOp) {
+        case TPCII::vpuMAC:
+        case TPCII::vpuMUL:
+        case TPCII::vpuADD:
+        case TPCII::vpuSUB:
+        case TPCII::vpuMADD:
+        case TPCII::vpuNEARBYINT:
+        case TPCII::vpuEXTRACT_EXP:
+        case TPCII::vpuFORM_FP_NUM:
+          return getOpType(Inst) == TPCII::OpType::FP8_143;
+        case TPCII::vpuCONVERT:
+          return getOpType(Inst) == TPCII::OpType::FP8_143 ||
+                 getSwitches(Inst) == TPCII::SW_TO_FP8_143;
+        default:
+          return false;
+        }
+      } else
+        return false;
+    };
+
+    auto IsStTnsrWithRMW = [](const MachineInstr &Inst) -> bool {
+      const MCInstrDesc &InstDesc = Inst.getDesc();
+      unsigned SlotOp = TPCII::getSlotOpCode(InstDesc);
+      if (TPCII::isStoreInst(InstDesc) &&
+          (SlotOp == TPCII::ST_TNSR ||
+           SlotOp == TPCII::ST_TNSR_HIGH ||
+           SlotOp == TPCII::ST_TNSR_LOW ||
+           SlotOp == TPCII::ST_TNSR_S ||
+           SlotOp == TPCII::ST_TNSR_SQZ) &&
+          (getSwitches(Inst) & TPCII::SW_RMW_SEL))
+        return true;
+      else
+        return false;
+    };
+
+    if ((IsStTnsrWithRMW(I) && IsVpuWithFp8_143(J)) ||
+        (IsStTnsrWithRMW(J) && IsVpuWithFp8_143(I))) {
+      LLVM_DEBUG(dbgs() << "ST_TNSR/*ST_TNSR_SQZ/ST_TNSR_S* with RMW and some"
+                           " VPU FP8_143 instructions dependency between "
+                 << I << " and " << J << "\n");
+      return true;
+    }
+  }
 
   // From PRM:
   // LOAD and STORE issue slots share the same resource (spill RAM), and cannot
@@ -454,7 +551,7 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
       return true;
   }
   // All except Gen1 (Dali) ST_G and LD_G/PREFETCH cannot be scheduled in the same VLIW instruction
-  if (!MF.getSubtarget<TPCSubtarget>().hasGoyaISA()) {
+  if (!Subtarget.hasGoyaISA()) {
     if (TPCII::isLoadInst(I.getDesc()) && TPCII::getSlotOpCode(I.getDesc()) == TPCII::PREFETCH &&
         TPCII::isStoreInst(J.getDesc()) && TPCII::getSlotOpCode(J.getDesc()) == TPCII::ST_G) {
         return true;
@@ -469,8 +566,10 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
   // Assertion 1: The maximum number of SRF or SPRF sources allowed
   // in 1 VLIW instruction which includes the following is 1:
   //   - MOV to V or VP
-  //   - LD_L_V* (only for Dali)
+  //   - LD_L_V* (Dali/GaudiB)
   //   - VPU instruction
+  //   - EVENT with SLOT=VPU (Gaudi2+)
+  //   - LD_L_V with ADDR_CALC (Doron1+)
   //
   // Hilla Ben Yaacov wrote on 11/03/2020:
   //
@@ -489,33 +588,45 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
   // LD_L_V, MOV from SRF/SPRF to VRF/VPRF, and VPU with SRF (you can see it on the
   // right hand side of the excel sheet).
   //
-  // In Gaudi this restriction can be mitigated, because we added a separate field
+  // In Gaudi/Goya2 this restriction can be mitigated, because we added a separate field
   // (LD_VLM_ADDR) for LD_L_V.
   //
-  // Therefore in Gaudi the restriction holds only for MOV S->V and VPU using SRF.
-
-  bool ldlv_I = (TPCII::isLoadInst(I.getDesc()) &&
-                (sopcI == TPCII::LD_L_V || sopcI == TPCII::LD_L_V_LOW || sopcI == TPCII::LD_L_V_HIGH));
-  bool ldlv_J = (TPCII::isLoadInst(J.getDesc()) &&
-                (sopcJ == TPCII::LD_L_V || sopcJ == TPCII::LD_L_V_LOW || sopcJ == TPCII::LD_L_V_HIGH));
-  bool isIMovSToV = (TPCII::isLoadInst(I.getDesc()) &&
-                    (sopcI == TPCII::ldMOV) && HII->isScalarToVector(I));
-  bool isJMovSToV = (TPCII::isLoadInst(J.getDesc()) &&
-                    (sopcJ == TPCII::ldMOV) && HII->isScalarToVector(J));
-  if (MF.getSubtarget<TPCSubtarget>().hasGaudiISA()) {
-    if (isIMovSToV || (TPCII::isVPUInst(I.getDesc()) && HII->hasSRFOrSPRFOperands(I))) {
-      if (isJMovSToV || (TPCII::isVPUInst(J.getDesc()) && HII->hasSRFOrSPRFOperands(J))) {
-        LLVM_DEBUG(dbgs() << "SRF/SPRF dependency between " << I << " and " << J << "\n");
+  // Therefore in Gaudi/Goya2 the restriction holds only for MOV S->V and VPU using SRF.
+  {
+    const TPCInstrInfo * TII = Subtarget.getInstrInfo();
+    
+    const auto &SRFOrSPRFRestriction = [&TII, &Subtarget]
+        (const MachineInstr &Inst) {
+      const MCInstrDesc &Desc = Inst.getDesc();
+      unsigned Opcode = TPCII::getSlotOpCode(Desc);
+      
+      if (TPCII::isLoadInst(Desc) && Opcode == TPCII::ldMOV &&
+          TII->isScalarToVector(Inst))
         return true;
-      }
-    }
-  }
-  else { // Dali
-    if (isIMovSToV || ldlv_I || (TPCII::isVPUInst(I.getDesc()) && HII->hasSRFOrSPRFOperands(I))) {
-      if (isJMovSToV || ldlv_J || (TPCII::isVPUInst(J.getDesc()) && HII->hasSRFOrSPRFOperands(J))) {
-        LLVM_DEBUG(dbgs() << "SRF/SPRF dependency between " << I << " and " << J << "\n");
+      else if (TPCII::isVPUInst(Desc) && TII->hasSRFOrSPRFOperands(Inst))
         return true;
-      }
+      else if ((Subtarget.hasGoyaISA() || Subtarget.hasGaudiBISA()) &&
+               TPCII::isLoadInst(Inst.getDesc()) &&
+               (Opcode == TPCII::LD_L_V || Opcode == TPCII::LD_L_V_LOW ||
+                Opcode == TPCII::LD_L_V_HIGH) &&
+               TII->hasSRFOrSPRFOperands(Inst))
+        return true;
+      else if (Subtarget.hasGen4Plus() && TPCII::isEvent(Desc) &&
+               Inst.getOperand(1).getImm() == 1)
+        return true;
+      else if (Subtarget.hasDoron1() && TPCII::isLoadInst(Inst.getDesc()) &&
+               Opcode == TPCII::LD_L_V &&
+               (getSwitches(Inst) & TPCII::SW_ADDR_CALC))
+        return true;
+      else
+        return false;
+    };
+    
+    if ((SRFOrSPRFRestriction(I) && TII->hasSRFOrSPRFOperands(J)) ||
+        (SRFOrSPRFRestriction(J) && TII->hasSRFOrSPRFOperands(I))) {
+      LLVM_DEBUG(dbgs() << "SRF/SPRF dependency between " << I <<
+                 " and " << J << "\n");
+      return true;
     }
   }
 
@@ -541,6 +652,79 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
     }
   }
 
+  if (Subtarget.hasGaudi2ISA()) {
+    // When LD_TNSR/LD_TNSR_LOW/LD_TNSR_HIGH is issued on STORE slot,
+    // then LOAD slot in the same VLIW is allowed to use only scalar LD_G or NOP opcodes.
+    bool isScalarLD_G = false;
+    if ((TPCII::isLoadInst(J.getDesc()) && (sopcJ == TPCII::LD_G))) {
+        assert(J.getOperand(0).isReg());
+        unsigned reg = J.getOperand(0).getReg();
+        if (TPC::SRFRegClass.contains(reg)) {
+          isScalarLD_G = true;
+        }
+    }
+    if ((TPCII::isStoreInst(I.getDesc()) && (sopcI >= 17 && sopcI <= 19)) && // LD_TNSR*
+        !isScalarLD_G) {
+      return true;
+    }
+    if ((TPCII::isLoadInst(I.getDesc()) && (sopcI == TPCII::LD_G))) {
+        assert(I.getOperand(0).isReg());
+        unsigned reg = I.getOperand(0).getReg();
+        if (TPC::SRFRegClass.contains(reg)) {
+          isScalarLD_G = true;
+      }
+    }
+    if ((TPCII::isStoreInst(J.getDesc()) && (sopcJ >= 17 && sopcJ <= 19)) && // LD_TNSR*
+        !isScalarLD_G) {
+      return true;
+    }
+    // It is not allowed to schedule an ASO together with:
+    //    LD_TNSR*
+    //      OR
+    //    LD_G with VRF destination
+    //      OR
+    //    LOOKUP* (PRM 0.59)
+    // in the same VLIW
+    if (I.getOpcode() == TPC::ASO) {
+      if ((TPCII::isStoreInst(J.getDesc()) || TPCII::isLoadInst(J.getDesc())) &&
+          (sopcJ >= 17 && sopcJ <= 19)) { // LD_TNSR*
+        return true;
+      }
+      if (TPCII::isLoadInst(J.getDesc()) && (sopcJ == TPCII::LD_G)) {
+        assert(J.getOperand(0).isReg());
+        unsigned reg = J.getOperand(0).getReg();
+        if (TPC::VRFRegClass.contains(reg)) {
+          return true;
+        }
+      }
+      if (TPCII::isLookup(J.getDesc())) {
+        return true;
+      }
+    }
+    if (J.getOpcode() == TPC::ASO) {
+      if ((TPCII::isStoreInst(I.getDesc()) || TPCII::isLoadInst(I.getDesc())) &&
+          (sopcI >= 17 && sopcI <= 19)) { // LD_TNSR*
+        return true;
+      }
+      if (TPCII::isLoadInst(I.getDesc()) && (sopcI == TPCII::LD_G)) {
+        assert(I.getOperand(0).isReg());
+        unsigned reg = I.getOperand(0).getReg();
+        if (TPC::VRFRegClass.contains(reg)) {
+          return true;
+        }
+      }
+      if (TPCII::isLookup(I.getDesc())) {
+        return true;
+      }
+    }
+
+    // It is not allowed to schedule anything to store slot if VPU use store_src_c
+    if (TPCII::getSrcCIsStoreSrcC(I.getDesc()) && TPCII::isStoreInst(J.getDesc()))
+      return true;
+    else if (TPCII::getSrcCIsStoreSrcC(J.getDesc()) && TPCII::isStoreInst(I.getDesc()))
+      return true;
+  }
+  
   // MUL IRF,* on an SPU issue slot and SET_INDX/PRMT_INDX/GEN_ADDR/ST_TNSR*
   // on a Store issue slot can not be scheduled together in the same VLIW
   // instruction.
@@ -569,6 +753,7 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
       (sopcJ == TPCII::stSET_INDX || sopcJ == TPCII::stPRMT_INDX ||
        sopcJ == TPCII::stGEN_ADDR || sopcJ == TPCII::ST_TNSR ||
        sopcJ == TPCII::ST_TNSR_HIGH || sopcJ == TPCII::ST_TNSR_LOW ||
+       sopcJ == TPCII::ST_TNSR_S || sopcJ == TPCII::ST_TNSR_SQZ ||
        sopcJ == TPCII::stLD_TNSR || sopcJ == TPCII::stLD_TNSR_HIGH ||
        sopcJ == TPCII::stLD_TNSR_LOW))
     return true;
@@ -577,9 +762,111 @@ bool TPCPacketizerList::hasTPCSpecificDependence(const MachineInstr &I,
       (sopcI == TPCII::stSET_INDX || sopcI == TPCII::stPRMT_INDX ||
        sopcI == TPCII::stGEN_ADDR || sopcI == TPCII::ST_TNSR ||
        sopcI == TPCII::ST_TNSR_HIGH || sopcI == TPCII::ST_TNSR_LOW ||
+       sopcI == TPCII::ST_TNSR_S || sopcI == TPCII::ST_TNSR_SQZ ||
        sopcI == TPCII::stLD_TNSR || sopcI == TPCII::stLD_TNSR_HIGH ||
        sopcI == TPCII::stLD_TNSR_LOW))
     return true;
+
+  //It is not allowed to encode in the same VLIW the following combination:
+  //  - MADD with SRF on SRC_C on VPU slot
+  //  - ST_TNSR_S with IMM on STORE slot
+  // Gaudi2
+  const auto &VPUMADDWithSRFOnSrcC = [](const MachineInstr &Inst) {
+    if (!TPCII::isVPUInst(Inst.getDesc()))
+      return false;
+    if (TPCII::getSlotOpCode(Inst.getDesc()) != TPCII::vpuMADD)
+      return false;
+
+    // SrcC
+    const MachineOperand &SrcC = Inst.getOperand(3);
+    if (!SrcC.isReg())
+      return false;
+    if (TPC::SRFRegClass.contains(SrcC.getReg()))
+      return true;
+
+    return false;
+  };
+
+  const auto &StSTTnsrSWithImm = [](const MachineInstr &Inst){
+    if (!TPCII::isStoreInst(Inst.getDesc()))
+      return false;
+    if (TPCII::getSlotOpCode(Inst.getDesc()) != TPCII::ST_TNSR_S)
+      return false;
+
+    if(Inst.getOperand(2).isImm())
+      return true;
+
+    return false;
+  };
+
+  if (Subtarget.hasGaudi2ISA() &&
+      ((VPUMADDWithSRFOnSrcC(I) && StSTTnsrSWithImm(J)) ||
+       (VPUMADDWithSRFOnSrcC(J) && StSTTnsrSWithImm(I))))
+    return true;
+  
+
+  if (Subtarget.hasDoron1ISA()) {
+    // If compiler scheduled FCLASS on LOAD slot, it is not allowed to schedule
+    // FCLASS/CALC_FP_SPECIAL/ FORM_FP_NUMBER/ EXTRACT_EXP on VPU slot in the
+    // same VLIW.
+    // If compiler scheduled CALC_FP_SPECIAL on LOAD slot, it is not allowed
+    // to schedule FCLASS/CALC_FP_SPECIAL/ FORM_FP_NUMBER/ EXTRACT_EXP on VPU
+    // slot in the same VLIW.
+    const auto &IsLdVpuRestriction = [](const MachineInstr &LoadMI,
+                                        const MachineInstr &VpuMI) {
+      unsigned LoadSlotOpcode = TPCII::getSlotOpCode(LoadMI.getDesc());
+      unsigned VpuSlotOpcode = TPCII::getSlotOpCode(VpuMI.getDesc());
+      if (TPCII::isLoadInst(LoadMI.getDesc()) &&
+          TPCII::isVPUInst(VpuMI.getDesc()) &&
+          (LoadSlotOpcode == TPCII::LD_FCLASS ||
+           LoadSlotOpcode ==TPCII::LD_CALC_FP_SPECIAL) &&
+          (VpuSlotOpcode == TPCII::vpuFCLASS ||
+           VpuSlotOpcode == TPCII::vpuCALC_FP_SPECIAL ||
+           VpuSlotOpcode == TPCII::vpuFORM_FP_NUM ||
+           VpuSlotOpcode == TPCII::vpuEXTRACT_EXP)) {
+        return true;
+      }
+      
+      return false;
+    };
+    
+    // AUTO_INC_DIM switch can be set either on LOAD slot OR on STORE slot,
+    // but not on both slots in the same VLIW.
+    // Don't check slots.
+    // When setting AUTO_INC_DIM, the SPU slot cannot contain an instruction
+    // with an IRF destination
+    const MachineRegisterInfo &MRI = MF.getRegInfo();
+    const auto &IsAutoIncRestriction = [&Subtarget, &MRI]
+        (const MachineInstr &AutoIncMI, const MachineInstr &OtherMI) {
+      
+      if ((TPCII::isLdTnsr(AutoIncMI.getDesc(), Subtarget.hasDoron1()) ||
+           TPCII::isStTnsr(AutoIncMI.getDesc())) &&
+          (getSwitches(AutoIncMI) & TPCII::SW_AUTO_INC_DIM)) {
+        if ((TPCII::isLdTnsr(OtherMI.getDesc(), Subtarget.hasDoron1()) ||
+             TPCII::isStTnsr(OtherMI.getDesc())) &&
+            (getSwitches(OtherMI) & TPCII::SW_AUTO_INC_DIM))
+          return true;
+        
+        if (TPCII::isSPUInst(OtherMI.getDesc())) {
+          for (unsigned I = 0; I < OtherMI.getNumOperands(); ++I) {
+            const MachineOperand &MO = OtherMI.getOperand(I);
+            if (MO.isDef() &&
+                MRI.getRegClass(MO.getReg()) == &TPC::IRFRegClass)
+              return true;
+          }
+        }
+      }
+      
+      return false;
+    };
+    
+    if (IsLdVpuRestriction(I, J) || IsLdVpuRestriction(J, I))
+      return true;
+    
+    if (IsAutoIncRestriction(I, J) || IsAutoIncRestriction(J, I))
+      return true;
+    
+  }
 
   return false;
 }
@@ -643,6 +930,34 @@ bool TPCPacketizerList::isLegalToPacketizeTogether(SUnit *SUI, SUnit *SUJ) {
         continue;
       }
       if (Dep.getKind() == SDep::Anti) {
+        // Two instructions that are anti-dependent can share a bundle,
+        // since in most such cases all operands are read before any
+        // modifications take place.
+        // There are certain anti-dependencies that cannot be ignored.
+        // Specifically, starting from Gaudi2, there may be zero latency
+        // between two dependent instructios, such as VPRF producer and
+        // store that VPRF via ST_L_V. Threfore, the following two
+        // anti-dependent instructions can't be put into the same bundle:
+        // 
+        //   ST_L_V %VP1 ...   ; SUJ
+        //   %VP1 = MOV ...    ; SUI
+        // 
+        const InstrItineraryData * ItinData = MF.getSubtarget<TPCSubtarget>().getInstrItineraryData();
+        for (unsigned i = 0; i < I.getNumOperands(); ++i) {
+          MachineOperand Op = I.getOperand(i);
+          if (Op.isReg() && Op.isDef()) {
+            Register R = Op.getReg();
+            int idx = J.findRegisterUseOperandIdx(R, false, HRI);
+            if (idx != -1) {
+              int lat = TII->getOperandLatency(ItinData, I, i, J, idx);
+              if (lat == 0) {
+                LLVM_DEBUG(dbgs() << "Failed due to ANTI dependency (zero latency) with " << J << "\n");
+                return false;
+              }
+            }
+          }
+        }
+        // Skip over remaining anti-dependences.
         continue;
       }
       if (Dep.getKind() == SDep::Output) {

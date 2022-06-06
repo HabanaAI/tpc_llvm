@@ -1,5 +1,5 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck %s
 
 void main(char a, char b, int dest, int src) {
   int256 __local *dptr = (int256 __local *)dest;

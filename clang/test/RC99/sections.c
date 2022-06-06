@@ -1,5 +1,5 @@
 // RUN: %tpc_clang -c %s -o %t.o
-// RUN: llvm-objdump -triple=tpc -s %t.o | FileCheck %s
+// RUN: %llvm-objdump -s %t.o | FileCheck %s
 
 //GAUDI-1366
 // XFAIL:*

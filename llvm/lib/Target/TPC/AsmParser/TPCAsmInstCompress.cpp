@@ -1,13 +1,3 @@
-//===- TPCAsmInstCompress.cpp ---------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//
-//===----------------------------------------------------------------------===//
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "MCTargetDesc/TPCMCInstrInfo.h"
 #include "TPCAsmInstCompress.h"
@@ -27,7 +17,45 @@ static StringRef MCOperandToString(const MCOperand &Operand) {
 
 void TPCAsmInstCompress::EmitInstruction(MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
-  Out.EmitInstruction(Inst, STI);
+  if (!compressEnabled || !STI.hasFeature(TPC::FeatureCompress)) {
+    Out.emitInstruction(Inst, STI);
+    return;
+  }
+
+  // If Inst is loop the instructions will store until end_loop is occurred.
+  StringRef Label;
+  if (isLoopMCInst(Inst, Label))
+    IsStoreInBuffer = true;
+  else if(isJmpMCInst(Inst, Label)) {
+    JmpLabels.push_back(Label);
+    if (!Buffer.empty() && any_isa<MCSymbol *>(Buffer.front())) {
+      if(any_cast<MCSymbol *>(Buffer.front())->getName() == Label)
+        IsStoreInBuffer = false;
+    }
+  }
+
+  // Flush buffer before emit current instruction.
+  if (!Buffer.empty() && !IsStoreInBuffer) {
+    flushBuffer(Out, STI);
+    // Not all instructions have emitted
+    if (!Buffer.empty())
+      IsStoreInBuffer = true;
+  }
+
+  if (IsStoreInBuffer) {
+    Buffer.push_back(Inst);
+    return;
+  }
+  
+  if (STI.hasFeature(TPC::FeatureDoron1) && isJmpMCInst(Inst, Label)) {
+    flushInstUncompressed(Inst, Out, STI);
+    DoNotCompressNextInst = true;
+  } else if (maybeCompressInstr(Inst, false, STI))
+    flushInstCompressed(Inst, Out, STI);
+  else {
+    flushInstUncompressed(Inst, Out, STI);
+    DoNotCompressNextInst = false;
+  }
 }
 
 void TPCAsmInstCompress::flushPendingInstructions(MCStreamer &Out,
@@ -39,7 +67,7 @@ void TPCAsmInstCompress::flushPendingInstructions(MCStreamer &Out,
     flushBuffer(Out, STI, true);
   }
   if (pInst != nullptr) {
-    Out.EmitInstruction(prevInst, STI);
+    Out.emitInstruction(prevInst, STI);
     pInst = nullptr;
   }
 }
@@ -79,7 +107,7 @@ void TPCAsmInstCompress::flushPendingLabels(MCStreamer &Out) {
   }
   for (MCSymbol *Sym : PendingLabels) {
     Sym->setRedefinable(true);
-    Out.EmitLabel(Sym);
+    Out.emitLabel(Sym);
   }
   PendingLabels.clear();
 }
@@ -94,9 +122,14 @@ void TPCAsmInstCompress::flushBuffer(MCStreamer &Out,
       auto& Inst = any_cast<MCInst &>(*It);
       StringRef Looplabel;
       if (!isLoopMCInst(Inst, Looplabel)) {
-        if(!DoNotCompressNextInst && maybeCompressInstr(Inst, false))
+        StringRef JmpLabel;
+        if (STI.hasFeature(TPC::FeatureDoron1) && isJmpMCInst(Inst, JmpLabel)) {
+          flushInstUncompressed(Inst, Out, STI);
+          DoNotCompressNextInst = true;
+        } else if(!DoNotCompressNextInst &&
+                  maybeCompressInstr(Inst, false, STI)) {
          flushInstCompressed(Inst, Out, STI);
-        else {
+        } else {
           flushInstUncompressed(Inst, Out, STI);
           DoNotCompressNextInst = false;
         }
@@ -132,12 +165,13 @@ void TPCAsmInstCompress::flushBuffer(MCStreamer &Out,
 
 void TPCAsmInstCompress::flushInstCompressed(MCInst &Inst, MCStreamer &Out,
                                              const MCSubtargetInfo &STI) {
+  assert(IsFirstInstrProcessed);
   if(pInst != nullptr) {
-    maybeCompressInstr(prevInst, true);
-    Out.EmitInstruction(prevInst, STI);
+    maybeCompressInstr(prevInst, true, STI);
+    Out.emitInstruction(prevInst, STI);
     flushPendingLabels(Out);
-    maybeCompressInstr(Inst, true);
-    Out.EmitInstruction(Inst, STI);
+    maybeCompressInstr(Inst, true, STI);
+    Out.emitInstruction(Inst, STI);
     pInst = nullptr;
   } else {
     flushPendingLabels(Out);
@@ -148,14 +182,17 @@ void TPCAsmInstCompress::flushInstCompressed(MCInst &Inst, MCStreamer &Out,
 
 void TPCAsmInstCompress::flushInstUncompressed(MCInst &Inst, MCStreamer &Out,
                                                const MCSubtargetInfo &STI) {
+  if (!IsFirstInstrProcessed)
+    IsFirstInstrProcessed = true;
+
   if (pInst != nullptr) {
-    Out.EmitInstruction(prevInst, STI);
+    Out.emitInstruction(prevInst, STI);
     flushPendingLabels(Out);
-    Out.EmitInstruction(Inst, STI);
+    Out.emitInstruction(Inst, STI);
     pInst = nullptr;
   } else {
     flushPendingLabels(Out);
-    Out.EmitInstruction(Inst, STI);
+    Out.emitInstruction(Inst, STI);
   }
 }
 
@@ -186,6 +223,38 @@ bool TPCAsmInstCompress::isVpuInstrWithSrcCD(const MCInst &MI) const {
     return false;
   if (TPCII::getHasSrcC(MC) || TPCII::getHasSrcD(MC))
     return true;
+
+  return false;
+}
+
+bool TPCAsmInstCompress::isVPUInstWithVPUExtSwitch(const MCInst &MI) const {
+  const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
+  if (!TPCII::isVPUInst(Desc))
+    return false;
+
+  const auto &GetSwitch =[&Desc](const MCInst MI){
+    for (unsigned I = Desc.getNumOperands() - 1; I >= 0; --I) {
+      assert(Desc.OpInfo);
+      const MCOperandInfo OpInfo = Desc.OpInfo[I];
+      if (OpInfo.OperandType == TPC::OperandType::OPERAND_SWITCH) {
+        const MCOperand &MCOperand = MI.getOperand(I);
+        assert(MCOperand.isImm());
+        return static_cast<uint32_t>(MCOperand.getImm());
+      }
+    }
+
+    assert(false && "Switch was not found.");
+    return 0U;
+  };
+
+  unsigned SlotOpcode = TPCII::getSlotOpCode(Desc);
+  if (SlotOpcode == TPCII::vpuMAC ||
+      SlotOpcode == TPCII::vpuMADD) {
+    unsigned SwitchVal = GetSwitch(MI);
+    if (SwitchVal & TPCII::SW_ZP ||
+        SwitchVal & TPCII::SW_NEG_ZP)
+      return true;
+  }
 
   return false;
 }
@@ -272,7 +341,7 @@ void TPCAsmInstCompress::flushLoopsInsts(std::vector<Any>::iterator &Iter,
       if (any_isa<MCInst>(Value)) {
         MCInst Inst = any_cast<MCInst &>(Value);
         if (IsCompressed && !DoNotCompressNextInst &&
-            maybeCompressInstr(Inst, false))
+            maybeCompressInstr(Inst, false, STI))
           flushInstCompressed(Inst, Out, STI);
         else {
           flushInstUncompressed(Inst, Out, STI);
@@ -323,7 +392,7 @@ void TPCAsmInstCompress::flushLoopsInsts(std::vector<Any>::iterator &Iter,
         ++LastFourInstrs.instCount;
         if (LastFourInstrs.instCount > 4) {
           Inst = PopFirstInst();
-          if (!DoNotCompressNextInst && maybeCompressInstr(Inst, false))
+          if (!DoNotCompressNextInst && maybeCompressInstr(Inst, false, STI))
             flushInstCompressed(Inst, Out, STI);
           else {
             flushInstUncompressed(Inst, Out, STI);
@@ -372,7 +441,11 @@ void TPCAsmInstCompress::rmOpcodeFromBundle(MCInst &MI, unsigned opcode) const {
   }
 }
 
-bool TPCAsmInstCompress::maybeCompressInstr(MCInst &MI, bool doCompress) const {
+bool TPCAsmInstCompress::maybeCompressInstr(MCInst &MI, bool doCompress,
+                                            const MCSubtargetInfo &STI) const {
+  if (!IsFirstInstrProcessed)
+    return false;
+
   if (MI.getOpcode() != TPC::BUNDLE) {
     return false;
   }
@@ -385,14 +458,11 @@ bool TPCAsmInstCompress::maybeCompressInstr(MCInst &MI, bool doCompress) const {
     const MCInstrDesc &MC = MCII.get(BMI.getOpcode());
 
     // Check for cross-slot instructions
-    // Do not use TPCMCInstrInfo interface function (commented out below)
-    // for now because it does not check for all possible opcodes
-    // (the list of the opcodes is huge currently because we still have to
-    // support old formats)
-    // if (TPCMCInstrInfo::isVpuInstrWithSrcCD(BMI.getOpcode())) {
     if (isVpuInstrWithSrcCD(BMI))
       return false;
     if (isSrcCIsStoreSrcC(BMI))
+      return false;
+    if (STI.hasFeature(TPC::FeatureDoron1) && isVPUInstWithVPUExtSwitch(BMI))
       return false;
 
     // Instructions that can be compressed (2 instructions in a single VLIW):
@@ -403,13 +473,13 @@ bool TPCAsmInstCompress::maybeCompressInstr(MCInst &MI, bool doCompress) const {
 
     if (!isNopMCInst(BMI)) {
       if (TPCII::isVPUInst(MC))
-	hasVPU = true;
+        hasVPU = true;
       else if (TPCII::isSPUInst(MC))
-	hasSPU = true;
+        hasSPU = true;
       else if (TPCII::isLoadInst(MC))
-	hasLD = true;
+        hasLD = true;
       else if (TPCII::isStoreInst(MC))
-	hasST = true;
+        hasST = true;
     }
   }
   if ((hasVPU || hasSPU) && (hasLD || hasST)) {

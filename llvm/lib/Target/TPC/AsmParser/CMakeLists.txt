@@ -1,10 +1,14 @@
-set(LLVM_LINK_COMPONENTS
-  TPCDesc
-  )
-
 add_llvm_component_library(LLVMTPCAsmParser
   TPCAsmParser.cpp
   TPCAsmInstCompress.cpp
-  )
 
-add_dependencies(LLVMTPCAsmParser TPCCommonTableGen)
+  LINK_COMPONENTS
+  MC
+  MCParser
+  Support
+  TPCDesc
+  TPCInfo
+
+  ADD_TO_COMPONENT
+  TPC
+  )

@@ -30,10 +30,10 @@ declare <5 x i32> @llvm.tpc.get.index.space.offset() #0
 declare <5 x i32> @llvm.tpc.get.index.space.size() #0
 
 ; CHECK-NOT: Cannot select
-; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i32 target_type=fp32  %V{{[0-9]+}}, %V{{[0-9]+}}
 
 ; Function Attrs: nounwind writeonly
 define void @main() {

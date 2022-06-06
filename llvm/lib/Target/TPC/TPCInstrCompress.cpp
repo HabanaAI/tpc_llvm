@@ -1,9 +1,5 @@
 //===- TPCInstrCompress.cpp ---- Instruction compression for TPC ---------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 //===----------------------------------------------------------------------===//
@@ -12,6 +8,7 @@
 #include "TPCSubtarget.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "TPCMachineScheduler.h"
+#include "TPCTargetMachine.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineScheduler.h"
@@ -62,6 +59,7 @@ private:
   const InstrItineraryData * ItinData;
   const TargetInstrInfo    * TII;
   const TargetRegisterInfo * TRI;
+  const TPCSubtarget       * Subtarget;
   MachineInstr *prevMI;
 };
 
@@ -91,13 +89,17 @@ void TPCInstrCompress::getAnalysisUsage(AnalysisUsage &AU) const {
 
 bool TPCInstrCompress::runOnMachineFunction(MachineFunction &Fn) {
   MF = &Fn;
-  TII = Fn.getSubtarget().getInstrInfo();
-  ItinData = Fn.getSubtarget().getInstrItineraryData();
-  TRI = Fn.getSubtarget().getRegisterInfo();
+  Subtarget = &MF->getSubtarget<TPCSubtarget>();
+  TII = Subtarget->getInstrInfo();
+  ItinData = Subtarget->getInstrItineraryData();
+  TRI = Subtarget->getRegisterInfo();
   MLI = &getAnalysis<MachineLoopInfo>();
-  TRI = Fn.getSubtarget().getRegisterInfo();
+  TRI = Subtarget->getRegisterInfo();
 
-  return false;
+  if (!TPCInstCompress ||
+      !Subtarget->hasCompress() ||
+      !Subtarget->getTargetLowering()->getTargetMachine().Options.CompressInstructions)
+    return false;
 
   LLVM_DEBUG(dbgs() << "\n*** TPC Inst Compression\n");
 
@@ -200,15 +202,32 @@ static bool isSrcCIsStoreSrcC(const MachineInstr &MI) {
   return false;
 }
 
+static bool isVPUInstWithVPUExtSwitch(const MachineInstr &MI) {
+  const MCInstrDesc &Desc = MI.getDesc();
+  if (!TPCII::isVPUInst(Desc))
+    return false;
+  
+  unsigned SlotOpcode = TPCII::getSlotOpCode(Desc);
+  if (SlotOpcode == TPCII::vpuMAC ||
+      SlotOpcode == TPCII::vpuMADD) {
+    unsigned SwitchVal = getSwitches(MI);
+    if (SwitchVal & TPCII::SW_ZP ||
+        SwitchVal & TPCII::SW_NEG_ZP)
+      return true;
+  }
+  
+  return false;
+}
+
 
 static bool maybeCompressInstr(MachineInstr *MI, bool doCompress) {
+  MachineBasicBlock* MBB = MI->getParent();
+  MachineFunction &MF = *MBB->getParent();
+  const TargetSubtargetInfo &STI = MF.getSubtarget();
   if (!MI->isBundle()) {
     if (isNopInstr(MI)) {
       if (doCompress) {
         // Create a bundle with NOPv & NOPs
-        MachineBasicBlock* MBB = MI->getParent();
-        MachineFunction &MF = *MBB->getParent();
-        const TargetSubtargetInfo &STI = MF.getSubtarget();
         const TargetInstrInfo *TII = STI.getInstrInfo();
         MIBundleBuilder Bundler(*MBB,  MI);
         Bundler.append(BuildMI(MF, DebugLoc(), TII->get(TPC::NOPld)));
@@ -224,19 +243,16 @@ static bool maybeCompressInstr(MachineInstr *MI, bool doCompress) {
   bool hasSPU = false;
   bool hasLD = false;
   bool hasST = false;
-  const MachineBasicBlock* MBB = MI->getParent();
   MachineBasicBlock::const_instr_iterator MII = MI->getIterator();
   for (++MII; MII != MBB->instr_end() && MII->isInsideBundle(); ++MII) {
     const MachineInstr& BMI = *MII;
 
     // Check for cross-slot instructions
-    // Do not use TPCMCInstrInfo interface function (commented out below) for now
-    // because it does not check for all possible opcodes (the list of the opcodes
-    // is huge currently because we still have to support old formats)
-    // if (TPCMCInstrInfo::isVpuInstrWithSrcCD(BMI.getOpcode())) {
     if (isVpuInstrWithSrcCD(BMI))
       return false;
     if (isSrcCIsStoreSrcC(BMI))
+      return false;
+    if (STI.hasFeature(TPC::FeatureDoron1) && isVPUInstWithVPUExtSwitch(BMI))
       return false;
 
     // Instructions that can be compressed (2 instructions in a single VLIW):
@@ -290,24 +306,31 @@ void TPCInstrCompress::processBB(MachineBasicBlock& MBB) {
   MachineBasicBlock::iterator EndBB = MBB.end();
 
   bool IsDestination = false;
-
+  const MachineBasicBlock *FirstMBB =
+    llvm::GraphTraits<MachineFunction *>::getEntryNode(MF);
+  bool IsFirstBB = MBB.getNumber() == FirstMBB->getNumber();
+  
   auto PredBBs = MBB.predecessors();
   for (MachineBasicBlock::const_pred_iterator PredBB = PredBBs.begin();
        (PredBB != PredBBs.end()) && !IsDestination; ++PredBB) {
-    if ((*PredBB)->getFirstTerminator() != (*PredBB)->end())
-      for (MachineBasicBlock::reverse_iterator Inst = (*PredBB)->rbegin();
-           Inst != (*PredBB)->rend() && !IsDestination; ++Inst) {
-        const MachineBasicBlock *DestMBB = nullptr;
-        if(isJmpInstr(*Inst, DestMBB) &&
-           MBB.getNumber() == DestMBB->getNumber())
-          IsDestination = true;
-      }
+    // These functions doesn't work correctly. I don't know why.
+    // MachineBasicBlock::getFirstTerminator()
+    // MachineBasicBlock::getFirstInstrTerminator()
+    // Because look over whole block.
+    for (MachineBasicBlock::reverse_iterator Inst = (*PredBB)->rbegin();
+         Inst != (*PredBB)->rend() && !IsDestination; ++Inst) {
+      const MachineBasicBlock *DestMBB = nullptr;
+      if(isJmpInstr(*Inst, DestMBB) &&
+         MBB.getNumber() == DestMBB->getNumber())
+        IsDestination = true;
+    }
   }
 
   if (!TPCCompressJumps) {
     prevMI = nullptr;
   }
 
+  bool IsDelaySlot = false;
   for (MachineBasicBlock::iterator I = BegBB, E = EndBB; I != E; ) {
     MachineInstr &MI = *I;
     ++I;
@@ -335,8 +358,26 @@ void TPCInstrCompress::processBB(MachineBasicBlock& MBB) {
         }
       }
     }
+    
+    const MachineBasicBlock *DestMBB = nullptr;
+    if (isJmpInstr(MI, DestMBB)) {
+      if (Subtarget->hasDoron1()) {
+        prevMI = nullptr;
+        IsDelaySlot = true;
+        continue;
+      }
+    }
+    
+    if (IsDelaySlot) {
+      IsDelaySlot = false;
+      continue;
+    }
 
-    if (maybeCompressInstr(&MI, false) && !isLoopEndN && !IsDestination) {
+    //Instructions that can be compressed (2 instructions in a single VLIW):
+    //  - Instructions which are not the first instruction of the kernel.
+    bool IsFirstInst = IsFirstBB && &MI == &(*BegBB);
+    if (maybeCompressInstr(&MI, false) && !isLoopEndN &&
+        !IsDestination && !(IsFirstInst && Subtarget->hasDoron1())) {
       if (prevMI) {
         // Compress both, MI and prevMI
         maybeCompressInstr(prevMI, true);

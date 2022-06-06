@@ -1,7 +1,7 @@
 ; RUN: llc -march=tpc -mcpu=gaudi -O1 -ignore-mem-overflow %s -o - | FileCheck %s
 
-; CHECK: convert.i16 target_type=int32  [[V1:%V[0-9]+]], {{%V[0-9]+}}, [[SP0:%SP[0-9]+]]
-; CHECK: st_tnsr  0x1, {{%I[0-9]+}}, [[V1]], [[SP0]]
+; CHECK: convert.i16 target_type=int32  [[V1:%V[0-9]+]], {{%V[0-9]+}}
+; CHECK: st_tnsr  0x1, {{%I[0-9]+}}, [[V1]]
 
 target triple = "tpc"
 

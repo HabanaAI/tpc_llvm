@@ -1,11 +1,5 @@
 //===--- TPC.h - TPC ToolChain Implementations ------------------*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_TPC_H
@@ -18,9 +12,12 @@
 namespace clang {
 namespace driver {
 
+/// Add TPC-specific options common for 'clang' and 'clang-as'.
+void addCommonTPCTargetArgs(const llvm::opt::ArgList &Args,
+                            llvm::opt::ArgStringList &CmdArgs);
+
 namespace toolchains {
 
-#ifdef LLVM_TPC_COMPILER
 class LLVM_LIBRARY_VISIBILITY TPCToolChain : public Generic_ELF {
 protected:
 public:
@@ -28,8 +25,11 @@ public:
                const llvm::opt::ArgList &Args);
   bool IsIntegratedAssemblerDefault() const override { return true; }
   Tool *buildLinker() const override;
+  void
+    addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
+                          llvm::opt::ArgStringList &CC1Args,
+                          Action::OffloadKind DeviceOffloadKind) const override;
 };
-#endif
 
 } // end namespace toolchains
 } // end namespace driver

@@ -1,12 +1,3 @@
-//===- TPCExpandHWRegCopies.cpp -------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 #include "TPCInstrInfo.h"
 #include "TPCSubtarget.h"
 #include "TPCTargetMachine.h"
@@ -87,11 +78,28 @@ bool TPCExpandHWRegCopies::runOnMachineFunction(MachineFunction &Func) {
         if (des.isReg()) {
           Register destreg = des.getReg();
           TCopyKind CopyKind = TCopyKind(none);
-          if (!destreg.isPhysical()) {
+          if (destreg.isPhysical()) {
+            if (destreg == TPC::ZP_REG)
+              CopyKind = TCopyKind(zpreg);
+          } else {
             const TargetRegisterClass *RC;
             const MachineRegisterInfo &MRI =
                 MI->getParent()->getParent()->getRegInfo();
             RC = MRI.getRegClass(destreg);
+            if (TPC::HWZPRegRegClass.hasSubClassEq(RC)) {
+              CopyKind = TCopyKind(zpreg);
+            }
+          }
+          if (CopyKind == TCopyKind(zpreg)) {
+            MIB = BuildMI(*MBB, mi, MI->getDebugLoc(),TII->get(TPC::MOV_ld_hvp),destreg);
+            MIB.add(MI->getOperand(1));
+            MIB.addImm(1);
+            MIB.addReg(destreg, RegState::Undef);
+            MIB.addReg(TPC::SPRF_TRUE);
+            MIB.addImm(0);
+
+            MI->removeFromParent();
+            NumReplaced++;
           }
         }
       }

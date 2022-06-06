@@ -6,8 +6,6 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "MCTargetDesc/TPCAsmBackend.h"
@@ -85,12 +83,17 @@ void TPCAsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
   } else if (Fixup.getKind() == FK_PCRel_4) {
     int RelOffset = Value & 0xffffffff;
     unsigned InstrSize = TPCII::InstructionSize;
+    if (STI->getFeatureBits()[TPC::FeatureCompress] && (Data[Offset] & 3)) {
+      // Compressed instr - 16 bytes only
+      InstrSize = InstrSize / 2;
+    }
     LLVM_DEBUG( fprintf(stderr, "applyFixup offset=%d reloc=%d comp=%d\n", Offset, RelOffset, (Data[Offset] & 3)); );
 
     assert(InstrSize % 64 == 0 && "Instruction is not aligned to 64 bits anymore, fix relocations");
     APInt Instruction(InstrSize, ArrayRef<uint64_t>((uint64_t*)(&Data[Offset]), InstrSize / 64));
     APInt ImmSlot(TPCII::ImmSize, RelOffset);
-    Instruction |= ImmSlot.zext(InstrSize).shl(TPCII::ImmStart);
+    Instruction |= ImmSlot.zext(InstrSize).shl(
+      STI->getFeatureBits()[TPC::FeatureCompress] ? TPCII::Gen3ImmStart : TPCII::ImmStart);
 
     const char* RawInstrucion = (const char*) Instruction.getRawData();
     for (unsigned i = 0; i < InstrSize / 8; ++i) {
@@ -102,12 +105,15 @@ void TPCAsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
       report_fatal_error("Too many instructions in the LOOP - END_PC offset does not fit in 16 bits");
     }
     unsigned InstrSize = TPCII::InstructionSize;
-    int RelOffset = (Value & 0xffff) - TPCII::InstructionSize/8; // LoopEnd + 1
-    LLVM_DEBUG( fprintf(stderr, "applyFixup LOOP offset=%d reloc=%d comp=%d\n", Offset, RelOffset, (Data[Offset] & 3)); );
+    assert(!(STI->getFeatureBits()[TPC::FeatureCompress] && (Data[Offset] & 3)) && "Compressed LOOP ???");
+    int RelOffset = Value - TPCII::InstructionSize/8; // LoopEnd + 1
+    unsigned LoopOffsetStart = STI->getFeatureBits()[TPC::FeatureDoron1] ? TPCII::Gen4LoopOffsetStart : 
+        (STI->getFeatureBits()[TPC::FeatureCompress] ? TPCII::Gen3LoopOffsetStart : TPCII::LoopOffsetStart);
+    LLVM_DEBUG( fprintf(stderr, "applyFixup LOOP addr=%d reloc=%d offset=%d\n", Offset, RelOffset, LoopOffsetStart); );
 
     APInt Instruction(TPCII::InstructionSize, ArrayRef<uint64_t>((uint64_t*)(&Data[Offset]), TPCII::InstructionSize / 64));
     APInt ImmSlot(TPCII::ImmSize, RelOffset);
-    Instruction |= ImmSlot.zext(TPCII::InstructionSize).shl(TPCII::LoopOffsetStart);
+    Instruction |= ImmSlot.zext(TPCII::InstructionSize).shl(LoopOffsetStart);
 
     const char* RawInstrucion = (const char*) Instruction.getRawData();
     for (unsigned i = 0; i < InstrSize / 8; ++i) {
@@ -123,10 +129,6 @@ bool TPCAsmBackend::mayNeedRelaxation(const MCInst& Inst, const MCSubtargetInfo 
 
 bool TPCAsmBackend::fixupNeedsRelaxation(const MCFixup& Fixup, uint64_t Value, const MCRelaxableFragment* DF, const MCAsmLayout& Layout) const {
   return false;
-}
-
-void TPCAsmBackend::relaxInstruction(const MCInst& Inst, const MCSubtargetInfo& STI, MCInst& Res) const {
-
 }
 
 bool TPCAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count) const {

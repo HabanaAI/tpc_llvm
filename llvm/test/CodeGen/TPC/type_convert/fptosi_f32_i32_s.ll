@@ -10,6 +10,6 @@ entry:
   ret void
 }
 
-; CHECK: convert.f32 target_type=int32  [[S1:%S[0-9]+]], [[S0:%S[0-9]+]], [[SP0:%SP[0-9]+]]
-; CHECK: st_l  0x100, [[S1]], [[SP0]]
+; CHECK: convert.f32 target_type=int32  [[S1:%S[0-9]+]], [[S0:%S[0-9]+]]
+; CHECK: st_l  0x100, [[S1]]
 ; CHECK: halt

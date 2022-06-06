@@ -12,7 +12,7 @@ void main(int src1, int src2, int dest) {
   *dptr = x1 ^ x2;
 }
 
-// CHECK-DAG: ld_l_v  {{%VP[0-9]+}}, %S0,{{.*}} %SP0
-// CHECK-DAG: ld_l_v  {{%VP[0-9]+}}, %S1,{{.*}} %SP0
-// CHECK:     xor.b   [[VPR3:%VP[0-9]+]], {{%VP[0-9]+}}, {{%VP[0-9]+}}, %SP0
-// CHECK:     st_l_v  %S2,{{.*}} [[VPR3]], %SP0
+// CHECK-DAG: ld_l_v  {{%VP[0-9]+}}, %S0{{.*}}
+// CHECK-DAG: ld_l_v  {{%VP[0-9]+}}, %S1{{.*}}
+// CHECK:     xor.b   [[VPR3:%VP[0-9]+]], {{%VP[0-9]+}}, {{%VP[0-9]+}}
+// CHECK:     st_l_v  %S2,{{.*}} [[VPR3]]

@@ -44,7 +44,7 @@ bool TPCTTIImpl::isSupportedConstant(const Constant *C) const {
   if (!CTy->isVectorTy())
     return true;
 
-  VectorType *CVTy = cast<VectorType>(CTy);
+  auto *CVTy = cast<FixedVectorType>(CTy);
   unsigned EltSize = CVTy->getElementType()->getScalarSizeInBits();
   bool IsElementFloat = !CVTy->getElementType()->isIntegerTy();
 
@@ -138,7 +138,7 @@ bool TPCTTIImpl::getDefaultILD(
   Ild.the_isLFSRImplicitDst = false;
   Ild.the_isAccFp32 = false;
   Ild.the_is2SrfDst = false;
-  Ild.the_is2xLookupAddSub = false;
+  Ild.the_is2xLookup2xDnormAddSub = false;
   Ild.the_registerFile = TPCLatencyEvaluation::e_rf_a;
   Ild.the_isFp16 = false;
   return true;
@@ -172,7 +172,7 @@ bool TPCTTIImpl::extractAndPopulate(
     SrcIld.the_slotID = TPCLatencyEvaluation::e_issue_slot_load;
     break;
   case Instruction::Load:
-    if (Ty == Type::VectorTyID) {
+    if (Ty == Type::FixedVectorTyID) {
       getLoadStoreConfig(SrcIld, TPCLatencyEvaluation::e_issue_slot_load,
                          TPCLatencyEvaluation::e_rf_i, TPCII::LD_TNSR);
       SrcIld.the_isVectorPipe = true;
@@ -182,7 +182,7 @@ bool TPCTTIImpl::extractAndPopulate(
     }
     break;
   case Instruction::Store:
-    if (Ty == Type::VectorTyID) {
+    if (Ty == Type::FixedVectorTyID) {
       getLoadStoreConfig(SrcIld, TPCLatencyEvaluation::e_issue_slot_store,
                          TPCLatencyEvaluation::e_rf_i, TPCII::ST_TNSR);
     } else {
@@ -206,7 +206,7 @@ bool TPCTTIImpl::extractAndPopulate(
   if (getOpcodeSlot<IntrinToSlot, Intrinsic::ID>(II.Id, II.Ty[_PRIMARY_TYPE],
                                                  Ild, getIntrinToSlotMap())) {
     getVectorScalarInfo(II.Ty[_PRIMARY_TYPE], Ild);
-    if (II.Ty[_PRIMARY_TYPE] == Type::VectorTyID) {
+    if (II.Ty[_PRIMARY_TYPE] == Type::FixedVectorTyID) {
       getFloatInfo(II.Ty[_VECTOR_TYPE], Ild);
     } else {
       getFloatInfo(II.Ty[_PRIMARY_TYPE], Ild);
@@ -284,28 +284,28 @@ bool TPCTTIImpl::extractAndPopulate(
     break;
   case llvm::Intrinsic::tpc_st_l_v:
     getLoadStoreConfig(Ild, TPCLatencyEvaluation::e_issue_slot_store,
-                       (II.Ty[_PRIMARY_TYPE] == Type::VectorTyID)
+                       (II.Ty[_PRIMARY_TYPE] == Type::FixedVectorTyID)
                            ? TPCLatencyEvaluation::e_rf_v
                            : TPCLatencyEvaluation::e_rf_s,
                        TPCII::ST_L_V);
     break;
   case llvm::Intrinsic::tpc_st_l_v_high:
     getLoadStoreConfig(Ild, TPCLatencyEvaluation::e_issue_slot_store,
-                       (II.Ty[_PRIMARY_TYPE] == Type::VectorTyID)
+                       (II.Ty[_PRIMARY_TYPE] == Type::FixedVectorTyID)
                            ? TPCLatencyEvaluation::e_rf_v
                            : TPCLatencyEvaluation::e_rf_s,
                        TPCII::ST_L_V_HIGH);
     break;
   case llvm::Intrinsic::tpc_st_l_v_low:
     getLoadStoreConfig(Ild, TPCLatencyEvaluation::e_issue_slot_store,
-                       (II.Ty[_PRIMARY_TYPE] == Type::VectorTyID)
+                       (II.Ty[_PRIMARY_TYPE] == Type::FixedVectorTyID)
                            ? TPCLatencyEvaluation::e_rf_v
                            : TPCLatencyEvaluation::e_rf_s,
                        TPCII::ST_L_V_LOW);
     break;
   case llvm::Intrinsic::tpc_aso:
     Ild.the_isVectorPipe =
-        (II.Ty[_PRIMARY_TYPE] == Type::VectorTyID) ? true : false;
+        (II.Ty[_PRIMARY_TYPE] == Type::FixedVectorTyID) ? true : false;
     Ild.the_operandID = TPCLatencyEvaluation::e_src_p;
     getLoadStoreConfig(Ild, TPCLatencyEvaluation::e_issue_slot_store,
                        TPCLatencyEvaluation::e_rf_sp, TPCII::ASO);
@@ -322,7 +322,7 @@ bool TPCTTIImpl::extractAndPopulate(
     break;
   case llvm::Intrinsic::tpc_lookup:
     Ild.the_isVectorPipe =
-        (II.Ty[_PRIMARY_TYPE] == Type::VectorTyID) ? true : false;
+        (II.Ty[_PRIMARY_TYPE] == Type::FixedVectorTyID) ? true : false;
     getLoadStoreConfig(Ild, TPCLatencyEvaluation::e_issue_slot_load,
                        TPCLatencyEvaluation::e_rf_v, TPCII::LOOKUP);
     break;
@@ -342,12 +342,12 @@ bool TPCTTIImpl::extractAndPopulate(
 }
 
 bool TPCTTIImpl::extractAndPopulate(
-    const Intrinsic::ID ID, Type *RetTy, ArrayRef<Value *> Args,
+    const Intrinsic::ID ID, Type *RetTy, ArrayRef<const Value *> Args,
     TPCLatencyEvaluation::InstructionForLatencyDetermination &Ild) const {
   Type::TypeID Ty = RetTy->getTypeID();
   IntrinsicInfo II{ID,
-                   {Ty, (Ty == Type::VectorTyID)
-                            ? RetTy->getVectorElementType()->getTypeID()
+                   {Ty, (Ty == Type::FixedVectorTyID)
+                            ? cast<VectorType>(RetTy)->getElementType()->getTypeID()
                             : Type::VoidTyID}};
   return extractAndPopulate(II, Ild);
 }
@@ -474,6 +474,37 @@ unsigned TPCTTIImpl::getLatency(
   return (unsigned)latency;
 }
 
+int TPCTTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
+                                      TTI::TargetCostKind CostKind) {
+  if (CostKind == TTI::TargetCostKind::TCK_Latency) {
+    TPCLatencyEvaluation::InstructionForLatencyDetermination src;
+    TPCTTIImpl::initBE();
+    //bool TPCTTIImpl::extractAndPopulate(
+      //const Intrinsic::ID ID, Type *RetTy, ArrayRef<Value *> Args,
+      //TPCLatencyEvaluation::InstructionForLatencyDetermination &Ild) const {
+      if (extractAndPopulate(ICA.getID(), ICA.getReturnType(), ICA.getArgs(), src)) {
+      return getLatency(src);
+    }
+    // return default cycle
+    LLVM_DEBUG(dbgs() << " Intrinsic cannot be located in the latenciesDB. "
+               "Returning default cycle 4 \n");
+    return TPCTTIImpl::DEFAULT_LATENCY;
+  }
+
+  Intrinsic::ID IID = ICA.getID();
+  switch (IID) {
+  default:
+    break;
+
+  case Intrinsic::read_register:
+  case Intrinsic::write_register:
+    // Assume that we do not need to scalarize these intrinsics
+    return TargetTransformInfo::TCC_Basic;
+    break;
+  }
+  return BaseT::getIntrinsicInstrCost(ICA, CostKind);
+}
+
 int TPCTTIImpl::getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
                                       ArrayRef<Value *> Args, FastMathFlags FMF,
                                       unsigned int VF) {
@@ -486,6 +517,21 @@ int TPCTTIImpl::getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
   LLVM_DEBUG(dbgs() << " Intrinsic cannot be located in the latenciesDB. "
                        "Returning default cycle 4 \n");
   return TPCTTIImpl::DEFAULT_LATENCY;
+}
+
+int TPCTTIImpl::getShuffleCost(TTI::ShuffleKind Kind, VectorType *Tp,
+                               int Index, VectorType *SubTp) {
+
+  switch (Kind) {
+  default:
+    return BaseT::getShuffleCost(Kind, Tp, Index, SubTp);
+  case TTI::SK_ExtractSubvector:
+    // extract subvector is basically a single COPY instruction
+    return TTI::TCC_Basic;
+  case TTI::SK_Broadcast:
+    // assuming a single load instr
+    return TTI::TCC_Basic;
+  }
 }
 
 bool TPCTTIImpl::populateDestinationSPU(
@@ -628,10 +674,15 @@ bool TPCTTIImpl::getFloatInfo(
 
 bool TPCTTIImpl::initLatenciesDB() const {
   if (TPCLatencyEvaluation::latenciesDB.empty()) {
-    if (ST->hasGaudiISA()) {
+    if (ST->hasGaudiISA() || ST->hasGaudiBISA()) {
       TPCLatencyEvaluation::gaudi_buildInstructionLatenciesDB();
-    }
-    else {
+    } else if (ST->hasGaudi2ISA()) {
+      TPCLatencyEvaluation::gaudi2_buildInstructionLatenciesDB();
+    } else if (ST->hasGrecoISA()) {
+      TPCLatencyEvaluation::goya2_buildInstructionLatenciesDB();
+    } else if (ST->hasDoron1ISA()) {
+      TPCLatencyEvaluation::doron1_buildInstructionLatenciesDB();
+    } else {
       TPCLatencyEvaluation::dali_buildInstructionLatenciesDB();
     }
   }
@@ -641,7 +692,7 @@ bool TPCTTIImpl::initLatenciesDB() const {
 bool TPCTTIImpl::getVectorScalarInfo(
     Type::TypeID Input,
     TPCLatencyEvaluation::InstructionForLatencyDetermination &target) {
-  if (Input == Type::VectorTyID) {
+  if (Input == Type::FixedVectorTyID) {
     target.the_registerFile = TPCLatencyEvaluation::e_rf_v;
     target.the_isVectorPipe = true;
     target.the_slotID = TPCLatencyEvaluation::e_issue_slot_vpu;
@@ -716,7 +767,7 @@ bool TPCTTIImpl::getOpcodeSlot(
 
   if (Map.find(Id) != Map.end()) {
     Ild.the_opCode =
-        (Ty == Type::VectorTyID) ? Map.at(Id).first : Map.at(Id).second;
+        (Ty == Type::FixedVectorTyID) ? Map.at(Id).first : Map.at(Id).second;
     LLVM_DEBUG(dbgs() << "\nOpcode found! Ild.the_opCode = " << Ild.the_opCode
                       << "\n");
     Success = true;

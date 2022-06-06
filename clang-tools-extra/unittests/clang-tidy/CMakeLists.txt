@@ -1,5 +1,6 @@
 set(LLVM_LINK_COMPONENTS
-  support
+  FrontendOpenMP
+  Support
   )
 
 get_filename_component(CLANG_LINT_SOURCE_DIR
@@ -16,6 +17,7 @@ add_extra_unittest(ClangTidyTests
   LLVMModuleTest.cpp
   NamespaceAliaserTest.cpp
   ObjCModuleTest.cpp
+  OptionsProviderTest.cpp
   OverlappingReplacementsTest.cpp
   UsingInserterTest.cpp
   ReadabilityModuleTest.cpp
@@ -43,4 +45,5 @@ target_link_libraries(ClangTidyTests
   clangTidyObjCModule
   clangTidyReadabilityModule
   clangTidyUtils
+  LLVMTestingSupport
   )

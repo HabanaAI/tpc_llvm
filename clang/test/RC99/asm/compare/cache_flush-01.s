@@ -6,7 +6,7 @@ NOP; NOP; NOP; CACHE_FLUSH SP0
 NOP; NOP; NOP; CACHE_FLUSH SP1
 NOP; NOP; NOP; CACHE_FLUSH !SP1
 
-// CHECK: nop;    nop;    nop;    cache_flush SP0
-// CHECK: nop;    nop;    nop;    cache_flush SP0
+// CHECK: nop;    nop;    nop;    cache_flush
+// CHECK: nop;    nop;    nop;    cache_flush
 // CHECK: nop;    nop;    nop;    cache_flush SP1
 // CHECK: nop;    nop;    nop;    cache_flush !SP1

@@ -4,49 +4,49 @@
 LOOKUP_C1C2 V10, V2, BV32, 1; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV32, 1, SP3; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV32, 1, !SP3; NOP; NOP; NOP
-//CHECK: lookup_c1c2 BV32 D10, V2, 0x1, SP0;  nop;    nop;    nop
+//CHECK: lookup_c1c2 BV32 D10, V2, 0x1;  nop;    nop;    nop
 //CHECK: lookup_c1c2 BV32 D10, V2, 0x1, SP3;  nop;    nop;    nop
 //CHECK: lookup_c1c2 BV32 D10, V2, 0x1, !SP3;         nop;    nop;    nop
 
 LOOKUP_C1C2 V10, V2, BV16_HIGH, 1; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV16_HIGH, 1, SP3; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV16_HIGH, 1, !SP3; NOP; NOP; NOP
-//CHECK: lookup_c1c2  BV16_HIGH D10, V2, 0x1, SP0;    nop;    nop;    nop
+//CHECK: lookup_c1c2  BV16_HIGH D10, V2, 0x1;    nop;    nop;    nop
 //CHECK: lookup_c1c2  BV16_HIGH D10, V2, 0x1, SP3;    nop;    nop;    nop
 //CHECK: lookup_c1c2  BV16_HIGH D10, V2, 0x1, !SP3;   nop;    nop;    nop
 
 LOOKUP_C1C2 V10, V2, BV16_LOW, 1; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV16_LOW, 1, SP3; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV16_LOW, 1, !SP3; NOP; NOP; NOP
-//CHECK: lookup_c1c2  BV16_LOW D10, V2, 0x1, SP0;     nop;    nop;    nop
+//CHECK: lookup_c1c2  BV16_LOW D10, V2, 0x1;     nop;    nop;    nop
 //CHECK: lookup_c1c2  BV16_LOW D10, V2, 0x1, SP3;     nop;    nop;    nop
 //CHECK: lookup_c1c2  BV16_LOW D10, V2, 0x1, !SP3;    nop;    nop;    nop
 
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_0, 1; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_0, 1, SP3; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_0, 1, !SP3; NOP; NOP; NOP
-//CHECK: lookup_c1c2  BV8_0 D10, V2, 0x1, SP0;        nop;    nop;    nop
+//CHECK: lookup_c1c2  BV8_0 D10, V2, 0x1;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_0 D10, V2, 0x1, SP3;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_0 D10, V2, 0x1, !SP3;       nop;    nop;    nop
 
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_1, 1; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_1, 1, SP3; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_1, 1, !SP3; NOP; NOP; NOP
-//CHECK: lookup_c1c2  BV8_1 D10, V2, 0x1, SP0;        nop;    nop;    nop
+//CHECK: lookup_c1c2  BV8_1 D10, V2, 0x1;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_1 D10, V2, 0x1, SP3;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_1 D10, V2, 0x1, !SP3;       nop;    nop;    nop
 
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_2, 1; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_2, 1, SP3; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_2, 1, !SP3; NOP; NOP; NOP
-//CHECK: lookup_c1c2  BV8_2 D10, V2, 0x1, SP0;        nop;    nop;    nop
+//CHECK: lookup_c1c2  BV8_2 D10, V2, 0x1;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_2 D10, V2, 0x1, SP3;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_2 D10, V2, 0x1, !SP3;       nop;    nop;    nop
 
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_3, 1; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_3, 1, SP3; NOP; NOP; NOP
 LOOKUP_C1C2 V10, V2, BV8_ELEMENT_3, 1, !SP3; NOP; NOP; NOP
-//CHECK: lookup_c1c2  BV8_3 D10, V2, 0x1, SP0;        nop;    nop;    nop
+//CHECK: lookup_c1c2  BV8_3 D10, V2, 0x1;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_3 D10, V2, 0x1, SP3;        nop;    nop;    nop
 //CHECK: lookup_c1c2  BV8_3 D10, V2, 0x1, !SP3;       nop;    nop;    nop
 

@@ -1,9 +1,5 @@
 //===- TPCMachineScheduler.cpp ---- Custom MI Scheduler for TPC -----------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 //===----------------------------------------------------------------------===//
@@ -12,6 +8,8 @@
 #include "TPCSubtarget.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "TPCMachineScheduler.h"
+#include "llvm/CodeGen/LiveInterval.h"
+#include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/RegisterPressure.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -22,9 +20,16 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "tpcsched"
+
+static cl::opt<bool> TPCUseIterativeSched("tpc-enable-iterative-scheduler",
+    cl::Hidden, cl::ZeroOrMore, cl::init(true));
+
+static cl::opt<int> VlmSpillsAllowed("tpc-vlm-spills-allowed", cl::Hidden,
+    cl::init(-1), cl::desc("How many vector registers can be spilled (default is 16Kb of VLM)."));
 
 static cl::opt<bool> TPCIgnoreBBRegPressure("tpc-ignore-bb-reg-pressure",
     cl::Hidden, cl::ZeroOrMore, cl::init(false));
@@ -37,6 +42,9 @@ static cl::opt<float> RPThreshold("tpc-reg-pressure", cl::Hidden,
 
 static cl::opt<int> RPLatencyOverlap("tpc-sched-pending", cl::Hidden,
     cl::init(0), cl::desc("Deprecated. Allow schedule pending instructions N cycles ahead."));
+
+static cl::opt<bool> TPCVectorOpsOnLd("tpc-vector-ops-on-ld",
+    cl::Hidden, cl::ZeroOrMore, cl::init(true));
 
 #ifndef NDEBUG
 static cl::opt<bool> TPCViewMISchedDAGs("tpc-view-sched-dags", cl::Hidden,
@@ -51,19 +59,46 @@ namespace {
 //
 class TPCMachineScheduler : public ScheduleDAGMILive {
 public:
+
+  enum : unsigned {
+    Collect,
+    InitialSchedule,
+    Reschedule,
+    LastStage = Reschedule
+  };
+
+  // Scheduling stage number.
+  unsigned Stage;
+  bool ScheduleForMinRegs;
+
+  // Current region index.
+  size_t RegionIdx;
+
+  // Vector of regions for later rescheduling
+  SmallVector<std::pair<MachineBasicBlock::iterator,
+                        MachineBasicBlock::iterator>, 32> Regions;
+
+  // Records if a region is not yet scheduled, or schedule has been reverted,
+  // or we generally desire to reschedule it.
+  BitVector RescheduleRegions;
+
   TPCMachineScheduler(MachineSchedContext *C,
                       std::unique_ptr<MachineSchedStrategy> S)
     : ScheduleDAGMILive(C, std::move(S)) {
     addMutation(std::make_unique<TPCSubtarget::TPCDAGMutation>());
+    Stage = Collect;
+    ScheduleForMinRegs = false;
   }
 
   void schedule() override;
+  void finalizeSchedule() override;
 
   RegisterClassInfo *getRegClassInfo() { return RegClassInfo; }
   int getBBSize() { return BB->size(); }
   MachineBasicBlock* getBB() { return BB; }
 
   void dumpDAG();
+  RegisterPressure& getCurrRegPressure();
 };
 
 
@@ -142,7 +177,6 @@ class TPCSchedStrategy : public MachineSchedStrategy {
     TPCResourceModel *ResourceModel;
 
     unsigned CurrCycle;
-    unsigned CurrCycleSlot[4];
     unsigned IssueCount;
     unsigned MinReadyCycle;
     unsigned MaxMinLatency;
@@ -153,36 +187,64 @@ class TPCSchedStrategy : public MachineSchedStrategy {
       DAG(nullptr), SchedModel(nullptr), Available(ID, Name+".A"),
       HazardRec(nullptr), ResourceModel(nullptr),
       CurrCycle(0), IssueCount(0),
-      MinReadyCycle(UINT_MAX), MaxMinLatency(0) {CurrCycleSlot[0]=0;CurrCycleSlot[1]=0;CurrCycleSlot[2]=0;CurrCycleSlot[3]=0;}
+      MinReadyCycle(UINT_MAX), MaxMinLatency(0) {}
 
     ~TPCSchedBoundary() {
       delete ResourceModel;
       delete HazardRec;
     }
 
-    void init(TPCMachineScheduler *dag, const TargetSchedModel *smodel) {
+    void init(TPCMachineScheduler *dag, const TargetSchedModel *smodel, bool postRA) {
       DAG = dag;
       SchedModel = smodel;
       IssueCount = 0;
       CurrCycle = 0;
 
       CriticalPathLength = 1;
-      int bbApproxSize = 0;
+      unsigned int bbApproxSize = 0;
       for (auto &SU : DAG->SUnits) {
         if (SU.getInstr()->isPseudo() && !SU.getInstr()->isCopy()) {
           continue;
         }
         bbApproxSize++;
       }
-      if (bbApproxSize < 100) {
-        CriticalPathLength >>= 1;
-        return;
+      bool schedForMinRegs = false;
+      if (!postRA) {
+        schedForMinRegs = dag->ScheduleForMinRegs;
       }
+      // Initialize the critical path length limit, which used by the scheduling
+      // cost model to determine the value for scheduling an instruction. We use
+      // a slightly different heuristic for small and large functions. For small
+      // functions, it's important to use the height/depth of the instruction.
+      // For large functions, prioritizing by height or depth increases spills.
+      if (!schedForMinRegs) {
+        if (bbApproxSize < 100) {
+          CriticalPathLength >>= 1;
+          return;
+        }
 
-      unsigned MaxPath = 0;
-      for (auto &SU : DAG->SUnits)
-        MaxPath = std::max(MaxPath, isTop() ? SU.getHeight() : SU.getDepth());
-      CriticalPathLength = std::max(CriticalPathLength, MaxPath) + 1;
+        // For large basic blocks, we prefer a larger critical path length to
+        // decrease the priority of using the graph height/depth.
+        unsigned MaxPath = 0;
+        for (auto &SU : DAG->SUnits)
+          MaxPath = std::max(MaxPath, isTop() ? SU.getHeight() : SU.getDepth());
+        CriticalPathLength = std::max(CriticalPathLength, MaxPath) + 1;
+      }
+      else {
+        unsigned MaxPath = 0;
+        for (auto &SU : DAG->SUnits)
+          MaxPath = std::max(MaxPath, isTop() ? SU.getHeight() : SU.getDepth());
+        if (bbApproxSize < 100) {
+          CriticalPathLength = bbApproxSize >> 1;
+          return;
+        }
+        if (bbApproxSize > MaxPath) {
+          CriticalPathLength = bbApproxSize - MaxPath - 1;
+        }
+        else {
+          CriticalPathLength = MaxPath - 1;
+        }
+      }
     }
 
 
@@ -259,7 +321,8 @@ public:
 
 static inline bool isDefADRF(SUnit *SU) {
   unsigned Opcode = SU->getInstr()->getOpcode();
-  if (Opcode == TPC::GEN_ADDR_ld || Opcode == TPC::GEN_ADDR_st) {
+  if (Opcode == TPC::GEN_ADDR_ld || Opcode == TPC::GEN_ADDR_ldT ||
+      Opcode == TPC::GEN_ADDR_st || Opcode == TPC::GEN_ADDR_stT) {
     return true;
   }
   return false;
@@ -404,8 +467,42 @@ bool TPCResourceModel::isResourceAvailable(SUnit *SU) {
 //------------------------------------------------------------------------------
 // Implementation of TPCMachineScheduler
 //------------------------------------------------------------------------------
+RegisterPressure& TPCMachineScheduler::getCurrRegPressure() {
+  const RegPressureTracker &TopRPTracker = getTopRPTracker();
+  RegPressureTracker &RPTracker = const_cast<RegPressureTracker&>(TopRPTracker);
+  return RPTracker.getPressure();
+}
 
 void TPCMachineScheduler::schedule() {
+  //
+  // At the first pass we only record regions and do not perform actual scheduling.
+  // Actual scheduling will start when finalizeSchedule() is called - it will
+  // call this function several times, with 'Stage' other than 'Collect'.
+  //
+  if (TPCUseIterativeSched) {
+    if (Stage == Collect) {
+      LLVM_DEBUG(dbgs() << "Collecting regions for scheduling BB#"
+                        << BB->getNumber() << "\n");
+      Regions.push_back(std::make_pair(RegionBegin, RegionEnd));
+      return;
+    }
+  }
+
+  //
+  // Record all instructions in their original order so that
+  // the order can be restored later for rescheduling.
+  //
+  std::vector<MachineInstr*> Unsched;
+  Unsched.reserve(NumRegionInstrs);
+  for (auto &I : *this) {
+    Unsched.push_back(&I);
+  }
+
+  //
+  // Do actual scheduling
+  //
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+
   LLVM_DEBUG(dbgs()
         << "********** TPC MI Scheduling BB#" << BB->getNumber()
         << " " << BB->getName()
@@ -453,7 +550,13 @@ void TPCMachineScheduler::schedule() {
 
   initQueues(TopRoots, BotRoots);
 
-  //LLVM_DEBUG(dumpDAG());
+  LLVM_DEBUG({
+    auto pressureBeforeSched = getCurrRegPressure();
+    dbgs() << "=== Register Pressure before scheduling BB#"
+           << BB->getNumber() << " " << BB->getName()
+           << " =====\n";
+    pressureBeforeSched.dump(TRI);
+  });
 
   bool IsTopNode = false;
   while (true) {
@@ -471,8 +574,6 @@ void TPCMachineScheduler::schedule() {
     updateQueues(SU, IsTopNode);
   }
 
-  placeDebugValues();
-
   LLVM_DEBUG({
     unsigned BBNum = begin()->getParent()->getNumber();
     dbgs() << "*** Final schedule for BB#" << BBNum << " ***\n";
@@ -480,6 +581,213 @@ void TPCMachineScheduler::schedule() {
     dbgs() << '\n'
            << "**********\n";
   });
+
+  if (!TPCUseIterativeSched) {
+    placeDebugValues();
+    return;
+  }
+
+  //
+  // --- Initial scheduling done --- //
+  //
+
+  Regions[RegionIdx] = std::make_pair(RegionBegin, RegionEnd);
+  RescheduleRegions[RegionIdx] = false;
+
+  if (!LIS)
+    return;
+
+  auto pressureAfterSched = getCurrRegPressure();
+  LLVM_DEBUG({
+    dbgs() << "=== Register Pressure after scheduling BB#"
+           << BB->getNumber() << " " << BB->getName()
+           << " =====\n";
+    pressureAfterSched.dump(TRI);
+  });
+
+  //
+  // Check whether the scheduling done meets regpressure criteria.
+  //
+  bool tooManyRegs = false;
+  RegisterClassInfo * RCI = getRegClassInfo();
+  int liveInVRF = 0;
+  for (const auto &RegMaskPair : pressureAfterSched.LiveInRegs) {
+    Register Reg = RegMaskPair.RegUnit;
+    if (Reg.isPhysical())
+      continue;
+    const TargetRegisterClass* rClass = MF.getRegInfo().getRegClass(Reg);
+    if (rClass == &TPC::VRFRegClass) {
+      liveInVRF++;
+    }
+    /*
+    else if (rClass == &TPC::DRFRegClass) {
+      liveInVRF+=2;
+    }
+    else if (rClass == &TPC::ARFRegClass) {
+      liveInVRF+=4;
+    }
+    */
+  }
+  unsigned VlmLimit  = RCI->getRegPressureSetLimit(TPC::RegisterPressureSets::VRF);
+  unsigned VlmSpills = VlmSpillsAllowed;
+  if (VlmSpillsAllowed < 0) {
+    TPCFrameLowering &FL = *const_cast<TPCFrameLowering *>(
+      MF.getSubtarget<TPCSubtarget>().getFrameLowering());
+    unsigned MaxVlm = FL.getMaxVectorMemory();
+    unsigned VlmUsed = FL.getVectorDataSize();
+    LLVM_DEBUG(dbgs() << " MaxVlm   =" << MaxVlm << " (" << (MaxVlm / 256) << " VRF)\n");
+    LLVM_DEBUG(dbgs() << "VlmUsed   =" << VlmUsed << " (" << (VlmUsed / 256) << " VRF)\n");
+    VlmSpills = ((MaxVlm - VlmUsed) / 256) - 1;
+  }
+  unsigned curVrfPressure = pressureAfterSched.MaxSetPressure[TPC::RegisterPressureSets::VRF];
+  unsigned curDrfPressure = pressureAfterSched.MaxSetPressure[TPC::RegisterPressureSets::DRF];
+  unsigned VectorPressure = std::max(curVrfPressure, curDrfPressure);
+  int VlmOccupancy = liveInVRF + (int)VectorPressure - (int)VlmLimit;
+  //int VlmOccupancy = (int)VectorPressure - (int)VlmLimit;
+  LLVM_DEBUG(dbgs() << "   Limit       =" << VlmLimit << "\n");
+  LLVM_DEBUG(dbgs() << "   Pressure    =" << VectorPressure << "\n");
+  LLVM_DEBUG(dbgs() << "   Occupancy   =" << VlmOccupancy << "\n");
+  LLVM_DEBUG(dbgs() << "   SpillsAvail =" << VlmSpills << "\n");
+  LLVM_DEBUG(dbgs() << "   liveIn      =" << liveInVRF << "\n");
+  if (VlmOccupancy > (int)VlmSpills) {
+    LLVM_DEBUG(dbgs() << "Pressure exceed limit:\n");
+    LLVM_DEBUG(dbgs() << "    " << "VRF"
+           << "=" << pressureAfterSched.MaxSetPressure[TPC::RegisterPressureSets::VRF]
+           << " (limit=" << VlmLimit << ")\n");
+    tooManyRegs = true;
+  }
+
+  if (!tooManyRegs) {
+    LLVM_DEBUG(dbgs() << "Pressure in desired limits, done BB#" << BB->getNumber() << "\n");
+    LLVM_DEBUG(dbgs() << "    ... at stage " << Stage << "\n");
+    placeDebugValues();
+    return;
+  }
+
+  if (Stage == LastStage) {
+    // This is the last stage - we will not restore the original order
+    // even if the scheduling done does not meet regpressure criteria.
+    // If we do not stop here and restore the original order as final order
+    // the code can be so bad that the number of VLIW instructions in a loop block
+    // will be more than allowed (the number must fit in 16-bit field)
+    placeDebugValues();
+    return;
+  } 
+
+  //
+  // The scheduling done does not meet regpressure criteria.
+  // Restore the original order and flags.
+  //
+  LLVM_DEBUG(dbgs() << "Attempting to revert scheduling BB#" << BB->getNumber() << "\n");
+  initRegPressure();
+  RescheduleRegions[RegionIdx] = true;
+  RegionEnd = RegionBegin;
+  for (MachineInstr *MI : Unsched) {
+
+    if (MI->getIterator() != RegionEnd) {
+      BB->remove(MI);
+      BB->insert(RegionEnd, MI);
+      if (!MI->isDebugInstr())
+        LIS->handleMove(*MI, true);
+    }
+
+    // Reset read-undef flags and update them later.
+    for (auto &Op : MI->operands()) {
+      if (Op.isReg() && Op.isDef()) {
+        Op.setIsUndef(false);
+      }
+    }
+
+    RegisterOperands RegOpers;
+    RegOpers.collect(*MI, *TRI, MRI, ShouldTrackLaneMasks, false);
+    if (!MI->isDebugInstr()) {
+      if (ShouldTrackLaneMasks) {
+        // Adjust liveness and add missing dead+read-undef flags.
+        SlotIndex SlotIdx = LIS->getInstructionIndex(*MI).getRegSlot();
+        RegOpers.adjustLaneLiveness(*LIS, MRI, SlotIdx, MI);
+      } else {
+        // Adjust for missing dead-def flags.
+        RegOpers.detectDeadDefs(*MI, *LIS);
+      }
+    }
+    RegionEnd = MI->getIterator();
+    ++RegionEnd;
+    LLVM_DEBUG(dbgs() << "Scheduling " << *MI);
+  }
+  RegionBegin = Unsched.front()->getIterator();
+  Regions[RegionIdx] = std::make_pair(RegionBegin, RegionEnd);
+
+  placeDebugValues();
+}
+
+void TPCMachineScheduler::finalizeSchedule() {
+  if (!TPCUseIterativeSched) {
+    return;
+  }
+  LLVM_DEBUG(dbgs() << "Starting actual scheduling.\n");
+
+  RescheduleRegions.resize(Regions.size());
+  RescheduleRegions.set();
+
+  do {
+    Stage++;
+    RegionIdx = 0;
+    MachineBasicBlock *MBB = nullptr;
+
+    if (Stage > InitialSchedule) {
+      if (!LIS)
+        break;
+
+      // Retry the scheduling.
+      if (Stage == Reschedule) {
+        ScheduleForMinRegs = true;
+        if (RescheduleRegions.none())
+          continue;
+        LLVM_DEBUG(dbgs() << "Retrying function scheduling.\n");
+      }
+    }
+
+    // Code below is partially copied from MachineSchedulerBase::scheduleRegions().
+    for (auto Region : Regions) {
+      if (Stage == Reschedule && !RescheduleRegions[RegionIdx]) {
+        ++RegionIdx;
+        continue;
+      }
+
+      RegionBegin = Region.first;
+      RegionEnd = Region.second;
+
+      if (RegionBegin->getParent() != MBB) {
+        if (MBB) finishBlock();
+        MBB = RegionBegin->getParent();
+        startBlock(MBB);
+      }
+
+      unsigned NumRegionInstrs = std::distance(begin(), end());
+      enterRegion(MBB, begin(), end(), NumRegionInstrs);
+
+      // Skip empty scheduling regions (0 or 1 schedulable instructions).
+      if (begin() == end() || begin() == std::prev(end())) {
+        exitRegion();
+        continue;
+      }
+
+      LLVM_DEBUG(dbgs() << "********** TPC MI Scheduling **********\n");
+      LLVM_DEBUG(dbgs() << MF.getName() << ":" << printMBBReference(*MBB) << " "
+                        << MBB->getName() << "\n  From: " << *begin()
+                        << "    To: ";
+                 if (RegionEnd != MBB->end()) dbgs() << *RegionEnd;
+                 else dbgs() << "End";
+                 dbgs() << " RegionInstrs: " << NumRegionInstrs << '\n');
+
+      schedule();
+
+      exitRegion();
+      ++RegionIdx;
+    }
+    finishBlock();
+    ScheduleForMinRegs = false;
+  } while (Stage != LastStage);
 }
 
 
@@ -526,8 +834,8 @@ void TPCSchedStrategy::initialize(ScheduleDAGMI *dag) {
   DAG = static_cast<TPCMachineScheduler*>(dag);
   SchedModel = DAG->getSchedModel();
 
-  Top.init(DAG, SchedModel);
-  Bot.init(DAG, SchedModel);
+  Top.init(DAG, SchedModel, isPostRA);
+  Bot.init(DAG, SchedModel, isPostRA);
 
   // Initialize the HazardRecognizers. If itineraries don't exist, are empty, or
   // are disabled, then these HazardRecs will be disabled.
@@ -562,7 +870,7 @@ void TPCSchedStrategy::initialize(ScheduleDAGMI *dag) {
 
     liveInsADRF = 0;
     const llvm::MachineFunction &MF = DAG->MF;
-    const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+    // const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
     for (const auto &RegMaskPair : DAG->getTopRPTracker().getPressure().LiveInRegs) {
       Register Reg = RegMaskPair.RegUnit;
       if (Reg.isPhysical())
@@ -795,6 +1103,18 @@ bool TPCSchedStrategy::tryChangeSlot(SUnit *SU, bool do_change) {
   unsigned opc_orig = MI->getOpcode();
   if (TII->getOtherSlotOpcodes(MI, alt_opcodes)) {
     for (auto opc : alt_opcodes) {
+      // SW-63283 (FCLASS without LIMIT and CALC_FP_SPECIAL with a single source
+      // break simulator when scheduled on LOAD slot)
+      if (DAG->MF.getSubtarget<TPCSubtarget>().hasDoron1ISA() &&
+          TPCVectorOpsOnLd == false &&
+          (opc == TPC::LD_CALC_FP_SPECIALOneArgvvp ||
+           opc == TPC::LD_CALC_FP_SPECIALOneArgvvm ||
+           opc == TPC::LD_FCLASSvvp ||
+           opc == TPC::LD_FCLASSvvm ||
+           opc == TPC::LD_FCLASSvsp ||
+           opc == TPC::LD_FCLASSvsm)) {
+        continue;
+      }
       MI->setDesc(TII->get(opc));
       if (Top.HazardRec->getHazardType(SU) == ScheduleHazardRecognizer::NoHazard) {
         changed = true;
@@ -834,7 +1154,6 @@ pickNodeFromQueue(ReadyQueue &Q, const RegPressureTracker &RPTracker,
       TempTracker.getMaxPressureDelta((*I)->getInstr(), RPDelta,
                                       DAG->getRegionCriticalPSets(),
                                       DAG->getRegPressure().MaxSetPressure);
-      //LLVM_DEBUG(TempTracker.dump());
     }
 
     int CurrentCost = SchedulingCost(Q, *I, Candidate, RPDelta, false);
@@ -1076,7 +1395,11 @@ int TPCSchedStrategy::SchedulingCost(ReadyQueue &Q, SUnit *SU,
       }
     }
   }
-  if (latencyHazard > 0) {
+  bool schedForMinRegs = false;
+  if (!isPostRA) {
+    schedForMinRegs = DAG->ScheduleForMinRegs;
+  }
+  if (latencyHazard > 0 && !schedForMinRegs) {
     LLVM_DEBUG(dbgs() << "Lat(" << latencyHazard << ") | ");
     Penalty += latencyHazard * PenaltyForLatencyCycle;
   }
@@ -1176,14 +1499,14 @@ int TPCSchedStrategy::SchedulingCost(ReadyQueue &Q, SUnit *SU,
   LLVM_DEBUG(dbgs() << "NB(" << NumNodesBlocking << ") | ");
   Bonus += (NumNodesBlocking * BonusForBlockedUnit);
 
-  if (!isPostRA) {
+  if (!isPostRA && !schedForMinRegs) {
     // Less preference to SET_INDX to be able to try another slot for it
     if (Instr.getOpcode() == TPC::SET_INDX_ld_rp || Instr.getOpcode() == TPC::SET_INDX_ld_ip) {
       Penalty += PenaltyForSetIndex;
     }
   }
     // Less preference to LOOKUP to be able to try another slot for it
-    if (TPCII::isLookupC(Instr.getDesc())) {
+    if (TPCII::isLookupC(Instr.getDesc()) && !schedForMinRegs) {
       Penalty += PenaltyForLookup;
     }
 
@@ -1278,6 +1601,18 @@ void TPCSchedStrategy::TPCSchedBoundary::bumpNode(SUnit *SU, bool isPostRA) {
 	   unsigned opc_orig = SU->getInstr()->getOpcode();
            bool changed = false;
 	   for (auto opc : alt_opcodes) {
+             // SW-63283 (FCLASS without LIMIT and CALC_FP_SPECIAL with a single source
+             // break simulator when scheduled on LOAD slot)
+             if (DAG->MF.getSubtarget<TPCSubtarget>().hasDoron1ISA() &&
+                 TPCVectorOpsOnLd == false &&
+                 (opc == TPC::LD_CALC_FP_SPECIALOneArgvvp ||
+                  opc == TPC::LD_CALC_FP_SPECIALOneArgvvm ||
+                  opc == TPC::LD_FCLASSvvp ||
+                  opc == TPC::LD_FCLASSvvm ||
+                  opc == TPC::LD_FCLASSvsp ||
+                  opc == TPC::LD_FCLASSvsm)) {
+               continue;
+             }
              SU->getInstr()->setDesc(TII->get(opc));
              if (HazardRec->getHazardType(SU) == ScheduleHazardRecognizer::NoHazard) {
 	       changed = true;

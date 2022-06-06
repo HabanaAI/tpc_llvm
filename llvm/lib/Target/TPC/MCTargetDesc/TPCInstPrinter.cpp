@@ -1,9 +1,5 @@
 //===---- TPCInstPrinter.cpp - Convert TPC MCInst to asm syntax -----------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // This class prints an TPC MCInst to a .s file.
@@ -38,8 +34,20 @@ const int TPCInstPrinter::TpcAsmParseCompatible = 3;
 #define PRINT_ALIAS_INSTR
 #include "TPCGenAsmWriter.inc"
 
+// TPC assember look like this:
+// <instruction> <switch> <first_operand>, <other>
+// Sometime switch could be in the middle of operands
+// UDIV.DT Dest, Src1, Src2, {DIV, MOD, BOTH_DIV_MOD} [, PRED]
+// So check and memorize that first operand occured.
+
+// Except switches, dimmask, datatype operand
+static bool FirstOperandPrinded = false;
+
+
 void TPCInstPrinter::printRegName(raw_ostream &OS, unsigned RegNo) const {
   OS << StringRef(getRegisterName(RegNo)).lower();
+
+  FirstOperandPrinded = true;
 }
 
 void TPCInstPrinter::printAddrOperand(const MCInst* MI, unsigned OpNum, raw_ostream& O) {
@@ -66,36 +74,81 @@ void TPCInstPrinter::printAddrOperand(const MCInst* MI, unsigned OpNum, raw_ostr
       O << getRegisterName(MO2.getReg());
     }
   }
+
+  FirstOperandPrinded = true;
 }
 
 void TPCInstPrinter::printSPredicate(const MCInst *MI, unsigned OpNum, raw_ostream &O) {
-  const MCOperand &PredReg = MI->getOperand(OpNum);
-  const MCOperand &Polarity = MI->getOperand(OpNum + 1);
-
-  assert(PredReg.isReg() && "Predicate must be a register");
-  assert(Polarity.isImm() && "Polarity must be an immediate");
-  assert(MRI.getRegClass(TPC::SPRFRegClassID).contains(PredReg.getReg()) &&
+  const MCOperand &PredMO = MI->getOperand(OpNum);
+  const MCOperand &PolarityMO = MI->getOperand(OpNum + 1);
+  MI->getOperand(0);
+  
+  assert(PredMO.isReg() && "Predicate must be a register");
+  assert(PolarityMO.isImm() && "Polarity must be an immediate");
+  
+  unsigned Pred = PredMO.getReg();
+  int Polarity = PolarityMO.getImm();
+  assert(MRI.getRegClass(TPC::SPRFRegClassID).contains(Pred) &&
          "Predicate register must be from SPRF");
-  if (Polarity.getImm())
-    O << "!";
-  if (HasPercentPrefix)
-    O << "%";
-  O << getRegisterName(PredReg.getReg());
+
+  bool IsDoron1 = TPCII::getSubtargetInfo()->hasFeature(TPC::FeatureDoron1);
+
+  bool IsPrinted = true;
+  if (Pred == TPC::SPRF_TRUE)
+    IsPrinted = false;
+  if (!IsDoron1 && Pred == TPC::SP0 && Polarity == 0)
+    IsPrinted = false;
+  if (IsDoron1 && (MI->getFlags() & TPCII::MCFlagIsUnpredDoron1))
+    IsPrinted = false;
+
+  if (IsPrinted) {
+    if (FirstOperandPrinded)
+      O << ',';
+    O << ' ';
+    if (Polarity)
+      O << "!";
+    if (HasPercentPrefix)
+      O << "%";
+    O << getRegisterName(Pred);
+  }
+
+  FirstOperandPrinded = true;
 }
 
 void TPCInstPrinter::printVPredicate(const MCInst *MI, unsigned OpNum, raw_ostream &O) {
-  const MCOperand &PredReg = MI->getOperand(OpNum);
-  const MCOperand &Polarity = MI->getOperand(OpNum + 1);
+  const MCOperand &PredMO = MI->getOperand(OpNum);
+  const MCOperand &PolarityMO = MI->getOperand(OpNum + 1);
 
-  assert(PredReg.isReg() && "Predicate must be a register");
-  assert(Polarity.isImm() && "Polarity must be an immediate");
-  assert(MRI.getRegClass(TPC::VPRFRegClassID).contains(PredReg.getReg()) &&
+  assert(PredMO.isReg() && "Predicate must be a register");
+  assert(PolarityMO.isImm() && "Polarity must be an immediate");
+
+  unsigned Pred = PredMO.getReg();
+  int Polarity = PolarityMO.getImm();
+  assert(MRI.getRegClass(TPC::VPRFRegClassID).contains(Pred) &&
          "Predicate register must be from VPRF");
-  if (Polarity.getImm())
-    O << "!";
-  if (HasPercentPrefix)
-    O << "%";
-  O << getRegisterName(PredReg.getReg());
+
+  bool IsDoron1 = TPCII::getSubtargetInfo()->hasFeature(TPC::FeatureDoron1);
+
+  bool IsPrinted = true;
+  if (Pred == TPC::VPRF_TRUE)
+    IsPrinted = false;
+  if (!IsDoron1 && Pred == TPC::VP0 && Polarity == 0)
+    IsPrinted = false;
+  if (IsDoron1 && (MI->getFlags() & TPCII::MCFlagIsUnpredDoron1))
+    IsPrinted = false;
+
+  if (IsPrinted) {
+    if (FirstOperandPrinded)
+      O << ',';
+    O << ' ';
+    if (Polarity)
+      O << "!";
+    if (HasPercentPrefix)
+      O << "%";
+    O << getRegisterName(Pred);
+  }
+  
+  FirstOperandPrinded = true;
 }
 
 void TPCInstPrinter::printDataType(const MCInst *MI, unsigned OpNum, raw_ostream &O) {
@@ -147,7 +200,8 @@ void TPCInstPrinter::printSwitchSet(const MCInst *MI, unsigned OpNum, raw_ostrea
   const MCOperand &Op = MI->getOperand(OpNum);
 
   assert(Op.isImm() && "Switches must be an immediate");
-  O << TPCII::spellSwitchSet(Op.getImm(), MI, OpNum, MII.get(MI->getOpcode()), MRI);
+  O << TPCII::spellSwitchSet(Op.getImm(), MI, OpNum, MII.get(MI->getOpcode()),
+                             MRI);
 }
 
 void TPCInstPrinter::printJmpLoopTarget(const MCInst *MI, unsigned OpNum, raw_ostream &O) {
@@ -158,6 +212,8 @@ void TPCInstPrinter::printJmpLoopTarget(const MCInst *MI, unsigned OpNum, raw_os
     const MCExpr *Exp = Op.getExpr();
     Exp->print(O, &MAI);
   }
+
+  FirstOperandPrinded = true;
 }
 
 void TPCInstPrinter::printComparison(const MCInst *MI, unsigned OpNum, raw_ostream &O) {
@@ -171,6 +227,7 @@ void TPCInstPrinter::printComparison(const MCInst *MI, unsigned OpNum, raw_ostre
   assert(Cmp < array_lengthof(LoopCompareText));
   O << LoopCompareText[Cmp];
 
+  FirstOperandPrinded = true;
 }
 
 void TPCInstPrinter::printLoopImm(const MCInst *MI, unsigned OpNum, raw_ostream &O) {
@@ -180,6 +237,8 @@ void TPCInstPrinter::printLoopImm(const MCInst *MI, unsigned OpNum, raw_ostream 
   }
   assert(Op.isImm() && "LoopImm must be an immediate");
   O << Op.getImm();
+
+  FirstOperandPrinded = true;
 }
 
 void TPCInstPrinter::printAccumulator(const MCInst *, unsigned, raw_ostream &) {
@@ -203,6 +262,7 @@ void TPCInstPrinter::printRhu(const MCInst *MI, unsigned OpNum, raw_ostream &O) 
 
 void TPCInstPrinter::printBothDivMod(const MCInst *, unsigned, raw_ostream &) {
 }
+
 void TPCInstPrinter::printX2(const MCInst *, unsigned, raw_ostream &) {
 }
 
@@ -261,7 +321,8 @@ void TPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                StringRef Annotation, const MCSubtargetInfo &STI,
                                raw_ostream &OS) {
   TPCII::setSubTargetInfo(&STI);
-
+  TPCII::setInstrInfo(&MII);
+  
   if (MI->getOpcode() == TPC::BUNDLE) {
     if (getFormat() == InstructionPerLine ||
         getFormat() == InstructionPerLineNoNops) {
@@ -284,6 +345,8 @@ void TPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         // Do not print NOP instructions inside bundle.
         if (getFormat() == InstructionPerLineNoNops && isNOP(Bundle_MI))
           continue;
+        
+        FirstOperandPrinded = false;
         printInstruction(&Bundle_MI, Address, OS);
         if (icount > 1) {
           OS << "\n";
@@ -297,6 +360,7 @@ void TPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       getSortedInstrsFromBundle(MI, (MCInst**)(&array[0]), MII);
       for (int i=0; i<4; i++) {
         if (array[i]) {
+          FirstOperandPrinded = false;
           printInstruction(array[i], Address, OS);
         } else {
           OS << "\t";
@@ -307,6 +371,7 @@ void TPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       }
     }
   } else {
+    FirstOperandPrinded = false;
     printInstruction(MI, Address, OS);
   }
   printAnnotation(OS, Annotation);
@@ -325,6 +390,8 @@ bool TPCInstPrinter::printInst(const MCInst *MI, raw_ostream &OS,
 void TPCInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
                                   raw_ostream &OS) {
   const MCOperand &Op = MI->getOperand(OpNo);
+  //print without space and comma
+  
   if (Op.isReg()) {
     if (HasPercentPrefix)
       OS << "%";
@@ -345,4 +412,6 @@ void TPCInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
     assert(Op.isExpr() && "Expected an expression");
     Op.getExpr()->print(OS, &MAI);
   }
+
+  FirstOperandPrinded = true;
 }

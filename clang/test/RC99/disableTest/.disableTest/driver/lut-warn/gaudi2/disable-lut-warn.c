@@ -1,4 +1,4 @@
-
+// RUN: %tpc_clang %s -march=gaudi2 -disable-lut-warn -S 2>&1 | FileCheck %s -allow-empty
 
 void main(int x0, int x3, int dest0)
 {
@@ -7,8 +7,8 @@ void main(int x0, int x3, int dest0)
 
    float64 __local *res0 = (float64  __local *)dest0;
     float64 temp_res0 = 0;
-    temp_res0 = v_f32_lookup_v_b(*ptr_x0, temp_res0, 1, e_fp32_tanh, x3, 0);
-    temp_res0 = v_f32_lookup_v_b(*ptr_x0, temp_res0, 1, e_fp32_rsqrt, x3, 0);
+    temp_res0 = v_f32_lookup(*ptr_x0, e_fp32_tanh, 1, temp_res0, x3, 0);
+    temp_res0 = v_f32_lookup(*ptr_x0, e_fp32_rsqrt, 1, temp_res0, x3, 0);
     *res0 = temp_res0;
 }
 

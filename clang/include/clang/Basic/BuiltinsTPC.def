@@ -89,14 +89,19 @@ BUILTIN(from_bool64,  "V32UcV8Uc", "nc")
 
 TARGET_BUILTIN(require_cpu_goya, "v", "", "goya")
 TARGET_BUILTIN(require_cpu_gaudi, "v", "", "gaudi")
+TARGET_BUILTIN(require_cpu_gaudib, "v", "", "gaudib")
+TARGET_BUILTIN(require_cpu_greco, "v", "", "greco")
+TARGET_BUILTIN(require_cpu_gaudi2, "v", "", "gaudi2")
+TARGET_BUILTIN(require_cpu_doron1, "v", "", "doron1")
+
 BUILTIN(get_index_space_offset, "V5i", "")
 BUILTIN(get_index_space_size, "V5i", "")
 
 BUILTIN(printf_i, "vcC*i", "")
 BUILTIN(printf_ui, "vcC*Ui", "")
-BUILTIN(printf_f8, "vcC*q", "")
+BUILTIN(printf_f8, "vcC*g", "")
 BUILTIN(printf_h8, "vcC*Q", "")
-BUILTIN(printf_bf, "vcC*B", "")
+BUILTIN(printf_bf, "vcC*y", "")
 BUILTIN(printf_h, "vcC*h", "")
 BUILTIN(printf_f, "vcC*f", "")
 BUILTIN(printf_s, "vcC*s", "")
@@ -104,10 +109,6 @@ BUILTIN(printf_us, "vcC*Us", "")
 BUILTIN(printf_c, "vcC*c", "")
 BUILTIN(printf_uc, "vcC*Uc", "")
 BUILTIN(printf_st, "vcC*", "")
-
-BUILTIN(read_lfsr, "E256c", "")
-BUILTIN(write_lfsr, "vE256c", "")
-BUILTIN(read_lfsrnc, "E256c", "nc")
 
 
 // Include definitions obtained by intrinsic generator from the file 'tpc-intrinsics.h'.

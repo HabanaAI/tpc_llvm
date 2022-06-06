@@ -1,15 +1,25 @@
 // RUN: %clang -cc1as -triple tpc-none-none -filetype obj %s -o %t.o
 // RUN: %disasm %t.o | FileCheck %s
 // RUN: %clang -cc1as -triple tpc-none-none -target-cpu gaudi -filetype obj %s -o %t.o
-// RUN: %disasm -mcpu=gaudi %t.o | FileCheck %s
+// RUN: %disasm --mcpu=gaudi %t.o | FileCheck %s
+// RUN: %clang -cc1as -triple tpc-none-none -target-cpu goya2 -filetype obj %s -o %t.o
+// RUN: %disasm --mcpu=goya2 %t.o | FileCheck %s
+// RUN: %clang -cc1as -triple tpc-none-none -target-cpu doron1 -filetype obj %s -o %t.o
+// RUN: %disasm --mcpu=doron1 %t.o | FileCheck %s
 
-
+loop S32, S33, S0, <, End0
+NOP
+End0:
+NOP
+// CHECK: loop S32, S33, S0, <, End0
+// CHECK-NEXT: nop; nop; nop; nop
+// CHECK: End0:
+// CHECK-NEXT: nop; nop; nop; nop
 
 loop S1, S2, S3, <, End1
 NOP
 End1:
 NOP
-
 // CHECK: loop S1, S2, S3, <, End1
 // CHECK-NEXT: nop; nop; nop; nop
 // CHECK: End1:

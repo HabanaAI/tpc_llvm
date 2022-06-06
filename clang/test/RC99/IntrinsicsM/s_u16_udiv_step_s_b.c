@@ -3,7 +3,7 @@
 void main(int dest, unsigned short dividend, unsigned short divisor, _Bool pred) {
   uint16_t_pair_t __local *dptr = (uint16_t_pair_t __local *) dest;
   uint16_t_pair_t quot_rem = { dividend, 0 };
-  quot_rem = s_u16_udiv_step_s_b(quot_rem, divisor, 1, pred, 0);
+  quot_rem = u16_udiv_step(divisor, 1, 0, quot_rem, pred, 0);
   *dptr = quot_rem;
 }
 

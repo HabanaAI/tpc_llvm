@@ -2,5 +2,5 @@
 
 void qqq(int I){
 }
-// CHECK: define void @qqq(i32 %I) {{.*}} {
+// CHECK: define dso_local void @qqq(i32 %I) {{.*}} {
 // CHECK: ret void

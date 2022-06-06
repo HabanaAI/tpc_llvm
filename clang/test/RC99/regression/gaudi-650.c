@@ -10,18 +10,19 @@ void main(float src_v1, float src_v2,
     float64_float64_pair_t f64_pair_src = { src_v1, src_v2 };
     //float64_float64_pair_t f64_pair_src = { 1.0, 2.0 }; // no carsh
 
-    result_float64_pair = v_f32_f32_sel2_grt_v_v_v_v_b  // comment out - no crash
+    result_float64_pair = v_f32_sel2_grt_f32_b  // comment out - no crash
     (
         (float64)1.0,
         (float64)1.0,
         (float64)1.0,
         (float64)1.0,
+        0,
         f64_pair_src,
         1,
         0
     );
 
     out_index[0] += 1;
-    f32_st_tnsr_i_v(out_index, out_tnsr, result_float64_pair.v1); // comment out - no crash
+    v_f32_st_tnsr(out_index, out_tnsr, result_float64_pair.v1, 0, 1, 0); // comment out - no crash
 }
 

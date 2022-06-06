@@ -1,5 +1,3 @@
-#!/usr/bin/python
-
 ##
 # Usage:
 # python tpc_builtins_gen.py <path_to_intr_header> <path_to_buitins_def>
@@ -8,7 +6,7 @@
 # - polarity argument must be named as polarity or Polarity
 # - constant argument must be named with "I_" prefix
 # - target-dependent intrinsics must be defined inside #if - #endif directives:
-#   #if defined(__goya__) || ....
+#   #if defined(__greco__) || defined(__goya__) || ....
 #    ...
 #   #endif
 #   Nested directives are not supported
@@ -26,9 +24,9 @@ def eprint(*args, **kwargs):
 
 # TODO Turn into enum
 class Architecture:
-    STRING_VALUES = ["goya", "gaudi"]
+    STRING_VALUES = ["goya", "gaudi", "gaudib", "greco", "gaudi2", "doron1"]
 
-    ALTERNATIVE_NAMES = {"dali": "goya"}
+    ALTERNATIVE_NAMES = {"dali": "goya", "goya2": "greco"}
 
     def __init__(self, value):
         if value >= len(Architecture.STRING_VALUES):
@@ -93,9 +91,9 @@ clang_type_codes = {
     "short": "s",
     "int": "i",
     "float": "f",
-    "bf16": "B",
+    "bf16": "y",
     "half": "h",
-    "minifloat": "q",
+    "minifloat": "g",
     "minihalf": "Q",
 
     "int8_t": "c",
@@ -113,7 +111,7 @@ clang_type_codes = {
     "__global void **": "v*3*",
 
     "__global float **": "f*3*",
-    "__global bf16 **": "B*3*",
+    "__global bf16 **": "y*3*",
     "__global half **": "h*3*",
     "__global minifloat **": "q*3*",
     "__global minihalf **": "Q*3*",
@@ -138,11 +136,11 @@ clang_type_codes = {
     "int64": "E64i",
     "uint64": "E64Ui",
     "float64": "E64f",
-    "bfloat128": "E128B",
+    "bfloat128": "E128y",
     "half128": "E128h",
     "nibble512": "E256c",
     "unibble512": "E256Uc",
-    "minifloat256": "E256q",
+    "minifloat256": "E256g",
     "minihalf256": "E256Q",
 
     "float128": 'r0',
@@ -229,14 +227,16 @@ class Intrinsic:
         self.return_type = return_type
         self.operands = operands
         self.targets = [elem for elem in targets]
-        self.targets.sort(key=lambda x: {"goya": 0, "gaudi": 1}[x])
+        self.targets.sort(key=lambda x: {"goya": 0, "gaudi": 1, "gaudib": 2, "greco": 3, "gaudi2": 4, "doron1": 5}[x])
 
     def create_clang_definition(self):
         intr_types_string = clang_type_codes[self.return_type]
         first_with_default = None
 
         for i, op in enumerate(self.operands):
-            #            if op.is_constant:
+            if op.name == "polarity":
+                intr_types_string += 'I'
+            #            elif op.is_constant:
             #                intr_types_string += 'I'
             if op.is_unsigned:
                 intr_types_string += 'U'
@@ -356,7 +356,7 @@ class DoxygenValidator:
 
         match_result = re.match(r"///\s*@return\s+(.+)$", line)
         if match_result:
-            if self.state == DoxygenValidator.STATE_PARAMS:
+            if self.state in [DoxygenValidator.STATE_BRIEF, DoxygenValidator.STATE_PARAMS]:
                 self.state = DoxygenValidator.STATE_RETURNS
 
                 self.next_line_as_appendix = has_end_of_line
@@ -456,7 +456,7 @@ def parse_intrinsic_declaration(line, targets):
     param_str = re.sub(r'[\s]+', ' ', param_str)
     param_str = re.sub(', ', ',', param_str)
     param_str = param_str.lstrip(");\n")
-    params = param_str.split(',')
+    params = param_str.split(',') if param_str else ''
     ops = []
     first_param_with_default = None
 
@@ -535,12 +535,20 @@ def parse_preprocessor_directive(expr):
     #      |  '(' expr ')'
     # atom := 'defined' '(' identifier ')'
 
-    all_targets = set(["goya", "gaudi"])
+    all_targets = set(["goya", "gaudi", "gaudib", "greco", "gaudi2", "doron1"])
     valid_defines = {
         "__dali__": set(["goya"]),
         "__goya__": set(["goya"]),
         "__gaudi__": set(["gaudi"]),
-        "__gaudi_plus__": set(["gaudi"]),
+        "__gaudib__": set(["gaudib"]),
+        "__goya2__": set(["greco"]),
+        "__greco__": set(["greco"]),
+        "__gaudi2__": set(["gaudi2"]),
+        "__doron1__": set(["doron1"]),
+        "__gaudi_plus__": set(["gaudi", "gaudib", "greco", "gaudi2", "doron1"]),
+        "__goya2_plus__": set(["greco", "gaudi2", "doron1"]),
+        "__greco_plus__": set(["greco", "gaudi2", "doron1"]),
+        "__gaudi2_plus__": set(["gaudi2", "doron1"]),
     }
 
     def parse_atom(line):
@@ -613,7 +621,7 @@ def parse_preprocessor_directive(expr):
 
 
 def read_intrinsics_header(filename, collect_defaults):
-    all_targets = set(["goya", "gaudi"])
+    all_targets = set(["goya", "gaudi", "gaudib", "greco", "gaudi2", "doron1"])
 
     with open(filename, 'r') as header:
         data = header.readlines()

@@ -12,14 +12,14 @@ void main(tensor ifm, tensor ofm, int i, int o)
 		for (int j = 0; j < get_dim_size(ifm, 2); j++) {
 			int5 ifm_offset = {1,1,i,j,1};
 			//ifm_offset.x = i; ifm_offset.y=j; ifm_offset.zwq=0;
-			__local__ float64 *pInput = (float64 *)i;// = a_gen_addr_i(ifm_offset, ifm);
+			__local__ float64 *pInput = (float64 *)i;// = gen_addr(ifm_offset, ifm, 0, 0, 1, 0);
 			accumulator += *pInput;
 		}
 	}
 
 	int5 ofm_offset = {0,0,0,0,0}; 
 	ofm_offset.xyzwq=0;
-	__local__ float64 *pOutput = (float64 *)o;// = a_gen_addr_i(ofm_offset, ofm);
+	__local__ float64 *pOutput = (float64 *)o;// = gen_addr(ofm_offset, ofm, 0, 0, 1, 0);
 	*pOutput = accumulator;
 }
 */
@@ -33,13 +33,13 @@ void main(tensor in, tensor bias, tensor out)
 	// C iterator - in slices of 64
 
     int C_end = 0;
-    C_end = s_i32_ld_l_s_b(0x8010 , C_end, 1, 1, 0);
+    C_end = s_i32_ld_l(0x8010 , 1, C_end, 1, 0);
     int W_end = 0;
-    W_end = s_i32_ld_l_s_b(0x8018 , W_end, 1, 1, 0);
+    W_end = s_i32_ld_l(0x8018 , 1, W_end, 1, 0);
     int H_end = 0;
-    H_end = s_i32_ld_l_s_b(0x8020 , H_end, 1, 1, 0);
+    H_end = s_i32_ld_l(0x8020 , 1, H_end, 1, 0);
     int B_end = 0;
-    B_end = s_i32_ld_l_s_b(0x8028 , B_end, 1, 1, 0);
+    B_end = s_i32_ld_l(0x8028 , 1, B_end, 1, 0);
 
 
 	/*
@@ -53,7 +53,7 @@ void main(tensor in, tensor bias, tensor out)
 		curInputOutputIndex[0] = C_itr;
 		curBiasIndex[0] = C_itr;
 		float64 biasValVec = 0;
-		biasValVec = v_f32_ld_tnsr_i_b(curBiasIndex,bias, biasValVec, 1, 0);
+		biasValVec = v_f32_ld_tnsr_b(curBiasIndex, bias, 0, biasValVec, 1, 0);
 
 		for(int B_itr = 0; B_itr < B_end; B_itr++)
 		{				
@@ -68,12 +68,12 @@ void main(tensor in, tensor bias, tensor out)
 					// W handing starts here
 					curInputOutputIndex[1] = W_itr;
 					float64 inputValVec = 0;
-					inputValVec = v_f32_ld_tnsr_i_b(curInputOutputIndex,in, inputValVec, 1, 0);
+					inputValVec = v_f32_ld_tnsr_b(curInputOutputIndex, in, 0, inputValVec, 1, 0);
 					float64 resultValVec = inputValVec + biasValVec;
 #ifdef WITH_RELU
-			        resultValVec = v_f32_max_v_s_b(resultValVec, 0.0f, resultValVec, 1, 0);
+			        resultValVec = v_f32_max_b(resultValVec, 0.0f, 0, resultValVec, 1, 0);
 #endif            
-					f32_st_tnsr_i_v_b(curInputOutputIndex, out,  resultValVec, 1, 0);
+					v_f32_st_tnsr(curInputOutputIndex, out, resultValVec, 0, 1, 0);
 				} // W loop
 			} // H loop
 		} // B loop
@@ -87,9 +87,9 @@ void main(tensor in, tensor bias, tensor out)
 void main(tensor in, tensor bias, tensor out)
 {
   int5 offset = {0,0,0,0,0};
-  float64 val = v_f32_ld_tnsr_i_b(in, offset, 1, 0);
+  float64 val = v_f32_ld_tnsr_b(in, offset, 0, 1, 0, );
   float64 res = val * 2.0f;
-  f32_st_tnsr_i_v_b(out, offset, res, 1, 0);
+  v_f32_st_tnsr(out, offset, res, 0, 1, 0);
   
 }
 */
@@ -104,14 +104,14 @@ void main(tensor ifm, tensor ofm, int i, int o)
 		for (int j = 0; j < get_dim_size(ifm, 2); j++) {
 			int5 ifm_offset = {1,1,i,j,1};
 			//ifm_offset.x = i; ifm_offset.y=j; ifm_offset.zwq=0;
-			__local__ float64 *pInput = (float64 *)i;// = a_gen_addr_i(ifm_offset, ifm);
+			__local__ float64 *pInput = (float64 *)i;// = gen_addr(ifm_offset, ifm, 0, 0, 1, 0);
 			accumulator += *pInput;
 		}
 	}
 
 	int5 ofm_offset = {0,0,0,0,0}; 
 	ofm_offset.xyzwq=0;
-	__local__ float64 *pOutput = (float64 *)o;// = a_gen_addr_i(ofm_offset, ofm);
+	__local__ float64 *pOutput = (float64 *)o;// = gen_addr(ofm_offset, ofm, 0, 0, 1, 0);
 	*pOutput = accumulator;
 }
 */

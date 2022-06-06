@@ -1,20 +1,20 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -bfloat16 -target-cpu gaudi %s -o - | FileCheck %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -bfloat16 -target-cpu goya2 %s -o - | FileCheck %s
 
 void main(unsigned addr, int dest, _Bool pred) {
   float __local *dptr = (float __local *)dest;
 
-  float result = s_f32_ld_l_s_b(addr, 0, 0, pred, 0);
+  float result = s_f32_ld_l(addr, 0, 0, pred, 0);
   *dptr++ = result;
   
-  result = s_f32_ld_l_s_b(addr, 0, 1, pred, 1);
+  result = s_f32_ld_l(addr, 1, 0, pred, 1);
   *dptr++ = result;
   
-  result = s_f32_ld_l_s_b(0x20, 0, 0, pred, 1);
+  result = s_f32_ld_l(0x20, 0, 0, pred, 1);
   *dptr++ = result;
   
-  result = s_f32_ld_l_s_b(0x20, 0, 1, pred, 0);
+  result = s_f32_ld_l(0x20, 1, 0, pred, 0);
   *dptr = result;
 }
 

@@ -1,12 +1,17 @@
-; XFAIL: *
-; RUN: llc -march=tpc -mcpu=dali %s -o - | FileCheck %s
+; RUN: llc -march=tpc -mcpu=gaudib %s -o - | FileCheck %s
+; XFAIL: * 
+; now we have another code, may be improved like expected here ?
+; CHECK: convert.i8  target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i8  target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i32 target_type=fp32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i32 target_type=fp32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
 
-; CHECK: convert.i16 lane_sel=0 target_type=int32  %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: convert.i16 lane_sel=0 target_type=int32  %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: convert.i32 lane_sel=0 target_type=fp32 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: convert.i32 lane_sel=0 target_type=fp32 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK: convert.f32 target_type=f16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+
+; CHECK: convert.f32 lane_sel=1 target_type=f16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+
+; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: halt
 
 target triple = "tpc"

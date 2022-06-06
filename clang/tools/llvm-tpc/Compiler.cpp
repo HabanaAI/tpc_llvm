@@ -1,10 +1,9 @@
 //===- Compiler.cpp - TPC LLVM compiler entry point -----------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
+// Copyright (C) 2020 HabanaLabs, Ltd.
+// All Rights Reserved.
+// Unauthorized copying of this file, via any medium is strictly prohibited.
+// Proprietary and confidential.
 //
 //===----------------------------------------------------------------------===//
 
@@ -191,10 +190,20 @@ unsigned llvm_tpc_compileModule(const char *moduleBuf, unsigned moduleSize,
                                         : CodeGenOptions::NormalInlining);
 
   // Set to MAX_SLM of the architecture.
-  cgOptions.ScalarLocalMemory = 1024;
+  cgOptions.ScalarLocalMemory = StringSwitch<unsigned>(targetOptions.CPU)
+                                    .Case("goya2", 2 * 1024)
+                                    .Case("greco", 2 * 1024)
+                                    .Case("gaudi2", 16 * 1024)
+                                    .Case("doron1", 16 * 1024)
+                                    .Default(1024);
 
   cgOptions.LutWarn = true;
-  cgOptions.CompressInstructions = false;
+  cgOptions.CompressInstructions =
+      optLevel >= 2 && StringSwitch<bool>(targetOptions.CPU)
+                                    .Case("goya", false)
+                                    .Case("gaudi", false)
+                                    .Case("gaudib", false)
+                                    .Default(true);
   cgOptions.VerifyModule = verify;
   cgOptions.setEmbedBitcode(CodeGenOptions::Embed_Bitcode);
 

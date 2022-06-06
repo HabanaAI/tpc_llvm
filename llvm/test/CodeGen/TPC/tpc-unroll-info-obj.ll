@@ -1,4 +1,4 @@
-; RUN: llc -march=tpc -mcpu=gaudi -O2 %s -o - | FileCheck %s
+; RUN: llc -march=tpc -mcpu=gaudi -O2 -emit-index-factors=true %s -o - | FileCheck %s
 
 ; CHECK: "Loop nest unroll Info":
 ; CHECK-NEXT: .ascii  "{4, 4}; "

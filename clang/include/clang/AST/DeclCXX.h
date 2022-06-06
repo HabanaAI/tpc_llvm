@@ -15,7 +15,6 @@
 #ifndef LLVM_CLANG_AST_DECLCXX_H
 #define LLVM_CLANG_AST_DECLCXX_H
 
-#include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTUnresolvedSet.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
@@ -40,6 +39,7 @@
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
@@ -53,6 +53,7 @@
 
 namespace clang {
 
+class ASTContext;
 class ClassTemplateDecl;
 class ConstructorUsingShadowDecl;
 class CXXBasePath;
@@ -712,6 +713,13 @@ public:
   }
 
   /// \c true if we know for sure that this class has a single,
+  /// accessible, unambiguous copy assignment operator that is not deleted.
+  bool hasSimpleCopyAssignment() const {
+    return !hasUserDeclaredCopyAssignment() &&
+           !data().DefaultedCopyAssignmentIsDeleted;
+  }
+
+  /// \c true if we know for sure that this class has a single,
   /// accessible, unambiguous move assignment operator that is not deleted.
   bool hasSimpleMoveAssignment() const {
     return !hasUserDeclaredMoveAssignment() && hasMoveAssignment() &&
@@ -736,9 +744,14 @@ public:
   ///
   /// This value is used for lazy creation of default constructors.
   bool needsImplicitDefaultConstructor() const {
-    return !data().UserDeclaredConstructor &&
-           !(data().DeclaredSpecialMembers & SMF_DefaultConstructor) &&
-           (!isLambda() || lambdaIsDefaultConstructibleAndAssignable());
+    return (!data().UserDeclaredConstructor &&
+            !(data().DeclaredSpecialMembers & SMF_DefaultConstructor) &&
+            (!isLambda() || lambdaIsDefaultConstructibleAndAssignable())) ||
+           // FIXME: Proposed fix to core wording issue: if a class inherits
+           // a default constructor and doesn't explicitly declare one, one
+           // is declared implicitly.
+           (data().HasInheritedDefaultConstructor &&
+            !(data().DeclaredSpecialMembers & SMF_DefaultConstructor));
   }
 
   /// Determine whether this class has any user-declared constructors.
@@ -871,6 +884,15 @@ public:
     return data().UserDeclaredSpecialMembers & SMF_CopyAssignment;
   }
 
+  /// Set that we attempted to declare an implicit copy assignment
+  /// operator, but overload resolution failed so we deleted it.
+  void setImplicitCopyAssignmentIsDeleted() {
+    assert((data().DefaultedCopyAssignmentIsDeleted ||
+            needsOverloadResolutionForCopyAssignment()) &&
+           "copy assignment should not be deleted");
+    data().DefaultedCopyAssignmentIsDeleted = true;
+  }
+
   /// Determine whether this class needs an implicit copy
   /// assignment operator to be lazily declared.
   bool needsImplicitCopyAssignment() const {
@@ -880,7 +902,16 @@ public:
   /// Determine whether we need to eagerly declare a defaulted copy
   /// assignment operator for this class.
   bool needsOverloadResolutionForCopyAssignment() const {
-    return data().HasMutableFields;
+    // C++20 [class.copy.assign]p2:
+    //   If the class definition declares a move constructor or move assignment
+    //   operator, the implicitly declared copy assignment operator is defined
+    //   as deleted.
+    // In MSVC mode, sometimes a declared move constructor does not delete an
+    // implicit copy assignment, so defer this choice to Sema.
+    if (data().UserDeclaredSpecialMembers &
+        (SMF_MoveConstructor | SMF_MoveAssignment))
+      return true;
+    return data().NeedOverloadResolutionForCopyAssignment;
   }
 
   /// Determine whether an implicit copy assignment operator for this
@@ -982,8 +1013,13 @@ public:
 
   /// Retrieve the lambda static invoker, the address of which
   /// is returned by the conversion operator, and the body of which
-  /// is forwarded to the lambda call operator.
+  /// is forwarded to the lambda call operator. The version that does not
+  /// take a calling convention uses the 'default' calling convention for free
+  /// functions if the Lambda's calling convention was not modified via
+  /// attribute. Otherwise, it will return the calling convention specified for
+  /// the lambda.
   CXXMethodDecl *getLambdaStaticInvoker() const;
+  CXXMethodDecl *getLambdaStaticInvoker(CallingConv CC) const;
 
   /// Retrieve the generic lambda's template parameter list.
   /// Returns null if the class does not represent a lambda or a generic
@@ -997,6 +1033,9 @@ public:
     assert(isLambda());
     return static_cast<LambdaCaptureDefault>(getLambdaData().CaptureDefault);
   }
+
+  /// Set the captures for this lambda closure type.
+  void setCaptures(ASTContext &Context, ArrayRef<LambdaCapture> Captures);
 
   /// For a closure type, retrieve the mapping from captured
   /// variables and \c this to the non-static data members that store the
@@ -1028,6 +1067,8 @@ public:
     return isLambda() ? captures_begin() + getLambdaData().NumCaptures
                       : nullptr;
   }
+
+  unsigned capture_size() const { return getLambdaData().NumCaptures; }
 
   using conversion_iterator = UnresolvedSetIterator;
 
@@ -1166,7 +1207,7 @@ public:
   bool defaultedDefaultConstructorIsConstexpr() const {
     return data().DefaultedDefaultConstructorIsConstexpr &&
            (!isUnion() || hasInClassInitializer() || !hasVariantMembers() ||
-            getASTContext().getLangOpts().CPlusPlus2a);
+            getLangOpts().CPlusPlus20);
   }
 
   /// Determine whether this class has a constexpr default constructor.
@@ -1258,7 +1299,7 @@ public:
   /// would be constexpr.
   bool defaultedDestructorIsConstexpr() const {
     return data().DefaultedDestructorIsConstexpr &&
-           getASTContext().getLangOpts().CPlusPlus2a;
+           getLangOpts().CPlusPlus20;
   }
 
   /// Determine whether this class has a constexpr destructor.
@@ -1355,14 +1396,19 @@ public:
   ///
   /// Only in C++17 and beyond, are lambdas literal types.
   bool isLiteral() const {
-    ASTContext &Ctx = getASTContext();
-    return (Ctx.getLangOpts().CPlusPlus2a ? hasConstexprDestructor()
+    const LangOptions &LangOpts = getLangOpts();
+    return (LangOpts.CPlusPlus20 ? hasConstexprDestructor()
                                           : hasTrivialDestructor()) &&
-           (!isLambda() || Ctx.getLangOpts().CPlusPlus17) &&
+           (!isLambda() || LangOpts.CPlusPlus17) &&
            !hasNonLiteralTypeFieldsOrBases() &&
            (isAggregate() || isLambda() ||
             hasConstexprNonCopyMoveConstructor() ||
             hasTrivialDefaultConstructor());
+  }
+
+  /// Determine whether this is a structural type.
+  bool isStructural() const {
+    return isLiteral() && data().StructuralIfLiteral;
   }
 
   /// If this record is an instantiation of a member class,
@@ -1517,14 +1563,8 @@ public:
   /// returns false if the class has non-computable base classes.
   ///
   /// \param BaseMatches Callback invoked for each (direct or indirect) base
-  /// class of this type, or if \p AllowShortCircuit is true then until a call
-  /// returns false.
-  ///
-  /// \param AllowShortCircuit if false, forces the callback to be called
-  /// for every base class, even if a dependent or non-matching base was
-  /// found.
-  bool forallBases(ForallBasesCallback BaseMatches,
-                   bool AllowShortCircuit = true) const;
+  /// class of this type until a call returns false.
+  bool forallBases(ForallBasesCallback BaseMatches) const;
 
   /// Function type used by lookupInBases() to determine whether a
   /// specific base class subobject matches the lookup criteria.
@@ -1587,58 +1627,6 @@ public:
                                    CXXBasePath &Path,
                                    const CXXRecordDecl *BaseRecord);
 
-  /// Base-class lookup callback that determines whether there exists
-  /// a tag with the given name.
-  ///
-  /// This callback can be used with \c lookupInBases() to find tag members
-  /// of the given name within a C++ class hierarchy.
-  static bool FindTagMember(const CXXBaseSpecifier *Specifier,
-                            CXXBasePath &Path, DeclarationName Name);
-
-  /// Base-class lookup callback that determines whether there exists
-  /// a member with the given name.
-  ///
-  /// This callback can be used with \c lookupInBases() to find members
-  /// of the given name within a C++ class hierarchy.
-  static bool FindOrdinaryMember(const CXXBaseSpecifier *Specifier,
-                                 CXXBasePath &Path, DeclarationName Name);
-
-  /// Base-class lookup callback that determines whether there exists
-  /// a member with the given name.
-  ///
-  /// This callback can be used with \c lookupInBases() to find members
-  /// of the given name within a C++ class hierarchy, including dependent
-  /// classes.
-  static bool
-  FindOrdinaryMemberInDependentClasses(const CXXBaseSpecifier *Specifier,
-                                       CXXBasePath &Path, DeclarationName Name);
-
-  /// Base-class lookup callback that determines whether there exists
-  /// an OpenMP declare reduction member with the given name.
-  ///
-  /// This callback can be used with \c lookupInBases() to find members
-  /// of the given name within a C++ class hierarchy.
-  static bool FindOMPReductionMember(const CXXBaseSpecifier *Specifier,
-                                     CXXBasePath &Path, DeclarationName Name);
-
-  /// Base-class lookup callback that determines whether there exists
-  /// an OpenMP declare mapper member with the given name.
-  ///
-  /// This callback can be used with \c lookupInBases() to find members
-  /// of the given name within a C++ class hierarchy.
-  static bool FindOMPMapperMember(const CXXBaseSpecifier *Specifier,
-                                  CXXBasePath &Path, DeclarationName Name);
-
-  /// Base-class lookup callback that determines whether there exists
-  /// a member with the given name that can be used in a nested-name-specifier.
-  ///
-  /// This callback can be used with \c lookupInBases() to find members of
-  /// the given name within a C++ class hierarchy that can occur within
-  /// nested-name-specifiers.
-  static bool FindNestedNameSpecifierMember(const CXXBaseSpecifier *Specifier,
-                                            CXXBasePath &Path,
-                                            DeclarationName Name);
-
   /// Retrieve the final overriders for each virtual member
   /// function in the class hierarchy where this class is the
   /// most-derived class in the class hierarchy.
@@ -1647,12 +1635,20 @@ public:
   /// Get the indirect primary bases for this class.
   void getIndirectPrimaryBases(CXXIndirectPrimaryBaseSet& Bases) const;
 
+  /// Determine whether this class has a member with the given name, possibly
+  /// in a non-dependent base class.
+  ///
+  /// No check for ambiguity is performed, so this should never be used when
+  /// implementing language semantics, but it may be appropriate for warnings,
+  /// static analysis, or similar.
+  bool hasMemberName(DeclarationName N) const;
+
   /// Performs an imprecise lookup of a dependent name in this class.
   ///
   /// This function does not follow strict semantic rules and should be used
   /// only when lookup rules can be relaxed, e.g. indexing.
   std::vector<const NamedDecl *>
-  lookupDependentName(const DeclarationName &Name,
+  lookupDependentName(DeclarationName Name,
                       llvm::function_ref<bool(const NamedDecl *ND)> Filter);
 
   /// Renders and displays an inheritance diagram
@@ -1696,6 +1692,10 @@ public:
   /// actually abstract.
   bool mayBeAbstract() const;
 
+  /// Determine whether it's impossible for a class to be derived from this
+  /// class. This is best-effort, and may conservatively return false.
+  bool isEffectivelyFinal() const;
+
   /// If this is the closure type of a lambda expression, retrieve the
   /// number to be used for name mangling in the Itanium C++ ABI.
   ///
@@ -1734,6 +1734,12 @@ public:
     getLambdaData().ContextDecl = ContextDecl;
     getLambdaData().HasKnownInternalLinkage = HasKnownInternalLinkage;
   }
+
+  /// Set the device side mangling number.
+  void setDeviceLambdaManglingNumber(unsigned Num) const;
+
+  /// Retrieve the device side mangling number.
+  unsigned getDeviceLambdaManglingNumber() const;
 
   /// Returns the inheritance model used for this record.
   MSInheritanceModel getMSInheritanceModel() const;
@@ -1848,7 +1854,7 @@ private:
                         const DeclarationNameInfo &NameInfo, QualType T,
                         TypeSourceInfo *TInfo, SourceLocation EndLocation)
       : FunctionDecl(CXXDeductionGuide, C, DC, StartLoc, NameInfo, T, TInfo,
-                     SC_None, false, CSK_unspecified),
+                     SC_None, false, ConstexprSpecKind::Unspecified),
         ExplicitSpec(ES) {
     if (EndLocation.isValid())
       setRangeEnd(EndLocation);
@@ -2037,7 +2043,8 @@ public:
   method_iterator end_overridden_methods() const;
   unsigned size_overridden_methods() const;
 
-  using overridden_method_range= ASTContext::overridden_method_range;
+  using overridden_method_range = llvm::iterator_range<
+      llvm::TinyPtrVector<const CXXMethodDecl *>::const_iterator>;
 
   overridden_method_range overridden_methods() const;
 
@@ -2417,17 +2424,6 @@ class CXXConstructorDecl final
                      : ExplicitSpecKind::ResolvedFalse);
   }
 
-  void setExplicitSpecifier(ExplicitSpecifier ES) {
-    assert((!ES.getExpr() ||
-            CXXConstructorDeclBits.HasTrailingExplicitSpecifier) &&
-           "cannot set this explicit specifier. no trail-allocated space for "
-           "explicit");
-    if (ES.getExpr())
-      *getCanonicalDecl()->getTrailingObjects<ExplicitSpecifier>() = ES;
-    else
-      CXXConstructorDeclBits.IsSimpleExplicit = ES.isExplicit();
-  }
-
   enum TraillingAllocKind {
     TAKInheritsConstructor = 1,
     TAKHasTailExplicit = 1 << 1,
@@ -2452,6 +2448,17 @@ public:
          ConstexprSpecKind ConstexprKind,
          InheritedConstructor Inherited = InheritedConstructor(),
          Expr *TrailingRequiresClause = nullptr);
+
+  void setExplicitSpecifier(ExplicitSpecifier ES) {
+    assert((!ES.getExpr() ||
+            CXXConstructorDeclBits.HasTrailingExplicitSpecifier) &&
+           "cannot set this explicit specifier. no trail-allocated space for "
+           "explicit");
+    if (ES.getExpr())
+      *getCanonicalDecl()->getTrailingObjects<ExplicitSpecifier>() = ES;
+    else
+      CXXConstructorDeclBits.IsSimpleExplicit = ES.isExplicit();
+  }
 
   ExplicitSpecifier getExplicitSpecifier() {
     return getCanonicalDecl()->getExplicitSpecifierInternal();
@@ -2724,8 +2731,6 @@ class CXXConversionDecl : public CXXMethodDecl {
 
   ExplicitSpecifier ExplicitSpec;
 
-  void setExplicitSpecifier(ExplicitSpecifier ES) { ExplicitSpec = ES; }
-
 public:
   friend class ASTDeclReader;
   friend class ASTDeclWriter;
@@ -2747,6 +2752,7 @@ public:
 
   /// Return true if the declartion is already resolved to be explicit.
   bool isExplicit() const { return getExplicitSpecifier().isExplicit(); }
+  void setExplicitSpecifier(ExplicitSpecifier ES) { ExplicitSpec = ES; }
 
   /// Returns the type that this conversion function is converting to.
   QualType getConversionType() const {
@@ -3964,13 +3970,85 @@ public:
   IdentifierInfo* getSetterId() const { return SetterId; }
 };
 
+/// Parts of a decomposed MSGuidDecl. Factored out to avoid unnecessary
+/// dependencies on DeclCXX.h.
+struct MSGuidDeclParts {
+  /// {01234567-...
+  uint32_t Part1;
+  /// ...-89ab-...
+  uint16_t Part2;
+  /// ...-cdef-...
+  uint16_t Part3;
+  /// ...-0123-456789abcdef}
+  uint8_t Part4And5[8];
+
+  uint64_t getPart4And5AsUint64() const {
+    uint64_t Val;
+    memcpy(&Val, &Part4And5, sizeof(Part4And5));
+    return Val;
+  }
+};
+
+/// A global _GUID constant. These are implicitly created by UuidAttrs.
+///
+///   struct _declspec(uuid("01234567-89ab-cdef-0123-456789abcdef")) X{};
+///
+/// X is a CXXRecordDecl that contains a UuidAttr that references the (unique)
+/// MSGuidDecl for the specified UUID.
+class MSGuidDecl : public ValueDecl,
+                   public Mergeable<MSGuidDecl>,
+                   public llvm::FoldingSetNode {
+public:
+  using Parts = MSGuidDeclParts;
+
+private:
+  /// The decomposed form of the UUID.
+  Parts PartVal;
+
+  /// The resolved value of the UUID as an APValue. Computed on demand and
+  /// cached.
+  mutable APValue APVal;
+
+  void anchor() override;
+
+  MSGuidDecl(DeclContext *DC, QualType T, Parts P);
+
+  static MSGuidDecl *Create(const ASTContext &C, QualType T, Parts P);
+  static MSGuidDecl *CreateDeserialized(ASTContext &C, unsigned ID);
+
+  // Only ASTContext::getMSGuidDecl and deserialization create these.
+  friend class ASTContext;
+  friend class ASTReader;
+  friend class ASTDeclReader;
+
+public:
+  /// Print this UUID in a human-readable format.
+  void printName(llvm::raw_ostream &OS) const override;
+
+  /// Get the decomposed parts of this declaration.
+  Parts getParts() const { return PartVal; }
+
+  /// Get the value of this MSGuidDecl as an APValue. This may fail and return
+  /// an absent APValue if the type of the declaration is not of the expected
+  /// shape.
+  APValue &getAsAPValue() const;
+
+  static void Profile(llvm::FoldingSetNodeID &ID, Parts P) {
+    ID.AddInteger(P.Part1);
+    ID.AddInteger(P.Part2);
+    ID.AddInteger(P.Part3);
+    ID.AddInteger(P.getPart4And5AsUint64());
+  }
+  void Profile(llvm::FoldingSetNodeID &ID) { Profile(ID, PartVal); }
+
+  static bool classof(const Decl *D) { return classofKind(D->getKind()); }
+  static bool classofKind(Kind K) { return K == Decl::MSGuid; }
+};
+
 /// Insertion operator for diagnostics.  This allows sending an AccessSpecifier
 /// into a diagnostic with <<.
-const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
-                                    AccessSpecifier AS);
-
-const PartialDiagnostic &operator<<(const PartialDiagnostic &DB,
-                                    AccessSpecifier AS);
+const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
+                                      AccessSpecifier AS);
 
 } // namespace clang
 

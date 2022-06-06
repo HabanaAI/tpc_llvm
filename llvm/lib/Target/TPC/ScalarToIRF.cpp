@@ -1,9 +1,5 @@
 //===- ScalarToIRF.cpp ----------------------------------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 /// This pass replaces constructs like:
 ///
@@ -82,7 +78,7 @@ static bool canBeIRF(Instruction *Inst) {
 //
 static Function *getIRFIntrinsic(Module *M, unsigned OpCode) {
   IntegerType *Int32Ty = Type::getInt32Ty(M->getContext());
-  VectorType *Int5Ty = VectorType::get(Int32Ty, 5);
+  VectorType *Int5Ty = FixedVectorType::get(Int32Ty, 5);
   // IntegerType *BitTy = Type::getInt1Ty(M->getContext());
 
   Function *Func = nullptr;
@@ -104,7 +100,7 @@ static Function *getIRFIntrinsic(Module *M, unsigned OpCode) {
 
 static Function *getIRFIntrinsicForCmp(Module *M, ICmpInst *Inst) {
   IntegerType *Int32Ty = Type::getInt32Ty(M->getContext());
-  VectorType *Int5Ty = VectorType::get(Int32Ty, 5);
+  VectorType *Int5Ty = FixedVectorType::get(Int32Ty, 5);
 
   Function *Func = nullptr;
   switch (Inst->getPredicate()) {
@@ -133,8 +129,8 @@ static Function *getIRFIntrinsicForCmp(Module *M, ICmpInst *Inst) {
 }
 
 static bool isInt5(Value &V) {
-  if (auto *VTy = dyn_cast<VectorType>(V.getType()))
-    return VTy->getVectorNumElements() == 5 && VTy->getElementType()->isIntegerTy(32);
+  if (auto *VTy = dyn_cast<FixedVectorType>(V.getType()))
+    return VTy->getNumElements() == 5 && VTy->getElementType()->isIntegerTy(32);
   return false;
 }
 
@@ -334,9 +330,12 @@ struct WorkItem {
 
   bool mayAdd(const TransformItem *TI) const {
     return Items.empty() ||
+           (
            (Items.back()->getOpCode() == TI->getOpCode()) &&
-            Items.back()->getScalar() == TI->getScalar() &&
-            TI->isInTheSameChainAs(Items.back());
+           (Items.back()->getScalar() == TI->getScalar()) &&
+           (TI->isInTheSameChainAs(Items.back())) &&
+           (Items.back()->getIndex() != TI->getIndex())
+           );
   }
 
   void add(TransformItem *TI) {
@@ -382,7 +381,7 @@ static bool runOnBasicBlock(BasicBlock &BB) {
     Instruction *Inst = &*I++;
     Value *Vect;
     ConstantInt *Idx;
-    if (match(Inst, m_ExtractElement(m_Value(Vect), m_ConstantInt(Idx))) &&
+    if (match(Inst, m_ExtractElt(m_Value(Vect), m_ConstantInt(Idx))) &&
         isInt5(*Vect) &&
         Inst->hasOneUse()) {
       LLVM_DEBUG(dbgs() << "Analyzing: " << *Inst << "\n");
@@ -391,7 +390,7 @@ static bool runOnBasicBlock(BasicBlock &BB) {
       // transformation.
       for (auto U : Inst->users())
         if (const auto Operation = dyn_cast<Instruction>(U)) {
-          if (canBeIRF(Operation))
+          if (canBeIRF(Operation)) {
             if (auto ICmp = dyn_cast<ICmpInst>(Operation)) {
               if (findOperation(Operation))
                 continue;
@@ -402,8 +401,8 @@ static bool runOnBasicBlock(BasicBlock &BB) {
               Value *Other = Inst == Operand1 ? Operand2 : Operand1;
               Value *Vect2;
               ConstantInt *Idx2;
-              if (match(Other, m_ExtractElement(m_Value(Vect2),
-                                                m_ConstantInt(Idx2))) &&
+              if (match(Other, m_ExtractElt(m_Value(Vect2),
+                                            m_ConstantInt(Idx2))) &&
                   Other->hasOneUse() &&
                   Idx == Idx2) {
                 // This is IRF+IRF case.
@@ -418,9 +417,9 @@ static bool runOnBasicBlock(BasicBlock &BB) {
               ConstantInt *Idx2;
               Value *InsInst = *Operation->user_begin();
               if (match(InsInst,
-                        m_InsertElement(m_Value(Vect2),
-                                        m_Value(Elt2),
-                                        m_ConstantInt(Idx2)))) {
+                        m_InsertElt(m_Value(Vect2),
+                                    m_Value(Elt2),
+                                    m_ConstantInt(Idx2)))) {
                 bool VectorsMatch = areSameInt5Values(Vect2, Vect);
                 if (VectorsMatch && Idx2 == Idx) {
                   // This operation can be folded.
@@ -431,6 +430,7 @@ static bool runOnBasicBlock(BasicBlock &BB) {
                 }
               }
             }
+          }
         }
     }
   }

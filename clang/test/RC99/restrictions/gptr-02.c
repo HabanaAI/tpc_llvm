@@ -3,8 +3,8 @@
 void main(int x1, tensor out) {
   int __global *ptr, *ptr1;
   int5 c0 = 0;
-  ptr = (__global int *) a_gen_addr_i(c0, out);
-  ptr1 = (__global int *) a_gen_addr_i(c0, out);
+  ptr = (__global int *) gen_addr(c0, out, 0, 0, 1, 0);
+  ptr1 = (__global int *) gen_addr(c0, out, 0, 0, 1, 0);
 
   *(ptr + 2) = 2;      // expected-error{{unsupported operation on global pointer}}
   *(2 + ptr) = 2;      // expected-error{{unsupported operation on global pointer}}

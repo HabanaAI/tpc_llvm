@@ -1,9 +1,5 @@
 //===- TPCTools.cpp --- makes Global Variables Locals ---------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // TPC related support functions for manipulating IR.
@@ -39,11 +35,11 @@ bool isTpcVectorType(const Type *Ty) {
     return isTpcVectorType(AT->getElementType());
   }
   if (const auto *VT = dyn_cast<VectorType>(Ty)) {
-    const Type *ET = VT->getVectorElementType();
-    unsigned Sz = VT->getVectorNumElements();
+    const Type *ET = VT->getElementType();
+    unsigned Sz = cast<FixedVectorType>(VT)->getNumElements();
     if (ET->isFloatTy())
       return Sz == 64 || Sz == 128;
-    if (ET->isBFloat16Ty())
+    if (ET->isBFloatTy())
       return Sz == 128 || Sz == 256;
     if (ET->isHalfTy())
       return Sz == 128 || Sz == 256;

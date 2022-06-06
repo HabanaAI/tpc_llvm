@@ -1,8 +1,8 @@
 ; RUN: llc -march=tpc -mcpu=dali -O0 %s -o - | FileCheck %s
 
 ; CHECK: halt
-; CHECK: convert.i8 target_type=int16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK: convert.i8 target_type=int16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}
 
 target triple = "tpc"
 

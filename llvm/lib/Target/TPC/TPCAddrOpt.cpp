@@ -1,9 +1,10 @@
 //===---- TPCAddrOpt.cpp --- Optimizes  st/ld_l_v  instructions -----------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
+
+/* This optimization is relevant only for dali, so it became deprecated and excluded from passes
+ * It could be found useful if before ld_l_v will be found asignment to some SRF s=imm
+ */
+
+#ifdef DEPRECATED_TPC_ADDR_OPT
 //===----------------------------------------------------------------------===//
 //
 // This pass:
@@ -87,7 +88,7 @@ static bool  extract_imm(int64_t* imm, MachineInstr *ElementDef, MachineFunction
       MachineOperand opndPP = ElementDef->getOperand(nopnd-1);
 
       if (opnd1.isImm()  &&
-          opndP.isReg()  && (opndP.getReg() == TPC::SP0) &&
+          opndP.isReg()  && (opndP.getReg() == TPC::SPRF_TRUE) &&
 	  opndPP.isImm() && (opndPP.getImm() == 0)) {
         *imm = opnd1.getImm();
         PreventLooping.clear();
@@ -162,7 +163,7 @@ static bool  extract_imm(int64_t* imm, MachineInstr *ElementDef, MachineFunction
     }
     if (opnd6.isReg()) {
       unsigned reg6 = opnd6.getReg();
-      if (reg6 != TPC::SP0) {
+      if (reg6 != TPC::SPRF_TRUE) {
         return false;
       }
     }
@@ -286,3 +287,4 @@ bool TPCAddrOpt::runOnMachineFunction(MachineFunction &Func)
  
   return NumReplaced > 0;
 }
+#endif

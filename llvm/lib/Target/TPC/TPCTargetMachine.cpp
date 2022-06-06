@@ -1,12 +1,3 @@
-//===---- TPCTargetMachine.cpp -----------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===-------------------------------------------------------------------------------===//
-//
-//===-------------------------------------------------------------------------------===//
 #include "TPC.h"
 #include "TPCAliasAnalysis.h"
 #include "TPCSubtarget.h"
@@ -43,12 +34,14 @@ extern "C" void LLVMInitializeTPCTarget() {
   initializeScalarToIRFPassPass(Registry);
   initializeGlobalResolverPass(Registry);
   initializeGlobalizerPass(Registry);
-  initializeNodePreLegalizerPass(Registry);
+  initializeTPCModuleLegalizerPass(Registry);
   initializeAttributeAdjusterPass(Registry);
   initializePromoteMemoryToRegsPass(Registry);
   initializeTpcLoopOptPass(Registry);
 //  initializeTPCAAWrapperPassPass(Registry);
   initializeTpcCopyElisionPass(Registry);
+  initializeTPCPredicateOptimizerPass(Registry);
+  initializeTPCIncMergerPass(Registry);
 }
 
 static Reloc::Model getEffectiveRelocModel(Optional<Reloc::Model> RM) {
@@ -57,17 +50,21 @@ static Reloc::Model getEffectiveRelocModel(Optional<Reloc::Model> RM) {
   return *RM;
 }
 
+/*
 static CodeModel::Model getEffectiveCodeModel(Optional<CodeModel::Model> CM) {
   if (!CM.hasValue())
     return CodeModel::Small;
   return CM.getValue();
 }
+*/
 
 static StringRef normalizeCPUName(StringRef CPU) {
   if (CPU.empty())
     return "goya";
   if (CPU == "dali")
     return "goya";
+  if (CPU == "goya2")
+    return "greco";
   return CPU;
 }
 
@@ -110,7 +107,7 @@ TPCSubtarget *TPCTargetMachine::createSubtarget(StringRef CPU,
     // This needs to be done before we create a new subtarget since any
     // creation will depend on the TM and the code generation flags on the
     // function that reside in TargetOptions.
-    I = std::make_unique<TPCSubtarget>(TargetTriple, CPU, FS, *this);
+    I = std::make_unique<TPCSubtarget>(TargetTriple, CPU.str(), FS.str(), *this);
   }
   return I.get();
 }
@@ -142,18 +139,20 @@ static ImmutablePass *createTPCExternalAAWrapperPass() {
 }
 
 void TPCTargetMachine::adjustPassManager(PassManagerBuilder &PMB) {
-  // Prelegalizer replaces unsupported nodes with function calls. As TPC does
-  // not have functions, we must do it before inliner, it is too early, we
-  // have no chance to apply generic optimizations.
-  //
-  // Prelegalizer must be executed at all optimization levels.
-  //
+  // TPCModuleLegalizer must be executed at all optimization levels.
+  if (!Options.CompileForLibrary)
+    PMB.addExtension(
+      PassManagerBuilder::EP_EarlyAsPossible,
+      [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+        PM.add(createTPCModuleLegalizer());
+        PM.add(createTpcCopyElision());
+    });
+
   PMB.addExtension(
-    PassManagerBuilder::EP_EarlyAsPossible,
-    [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-    PM.add(createNodePreLegalizer());
-    PM.add(createTpcCopyElision());
-  });
+      PassManagerBuilder::EP_EarlyAsPossible,
+      [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+        PM.add(createMarkupDirectMMIOAccessPass());
+      });
 
   // Passes specific for -O0.
   if (getOptLevel() == CodeGenOpt::None) {
@@ -178,27 +177,29 @@ void TPCTargetMachine::adjustPassManager(PassManagerBuilder &PMB) {
     PMB.addExtension(
       PassManagerBuilder::EP_EnabledOnOptLevel0,
       [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createInstructionCombiningPass(false/*ExpensiveCombines*/));
+        PM.add(createInstructionCombiningPass(2 /*MaxIterations*/));
     });
 
     // At -O0 IR pipeline is short and we must call Globalizer and GlobalResolver
     // here, as extension point EP_OptimizerLast is not available.
-    PMB.addExtension(
-      PassManagerBuilder::EP_EnabledOnOptLevel0,
-      [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createGlobalizer());
-    });
-    // Globalizer leaves hanging IR fragments that have no uses. Remove them now.
-    PMB.addExtension(
-      PassManagerBuilder::EP_EnabledOnOptLevel0,
-      [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createAggressiveDCEPass());
-    });
-    PMB.addExtension(
-      PassManagerBuilder::EP_EnabledOnOptLevel0,
-      [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createGlobalResolver());
-    });
+    if (!Options.CompileForLibrary) {
+      PMB.addExtension(
+        PassManagerBuilder::EP_EnabledOnOptLevel0,
+        [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          PM.add(createGlobalizer());
+      });
+      // Globalizer leaves hanging IR fragments that have no uses. Remove them now.
+      PMB.addExtension(
+        PassManagerBuilder::EP_EnabledOnOptLevel0,
+        [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          PM.add(createAggressiveDCEPass());
+      });
+      PMB.addExtension(
+        PassManagerBuilder::EP_EnabledOnOptLevel0,
+        [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          PM.add(createGlobalResolver());
+      });
+    }
   }
 
   // Optimization passes.
@@ -230,9 +231,15 @@ void TPCTargetMachine::adjustPassManager(PassManagerBuilder &PMB) {
     PMB.addExtension(
       PassManagerBuilder::EP_EarlyAsPossible,
       [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createScalarToIRFPass(false));
+        PM.add(createScalarToIRFPass(getSubtarget()->hasGen3Plus()));
     });
 
+    PMB.addExtension(
+      PassManagerBuilder::EP_EarlyAsPossible,
+      [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+        PM.add(createTPCAAWrapperPass());
+        PM.add(createTPCExternalAAWrapperPass());
+      });
 
     PMB.addExtension(
       PassManagerBuilder::EP_CGSCCOptimizerLate,
@@ -253,43 +260,51 @@ void TPCTargetMachine::adjustPassManager(PassManagerBuilder &PMB) {
     });
 
     PMB.addExtension(
-            PassManagerBuilder::EP_OptimizerLast,
-            [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-                PM.add(createTpcLoopOptPass());
-            });
+      PassManagerBuilder::EP_ModuleOptimizerEarly,
+      [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          PM.add(createTPCAAWrapperPass());
+          PM.add(createTPCExternalAAWrapperPass());
+    });
+
     PMB.addExtension(
-            PassManagerBuilder::EP_OptimizerLast,
-            [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-                PM.add(createDeadCodeEliminationPass());
-            });
+        PassManagerBuilder::EP_ModuleOptimizerEarly,
+        [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          TPCEliminateRedundantLinearityPassConfig Cfg;
+          Cfg.HasFeatureTensorStorePack32To16 = getSubtarget()->hasTnsrPack();
+          Cfg.HasFeatureTensorStorePack32To8 = getSubtarget()->hasTnsrPackDT();
+          Cfg.HasFeatureTensorStorePack16To8 = getSubtarget()->hasTnsrPackDT();
+          Cfg.HasFeatureTensorLoadUnpack = getSubtarget()->hasTnsrUnpack();
+          PM.add(createTPCEliminateRedundantLinearityPass(Cfg));
+        });
+
+    // ------ Last passes
 
     PMB.addExtension(
       PassManagerBuilder::EP_OptimizerLast,
       [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createGlobalizer());
-        //PM.add(createVerifierPass());
-    });
-
+        PM.add(createTpcLoopOptPass());
+      });
     PMB.addExtension(
       PassManagerBuilder::EP_OptimizerLast,
       [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createGlobalResolver());
-        //PM.add(createVerifierPass());
-    });
+        PM.add(createDeadCodeEliminationPass());
+      });
 
-  PMB.addExtension(
-    PassManagerBuilder::EP_ModuleOptimizerEarly,
-    [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createTPCAAWrapperPass());
-        PM.add(createTPCExternalAAWrapperPass());
-  });
-  PMB.addExtension(
-    PassManagerBuilder::EP_EarlyAsPossible,
-    [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-        PM.add(createTPCAAWrapperPass());
-        PM.add(createTPCExternalAAWrapperPass());
-  });
+    if (!Options.CompileForLibrary) {
+      PMB.addExtension(
+        PassManagerBuilder::EP_OptimizerLast,
+        [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          PM.add(createGlobalizer());
+          //PM.add(createVerifierPass());
+      });
 
+      PMB.addExtension(
+        PassManagerBuilder::EP_OptimizerLast,
+        [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          PM.add(createGlobalResolver());
+          //PM.add(createVerifierPass());
+      });
+    }
   }
 }
 
@@ -315,6 +330,7 @@ public:
   void addFastRegAlloc() override {
     addPass(createTPCExpandHWRegCopies());
     // We have to use optimizing RA even for -O0.
+    addPass(createTPCExpandHWRegCopies());
     addPass(&LiveVariablesID, false);
     addPass(&PHIEliminationID, false);
     addPass(&TwoAddressInstructionPassID, false);
@@ -352,6 +368,7 @@ public:
   void addMachineSSAOptimization() override;
   bool addPreISel() override;
   bool addInstSelector() override;
+  bool addILPOpts() override;
   void addPreRegAlloc() override;
   //void addPostRegAlloc() override;
   void addPreSched2() override;
@@ -385,6 +402,7 @@ void TPCPassConfig::addMachineSSAOptimization() {
   if (getOptLevel() > CodeGenOpt::None) {
     addPass(createTPCPredicateOptimizer());
     addPass(createTPCSetIndxCoalescer());
+    addPass(createTPCIncMerger());
     addPass(&DeadMachineInstructionElimID);
   }
 }
@@ -402,8 +420,11 @@ void TPCPassConfig::addPreEmitPass() {
    addPass(createTPCUnHardwareLoops());
 #if !defined(TPC_DISABLE_NOP_INSERTER) && !defined(TPC_DISABLE_ALL_SCHED)
   addPass(createTPCLatencyResolver(), false);
-  addPass(createTPCPipelineRegs(), false);
+  if (getTM<TPCTargetMachine>().getSubtarget()->isPriorDoron1())
+    addPass(createTPCPipelineRegs(), false);
   addPass(createTPCCostModelEmitter(), false);
+  if (getTM<TPCTargetMachine>().getSubtarget()->hasGen4Plus())
+    addPass(createEventProfilerInject(), false);
 #endif
   addPass(createTPCInstrCompress(), false);
   addPass(createTPCRegisterCounter(), false);
@@ -428,13 +449,20 @@ bool TPCPassConfig::addInstSelector() {
   return false;
 }
 
+bool TPCPassConfig::addILPOpts() {
+  addPass(&MachineCombinerID);
+  return true;
+}
 void TPCPassConfig::addPreRegAlloc() {
+  addPass(createTPCSwapFakePredicate());
   addPass(createTPCScalarSink());
   if (getOptLevel() != CodeGenOpt::None)
     addBlockPlacement();
   if (getOptLevel() >= CodeGenOpt::Default) {
     addPass(createTPCImmToReg());
+#ifdef DEPRECATED_TPC_ADDR_OPT
     addPass(createTPCAddrOpt());
+#endif
     addPass(createTPCRegisterBalancer());
     addPass(&DeadMachineInstructionElimID);
     addPass(createTPCHardwareLoops(), false);
@@ -442,7 +470,7 @@ void TPCPassConfig::addPreRegAlloc() {
     addPass(&DeadMachineInstructionElimID);
     addPass(createTPCSubregInitElimination());
     // TODO: some kernels fail because of this pass
-    //addPass(createTPCMovCoalescer());
+    addPass(createTPCMovCoalescer());
   }
   if (getOptLevel() == CodeGenOpt::None)
    addPass(createTPCHWWAGeneral());

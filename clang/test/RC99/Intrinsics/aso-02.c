@@ -15,7 +15,7 @@ void main(_Bool x) {
 // CHECK: aso dec %SP{{[0-9]+}}
 // CHECK: aso vpu %SP{{[0-9]+}}
 // CHECK: aso dec vpu %SP{{[0-9]+}}
-// CHECK: aso %SP0
+// CHECK: aso
 // CHECK: aso dec !%SP{{[0-9]+}}
 // CHECK: aso vpu !%SP{{[0-9]+}}
 // CHECK: aso dec vpu !%SP{{[0-9]+}}

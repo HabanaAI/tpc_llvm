@@ -1,6 +1,6 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99  %s -o - | FileCheck  %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck  %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck  %s
 
 void main(int dest, int src1, int vpredp, _Bool pred) {
   volatile uchar256 __local *dest_ptr = (uchar256 __local *)dest;
@@ -30,7 +30,7 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
 
     res = v_convert_i16_to_u8_b(x, 3, SW_RHNE, res, 1, 0);
     *dest_ptr++ = res;
-// CHECK: convert.i16 lane_sel=3 target_type=uint8 rhne [[DEST]], [[SRC]], %SP0
+// CHECK: convert.i16 lane_sel=3 target_type=uint8 rhne [[DEST]], [[SRC]]
 
     res = v_convert_i16_to_u8_b(x, 1, 0, res, pred, 0);
     *dest_ptr++ = res;

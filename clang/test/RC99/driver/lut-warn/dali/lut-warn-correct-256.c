@@ -13,8 +13,8 @@ void main(int x0, int x2, int x3, int dest0, int dest1)
     float64 temp_res0 = 0;
     float64 temp_res1 = 0;
 
-    temp_res0 = v_f32_lookup_c0_v_b(*ptr_x0, temp_res0, 1, e_fp32_tanh, x3, 0);
-    temp_res1 = v_f32_lookup_c0_v_b(*ptr_x1, temp_res0, 1, e_fp32_tanh, x3, 0);
+    temp_res0 = v_f32_lookup_c0(*ptr_x0, e_fp32_tanh, 1, temp_res0, x3, 0);
+    temp_res1 = v_f32_lookup_c0(*ptr_x1, e_fp32_tanh, 1, temp_res0, x3, 0);
     *res0 = temp_res0;
     *res1 = temp_res1;
 }

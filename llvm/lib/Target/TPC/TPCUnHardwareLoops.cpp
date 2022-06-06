@@ -1,82 +1,78 @@
-//===- TPCUnHardwareLoop.cpp ------------------------------------*- C++ -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//===- TPCUnHardwareLoop.cpp ------------------===//
 //
 //===-Transform HW Loop in usual loop------------------------------------===//
 //
 //===-if it exceeds limit ----------------------------------------------===//
 
-#include "llvm/ADT/SmallSet.h"
+#include "MCTargetDesc/TPCMCInstrInfo.h"
+#include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "TPCInstrInfo.h"
 #include "TPCSubtarget.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "MCTargetDesc/TPCMCTargetDesc.h"
-#include "MCTargetDesc/TPCMCInstrInfo.h"
-#include "TPCSubtarget.h"
 #include "TPCTargetMachine.h"
-#include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "TPCVLIWPacketizer.h"
-#include "llvm/InitializePasses.h"
+
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "TPCVLIWPacketizer.h"
+#include "llvm/Support/Debug.h"
+
+#include <bitset>
 
 using namespace llvm;
 
+#define DEBUG_TYPE "tpc-unhardware-loops"
+
 namespace llvm {
 FunctionPass *createTPCUnHardwareLoops();
-void initializeTPCUnHardwareLoopsPass(PassRegistry&);
-}
+void initializeTPCUnHardwareLoopsPass(PassRegistry &);
+} // namespace llvm
 
 static const char PassDescription[] = "TPC UnHardware Loops";
 static const char PassName[] = "tpc-unhardware-loops";
 
 // Flag to disable register balancing.
-static cl::opt<bool>
-EnableTPCUnHardwareLoops(PassName,
-             cl::desc("transform hardware loops in usual loops"),
-             cl::init(true), cl::Hidden);
+static cl::opt<bool> EnableTPCUnHardwareLoops(
+    PassName, cl::desc("transform hardware loops in usual loops"),
+    cl::init(true), cl::Hidden);
 
-static cl::opt<bool>  // debugging purposes
-    ForceUnHardwareLoops("tpc-force-unhardware-loops",
-                             cl::desc("transform hardware lops in usual loops of any size"),
-                             cl::init(false), cl::Hidden);
+static cl::opt<bool> // debugging purposes
+    ForceUnHardwareLoops(
+        "tpc-force-unhardware-loops",
+        cl::desc("transform hardware lops in usual loops of any size"),
+        cl::init(false), cl::Hidden);
+
+static cl::opt<unsigned> UnHardwareInstructionsMinCount(
+    "tpc-unhardware-loops-limit", cl::init(1950), cl::Hidden,
+    cl::Optional,
+    cl::desc("Minimum size of machine loop in instructions to be converted "
+             "from hardware form to software form"));
 
 #define EMPTYREF (unsigned)(~0)
-#define BUNDLE_EXCEED_LIMIT 1950
-#define PRECOUNT 4 // operand number before loop counts
 
-
+static unsigned getLoopRefOrDef(const unsigned Ref, const unsigned Default) {
+  assert(Default != EMPTYREF);
+  return Ref != EMPTYREF ? Ref : Default;
+}
 
 namespace {
 class TPCUnHardwareLoops : public MachineFunctionPass {
   MachineFunction *MF = nullptr;
-  MachineRegisterInfo *MRI = nullptr;
+  const TPCSubtarget *TST = nullptr;
   const TargetInstrInfo *TII = nullptr;
-  unsigned NumReplaced = 0;
 
 public:
   static char ID;
   TPCUnHardwareLoops() : MachineFunctionPass(ID) {
     initializeTPCUnHardwareLoopsPass(*PassRegistry::getPassRegistry());
-    HII = nullptr;
-    HRI = nullptr;
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<MachineBranchProbabilityInfo>();
-    AU.addRequired<MachineDominatorTree>();
     AU.addRequired<MachineLoopInfo>();
-    AU.addPreserved<MachineDominatorTree>();
     AU.addPreserved<MachineLoopInfo>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
@@ -86,67 +82,71 @@ public:
   bool runOnMachineFunction(MachineFunction &MF) override;
 
 private:
-
-  typedef struct {
-    MachineInstr *StartInstr;
-    MachineInstr *EndInstr;
-    int LoopCount;
-    int NewCount;
-    unsigned nest;
-    unsigned InstrNumber;
-    unsigned sp;
+  struct TLoopFrame {
+    MachineInstr *StartInstr = nullptr;
+    MachineInstr *EndInstr = nullptr;
+    Register LoopCounter;
+    Register NewLoopCounter;
+    unsigned InstrNumber = 0;
+    unsigned SPRegNum = 0;
     // Tree references
-    unsigned UpLoop;
-    unsigned RightLoop;
-    unsigned DownLoop;
-    unsigned LastClosedSon;
-    SmallSet<MachineInstr*, 16> LoopRegInstr;
-    bool spoiled;
-    bool transform;
-  } TLoopFrame;
+    unsigned UpLoop = EMPTYREF;
+    unsigned RightLoop = EMPTYREF;
+    unsigned DownLoop = EMPTYREF;
+    unsigned LastClosedSon = EMPTYREF;
+    SmallSet<MachineInstr *, 16> LoopRegInstr;
+    bool Spoiled = false;
+    bool Transform = false;
+  };
 
-  const TPCInstrInfo *HII;
-  const TPCRegisterInfo *HRI;
-
-  unsigned limitsize = BUNDLE_EXCEED_LIMIT; // may be corrected
-  bool nomorelimitcorrection = false;
   unsigned CurrentTopLoop = EMPTYREF;
-  unsigned SPScale;
-  bool AtLeastOneLoopWasToTRansform = false;
-  SmallVector<TLoopFrame, 64> hwloops;
-  SmallSet<unsigned, 32> newroots;
-  SmallSet<MachineInstr *, 16> AlreadyUpdated;
+  std::bitset<16> OccupiedSPRegNumbers; // SP0 .. SP15
+  SmallVector<TLoopFrame, 64> HWLoops;
 
-  void InitSPScale(void);
-  bool SPScaleEmpty(void);
-  void ExcludeSPReg(unsigned nreg);
-  unsigned GiveSPScaleReg(void);
-  void TakeSPScaleReg(unsigned nreg);
-  bool TransformHWLoopBack(unsigned int, MachineFunction & MF);
-  void CheckDefUsedInLoopTunes(MachineOperand &MO, unsigned curl);
-  void ProcessNotLoopInstr(MachineInstr *MI);
-  bool IsLoopTreeSpoiled(unsigned rooti);
-  void MarkTreeAsSpoiled(unsigned rooti);
-  void EscalateSpoiled(void);
-  bool LoopToTransform(unsigned rooti);
-  void MarkTreeToTransform(unsigned rooti);
-  void MarkTreeToTransformUp(unsigned rooti);
-  void EscalateTransform(void);
-  void ProcessStartLoop(MachineInstr *MI, unsigned nest_count,
-                        unsigned instr_count);
-  unsigned ProcessEndLoop(MachineInstr *MI, unsigned instr_count);
-  void SetRight(unsigned endloop);
-  unsigned FindElderBrother(unsigned endloop);
-  unsigned ReachRight(unsigned leftmost);
-  void SetNewRoots(unsigned RootFrom);
-  void SetNewCounts(void);
-  void SetHWCount(unsigned root, int count);
-  void SetSoftCounts(unsigned RootFrom,unsigned count);
-  void ReplaceCounts(unsigned root);
+  void transformHWLoopBack(unsigned L);
+  void checkDefUsedInLoopTunes(const MachineOperand &MO, unsigned L);
+  void processNotLoopInstr(MachineInstr &MI);
+  bool isLoopTreeSpoiled(unsigned RootL);
+  void markTreeAsSpoiled(unsigned RootL);
+  void escalateSpoiled();
+  void markTreeToTransformUp(unsigned L);
+  void processStartLoop(MachineInstr &MI, unsigned MICount);
+  unsigned processEndLoop(MachineInstr &MI, unsigned MICount);
+  void setRight(unsigned EndLoop);
+  unsigned findElderBrother(unsigned EndLoop);
+  unsigned reachRight(unsigned LeftMost);
+  bool isTopMostHWLoop(unsigned L) const;
+  void setNewCounts();
+  void setHWCount(unsigned RootL, Register Counter);
+  void setSoftCounts(unsigned RootFrom, Register Counter);
+
+  /// Parse function and construct HWLoops tree data.
+  void constructHWLoopsTree();
+
+  /// Mark hw loops that to transform to sw form.
+  void markLoopsToUnHardware();
+
+  /// Check if there is a hw loop marked for transformation to sw form.
+  bool hasLoopToUnHardware();
+
+  /// Transform marked hw loops to sw form.
+  void unHardwareLoops();
+
+  struct CountersReplacementCtx {
+    SmallSet<MachineInstr *, 16> UpdatedMIs;
+    SmallVector<Register, 4> TransReg;
+  };
+
+  /// Recursively replace loops counters usage after transformation.
+  void replaceCounts(CountersReplacementCtx &Ctx, unsigned RootL = 0);
+
+  /// Debug dump hw loops tree
+  void dumpHWLoops();
+  void dumpHWLoop(unsigned L, unsigned Indent);
 };
-}
+} // namespace
 
-char  TPCUnHardwareLoops::ID = 0;
+char TPCUnHardwareLoops::ID = 0;
 
 INITIALIZE_PASS(TPCUnHardwareLoops, PassName, PassDescription, false, false)
 
@@ -154,99 +154,58 @@ FunctionPass *llvm::createTPCUnHardwareLoops() {
   return new TPCUnHardwareLoops();
 }
 
-static int getSPnumber(Register spr) { 
-  int ret = -1;
-  switch (spr) { 
-  case TPC::SP0 : ret =  0; break;
-  case TPC::SP1 : ret =  1; break;
-  case TPC::SP2 : ret =  2; break;
-  case TPC::SP3 : ret =  3; break;
-  case TPC::SP4 : ret =  4; break;
-  case TPC::SP5 : ret =  5; break;
-  case TPC::SP6 : ret =  6; break;
-  case TPC::SP7 : ret =  7; break;
-  case TPC::SP8 : ret =  8; break;
-  case TPC::SP9 : ret =  9; break;
-  case TPC::SP10: ret = 10; break;
-  case TPC::SP11: ret = 11; break;
-  case TPC::SP12: ret = 12; break;
-  case TPC::SP13: ret = 13; break;
-  case TPC::SP14: ret = 14; break;
-  case TPC::SP15: ret = 15; break;
+// TODO: SP0 is incorrectly supported here.
+static int getSPNumber(Register SPReg) {
+  switch (SPReg) {
+  case TPC::SPRF_TRUE:
+    return 0;
+  case TPC::SP1:
+  case TPC::SP2:
+  case TPC::SP3:
+  case TPC::SP4:
+  case TPC::SP5:
+  case TPC::SP6:
+  case TPC::SP7:
+  case TPC::SP8:
+  case TPC::SP9:
+  case TPC::SP10:
+  case TPC::SP11:
+  case TPC::SP12:
+  case TPC::SP13:
+  case TPC::SP14:
+  case TPC::SP15:
+    return SPReg - TPC::SP0;
   }
-  return ret;
+  return -1;
 }
 
-static Register getSPRegister(int nreg) {
-  Register ret = 0;
-  switch (nreg) { 
-  case  0: ret = TPC::SP0  ; break;
-  case  1: ret = TPC::SP1  ; break;
-  case  2: ret = TPC::SP2  ; break;
-  case  3: ret = TPC::SP3  ; break;
-  case  4: ret = TPC::SP4  ; break;
-  case  5: ret = TPC::SP5  ; break;
-  case  6: ret = TPC::SP6  ; break;
-  case  7: ret = TPC::SP7  ; break;
-  case  8: ret = TPC::SP8  ; break;
-  case  9: ret = TPC::SP9  ; break;
-  case 10: ret = TPC::SP10 ; break;
-  case 11: ret = TPC::SP11 ; break;
-  case 12: ret = TPC::SP12 ; break;
-  case 13: ret = TPC::SP13 ; break;
-  case 14: ret = TPC::SP14 ; break;
-  case 15: ret = TPC::SP15 ; break;
+// TODO: SP0 is incorrectly supported here.
+static Register getSPRegister(const int RegNum) {
+  assert(0 <= RegNum && RegNum < 16);
+  if (RegNum == 0)
+    return TPC::SPRF_TRUE;
+  return TPC::SP0 + RegNum;
+}
+
+static unsigned getCMPCode(const MachineOperand &LoopUpperBound,
+                           const unsigned CmpMode) {
+  const bool IsImm = LoopUpperBound.isImm();
+  switch (CmpMode) {
+    // clang-format off
+  case TPCII::LoopEQ: return IsImm ? TPC::CMP_EQsip   : TPC::CMP_EQssp;
+  case TPCII::LoopNE: return IsImm ? TPC::CMP_NEQsip  : TPC::CMP_NEQssp;
+  case TPCII::LoopLT: return IsImm ? TPC::CMP_LESSsip : TPC::CMP_LESSssp;
+  case TPCII::LoopLE: return IsImm ? TPC::CMP_LEQsip  : TPC::CMP_LEQssp;
+  case TPCII::LoopGT: return IsImm ? TPC::CMP_GRTsip  : TPC::CMP_GRTssp;
+  case TPCII::LoopGE: return IsImm ? TPC::CMP_GEQsip  : TPC::CMP_GEQssp;
+    // clang-format on
   }
-  return ret;
+  llvm_unreachable("Incorrect cmp mode");
 }
 
-static int SRegToNumber(Register sr) {
-  int ret = -1;
-  switch (sr) {
-  case TPC::S32: ret = 32; break;
-  case TPC::S33: ret = 33; break;
-  case TPC::S34: ret = 34; break;
-  case TPC::S35: ret = 35; break;
-  }
-  return ret;
-}
-
-static Register NumberToSReg(unsigned  sr) {
-  int ret = -1;
-  switch (sr) {
-  case 32: ret = TPC::S32; break;
-  case 33: ret = TPC::S33; break;
-  case 34: ret = TPC::S34; break;
-  case 35: ret = TPC::S35; break;
-  }
-  return ret;
-}
-
-static unsigned  GiveCMPCode(MachineOperand *loopupper, unsigned loopcmp) {
-  bool isI = loopupper->isImm();
-  switch (loopcmp) {
-  case TPCII::LoopEQ:
-      return (isI)?TPC::CMP_EQsip : TPC::CMP_EQssp;
-    case TPCII::LoopNE:
-      return (isI)?TPC::CMP_NEQsip : TPC::CMP_NEQssp;
-    case TPCII::LoopLT:
-      return (isI)?TPC::CMP_LESSsip : TPC::CMP_LESSssp;
-    case TPCII::LoopLE:
-      return (isI)?TPC::CMP_LEQsip : TPC::CMP_LEQssp;
-    case TPCII::LoopGT:
-      return (isI) ? TPC::CMP_GRTsip : TPC::CMP_GRTssp;
-    case TPCII::LoopGE: {
-      return (isI) ? TPC::CMP_GEQsip : TPC::CMP_GEQssp;
-    }
-    default :
-      llvm_unreachable("Incorrect cmp mode");
-    }
-  return TPC::INSTRUCTION_LIST_END;
-}
-
-static bool isLoopInstr(MachineInstr *MI) {
-  switch (MI->getOpcode()) {
-  case TPC::LOOP1iiip :
+static bool isLoopInstr(const MachineInstr &MI) {
+  switch (MI.getOpcode()) {
+  case TPC::LOOP1iiip:
   case TPC::LOOP1iisp:
   case TPC::LOOP1isip:
   case TPC::LOOP1issp:
@@ -275,8 +234,7 @@ static bool isLoopInstr(MachineInstr *MI) {
   return false;
 }
 
-
-static bool isPrLoopInstr(MachineInstr *MI) {
+static bool isPrLoopInstr(const MachineInstr *MI) {
   switch (MI->getOpcode()) {
   case TPC::LOOP1iiip:
   case TPC::LOOP1iisp:
@@ -299,187 +257,123 @@ static bool isPrLoopInstr(MachineInstr *MI) {
   return false;
 }
 
-static bool MOPIsLoopRegUse(MachineOperand *operand) { 
-  if (operand->isReg() && operand->isUse()) {
-    Register lreg = operand->getReg();
-    return SRegToNumber(lreg) > 0;
-  }
-  return false;
+static bool isLoopRegUse(const MachineOperand &MO, const TPCSubtarget &ST) {
+  return MO.isReg() && MO.isUse() && ST.isHWLoopReg(MO.getReg());
 }
 
-
-static bool InstrWithLoopReg(MachineInstr *instr) {
-  unsigned nop = instr->getNumOperands();
-  unsigned opc = instr->getOpcode();
-  if (opc == TPC::LOOPEND) {
+static bool isWithLoopReg(const MachineInstr &MI, const TPCSubtarget &ST) {
+  if (MI.getOpcode() == TPC::LOOPEND)
     return false;
-  }
-  if (isLoopInstr(instr)) {
-    nop = 3;
-  }
-  for (unsigned int i = 0; i < nop; i++) {
-    if (MOPIsLoopRegUse(&instr->getOperand(i))) {
-      return true;
-    }
-  }
-  return false;
+
+  return std::any_of(
+      MI.operands_begin(),
+      MI.operands_begin() + (isLoopInstr(MI) ? 3 : MI.getNumOperands()),
+      [&](const MachineOperand &MO) { return isLoopRegUse(MO, ST); });
 }
 
-void TPCUnHardwareLoops::InitSPScale(void) { 
-  SPScale = 0xfffe; // from sp1 to sp15
-}
+void TPCUnHardwareLoops::transformHWLoopBack(unsigned L) {
+  const TLoopFrame &LF = HWLoops[L];
+  MachineInstr *const StartInstr = LF.StartInstr;
+  MachineInstr *const EndInstr = LF.EndInstr;
+  const Register LoopCount = LF.LoopCounter;
 
-bool TPCUnHardwareLoops::SPScaleEmpty(void) {
-  return SPScale == 0; 
-}
-
-
-void TPCUnHardwareLoops::ExcludeSPReg(unsigned nreg) { 
-  SPScale = ~(1 << nreg) & SPScale; 
-}
-
-unsigned TPCUnHardwareLoops::GiveSPScaleReg(void) { 
-  int nreg = -1;
-  unsigned ws = SPScale;
-  while (ws) {
-    ws = ws >> 1;
-    nreg++;
-  }
-  assert(nreg >= 0 && "No more SP regs,Think about SP speel");
-  ExcludeSPReg(nreg);
-  return nreg;
-}
-
-void TPCUnHardwareLoops::TakeSPScaleReg(unsigned nreg) { 
-  SPScale |= (1 << nreg); 
-}
-
-
-bool  TPCUnHardwareLoops::TransformHWLoopBack(unsigned int i_loop,
-                                             MachineFunction &Func) {
-  TLoopFrame *lf = &hwloops[i_loop];
-  if (lf->spoiled || !lf->transform) {
-    return false;
-  }
-  MF = &Func;
-  MRI = &MF->getRegInfo();
-  TII = MF->getSubtarget().getInstrInfo();
-  MachineInstr *StartInstr = lf->StartInstr;
-  MachineInstr *EndInstr = lf->EndInstr;
-  Register LoopCount = NumberToSReg(lf->LoopCount);
-  auto lri = hwloops[i_loop].LoopRegInstr;
-  if (lri.find(StartInstr) != lri.end()) {
-    lri.erase(StartInstr);
-  }
-
-  Register regcmp;
-  MachineBasicBlock *bbloop = EndInstr->getParent();
-  MachineBasicBlock* AfterLoop  = bbloop->getNextNode();
-  MachineBasicBlock *bbpre = StartInstr->getParent();
-  MachineBasicBlock *Loop1stBB = bbpre->getNextNode();
-  MachineOperand init = StartInstr->getOperand(0);
-  MachineOperand upb = StartInstr->getOperand(1);
-  MachineOperand step = StartInstr->getOperand(2);
-  unsigned cmpk = StartInstr->getOperand(3).getImm();
+  MachineBasicBlock *const BBLoop = EndInstr->getParent();
+  MachineBasicBlock *const AfterLoop = BBLoop->getNextNode();
+  MachineBasicBlock *const BBPre = StartInstr->getParent();
+  MachineBasicBlock *const Loop1stBB = BBPre->getNextNode();
+  const MachineOperand Init = StartInstr->getOperand(0);
+  const MachineOperand UpB = StartInstr->getOperand(1);
+  const MachineOperand Step = StartInstr->getOperand(2);
+  unsigned CmpK = StartInstr->getOperand(3).getImm();
   MachineInstrBuilder MIB;
-  MachineBasicBlock::iterator nmis = bbpre->instr_end();
+  const MachineBasicBlock::iterator NMIs = BBPre->instr_end();
 
   AfterLoop->setLabelMustBeEmitted();
-  bbloop->setLabelMustBeEmitted();
+  BBLoop->setLabelMustBeEmitted();
   if (isPrLoopInstr(StartInstr)) {
     MachineOperand LoopPred = StartInstr->getOperand(5);
     MachineOperand LoopPolar = StartInstr->getOperand(6);
-    bool polar = LoopPolar.getImm();
+    bool Polar = LoopPolar.getImm();
     // Jump due to loop predicate
-    MIB = BuildMI(*bbpre, nmis, StartInstr->getDebugLoc(), TII->get(TPC::JMPR));
+    MIB = BuildMI(*BBPre, NMIs, StartInstr->getDebugLoc(), TII->get(TPC::JMPR));
     MIB.addMBB(AfterLoop);
     MIB.add(LoopPred);
-    MIB.addImm(!polar);
+    MIB.addImm(!Polar);
   }
 
   const MCInstrDesc &DeskMOVinit =
-      TII->get(init.isImm() ? TPC::MOVsip : TPC::MOVssp);
-  MIB = BuildMI(*bbpre, nmis, StartInstr->getDebugLoc(), DeskMOVinit,
-                LoopCount);
-  MIB.add(init);
+      TII->get(Init.isImm() ? TPC::MOVsip : TPC::MOVssp);
+  MIB =
+      BuildMI(*BBPre, NMIs, StartInstr->getDebugLoc(), DeskMOVinit, LoopCount);
+  MIB.add(Init);
   MIB.addImm(TPCII::OpType::INT32);
   MIB.addImm(0);
   MIB.addReg(LoopCount, RegState::Undef);
-  MIB.addReg(TPC::SP0);
+  MIB.addReg(TPC::SPRF_TRUE);
   MIB.addImm(0);
 
-  hwloops[i_loop].LoopRegInstr.insert(MIB.getInstr());
+  HWLoops[L].LoopRegInstr.insert(MIB.getInstr());
 
   // CMP now
-  regcmp = getSPRegister(lf->sp);
-  if (!regcmp)
-  assert(regcmp);
+  Register RegCmp = getSPRegister(LF.SPRegNum);
+  assert(RegCmp);
 
-  unsigned cmpcode = GiveCMPCode(&upb, cmpk);
-  MIB = BuildMI(*bbpre, nmis, StartInstr->getDebugLoc(), TII->get(cmpcode),
-                regcmp);
+  unsigned CmpCode = getCMPCode(UpB, CmpK);
+  MIB = BuildMI(*BBPre, NMIs, StartInstr->getDebugLoc(), TII->get(CmpCode),
+                RegCmp);
   MIB.addReg(LoopCount);
-  MachineOperand hereUpb = upb;
-  if (hereUpb.isReg()) {
-    hereUpb.setIsKill(false);
+  MachineOperand HereUpB = UpB;
+  if (HereUpB.isReg()) {
+    HereUpB.setIsKill(false);
   }
-  MIB.add(hereUpb);
+  MIB.add(HereUpB);
   MIB.addImm(TPCII::OpType::INT32);
   MIB.addImm(0);
-  MIB.addReg(regcmp, RegState::Undef);
-  MIB.addReg(TPC::SP0);
+  MIB.addReg(RegCmp, RegState::Undef);
+  MIB.addReg(TPC::SPRF_TRUE);
   MIB.addImm(0);
 
-  hwloops[i_loop].LoopRegInstr.insert(MIB.getInstr());
+  HWLoops[L].LoopRegInstr.insert(MIB.getInstr());
 
   // JMP now
-  unsigned jump_polarity = 1; 
-  MIB = BuildMI(*bbpre, nmis, StartInstr->getDebugLoc(), TII->get(TPC::JMPR));
+  MIB = BuildMI(*BBPre, NMIs, StartInstr->getDebugLoc(), TII->get(TPC::JMPR));
   MIB.addMBB(AfterLoop);
-  MIB.addReg(regcmp, RegState::Kill);
-  MIB.addImm(jump_polarity);
+  MIB.addReg(RegCmp, RegState::Kill);
+  MIB.addImm(1); // Polarity.
 
-  regcmp = getSPRegister(lf->sp);
-  assert(regcmp);
+  RegCmp = getSPRegister(LF.SPRegNum);
+  assert(RegCmp);
 
- // need to take right upper and step
-  unsigned ne = EndInstr->getNumOperands();
-  unsigned num_upper = 0;
-  MachineOperand MoUpper=upb, MoStep=step;
- 
-  bool upper_is_imm = MoUpper.isImm();
-  for (unsigned i = 0; i < ne; i++) {
-    MachineOperand MO = EndInstr->getOperand(i);
-    if (MO.isReg() && MO.getReg() == TPC::S35) {
-      num_upper = i;
+  // need to take right upper and Step
+  unsigned NE = EndInstr->getNumOperands();
+  unsigned NumUpper = 0;
+  MachineOperand MoUpper = UpB, MoStep = Step;
+
+  bool UpperIsImm = MoUpper.isImm();
+  for (unsigned I = 0; I < NE; I++) {
+    MachineOperand &MO = EndInstr->getOperand(I);
+    if (MO.isReg() && MO.getReg() == TST->getHWLoopFinalReg()) {
+      NumUpper = I;
       break;
     }
   }
-  // num_upper - must be register for upper
+  if (NumUpper > 0) { // will be deprecated in LLVM 12
+    // NumUpper - must be register for upper
+    if (NumUpper != NE - 1) { // extra args for upper and Step
+      NumUpper++;
+      (UpperIsImm ? MoStep : MoUpper) = EndInstr->getOperand(NumUpper);
 
-  if (num_upper != ne - 1) { // extra args for upper and step
-    num_upper++;
-    MachineOperand MOup = EndInstr->getOperand(num_upper);
-    if (upper_is_imm) { // MOup is step
-      MoStep = MOup;
-    } 
-    else {
-      MoUpper = MOup;
-    }
-
-    if (num_upper == ne - 1) { // no step arg, nothin to do
-    } else {
-      num_upper++;
-      MoStep = EndInstr->getOperand(num_upper);
-      assert(MoStep.isReg());
+      if (NumUpper != NE - 1) {
+        NumUpper++;
+        MoStep = EndInstr->getOperand(NumUpper);
+        assert(MoStep.isReg());
+      }
     }
   }
-
-  MachineBasicBlock::iterator nmia = bbloop->instr_end();
+  MachineBasicBlock::iterator NMIa = BBLoop->instr_end();
   const MCInstrDesc &DeskAdd =
-      TII->get(step.isImm() ? TPC::ADDsip : TPC::ADDssp);
-  MIB = BuildMI(*bbloop, nmia, StartInstr->getDebugLoc(), DeskAdd,
-                LoopCount);
+      TII->get(Step.isImm() ? TPC::ADDsip : TPC::ADDssp);
+  MIB = BuildMI(*BBLoop, NMIa, StartInstr->getDebugLoc(), DeskAdd, LoopCount);
   MIB.addReg(LoopCount);
   if (MoStep.isReg()) {
     MIB.addReg(MoStep.getReg());
@@ -489,468 +383,363 @@ bool  TPCUnHardwareLoops::TransformHWLoopBack(unsigned int i_loop,
   MIB.addImm(TPCII::OpType::INT32);
   MIB.addImm(0);
   MIB.addReg(LoopCount, RegState::Undef);
-  MIB.addReg(TPC::SP0);
+  MIB.addReg(TPC::SPRF_TRUE);
   MIB.addImm(0);
 
-  hwloops[i_loop].LoopRegInstr.insert(MIB.getInstr());
+  HWLoops[L].LoopRegInstr.insert(MIB.getInstr());
 
   // CMP now
- 
-  cmpcode = GiveCMPCode(&upb, cmpk);
-  MIB = BuildMI(*bbloop, nmia, StartInstr->getDebugLoc(), TII->get(cmpcode),
-                regcmp);
+
+  CmpCode = getCMPCode(UpB, CmpK);
+  MIB = BuildMI(*BBLoop, NMIa, StartInstr->getDebugLoc(), TII->get(CmpCode),
+                RegCmp);
   MIB.addReg(LoopCount);
-  if (!upper_is_imm) {
+  if (!UpperIsImm) {
     MIB.addReg(MoUpper.getReg());
   } else {
-    MIB.addImm(upb.getImm());
+    MIB.addImm(UpB.getImm());
   }
   MIB.addImm(TPCII::OpType::INT32);
   MIB.addImm(0);
-  MIB.addReg(regcmp, RegState::Undef);
-  MIB.addReg(TPC::SP0);
+  MIB.addReg(RegCmp, RegState::Undef);
+  MIB.addReg(TPC::SPRF_TRUE);
   MIB.addImm(0);
 
-  auto cmpi = MIB.getInstr();
-  hwloops[i_loop].LoopRegInstr.insert(cmpi);
+  HWLoops[L].LoopRegInstr.insert(MIB.getInstr());
   // JMP now
-  MIB = BuildMI(*bbloop, nmia, StartInstr->getDebugLoc(),
-                TII->get(TPC::JMPR));
+  MIB = BuildMI(*BBLoop, NMIa, StartInstr->getDebugLoc(), TII->get(TPC::JMPR));
   MIB.addMBB(Loop1stBB);
-  MIB.addReg(regcmp, RegState::Kill);
+  MIB.addReg(RegCmp, RegState::Kill);
   MIB.addImm(0);
-
-
-
 
   MachineLoopInfo &MLI = getAnalysis<MachineLoopInfo>();
-  auto *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
-  auto *MBPI = &getAnalysis<MachineBranchProbabilityInfo>();
-  TPCPacketizerList Packetizer(Func, MLI, AA, MBPI);
+  auto *const AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+  auto *const MBPI = &getAnalysis<MachineBranchProbabilityInfo>();
+  TPCPacketizerList Packetizer(*MF, MLI, AA, MBPI);
   Packetizer.PacketNum = 0;
-  MachineBasicBlock *lu = bbpre;
-  Packetizer.PacketizeMIs(lu, lu->begin(), lu->end());
+  Packetizer.PacketizeMIs(BBPre, BBPre->begin(), BBPre->end());
 
-  for (MachineBasicBlock::iterator mi = lu->begin(), me = lu->end();
-       mi != me;) {
-    MachineBasicBlock::iterator nmi = std::next(mi);
-    MachineInstr *MI = &*mi;
-    if (MI->isBundle() && InstrWithLoopReg(MI)) {
-      hwloops[i_loop].LoopRegInstr.insert(MI);
-    }
-    mi = nmi;
+  for (MachineInstr &MI : *BBPre) {
+    if (MI.isBundle() && isWithLoopReg(MI, *TST))
+      HWLoops[L].LoopRegInstr.insert(&MI);
   }
- 
-  MachineBasicBlock *lb = bbloop;
-  Packetizer.PacketizeMIs(lb, lb->begin(), lb->end());
-  for (MachineBasicBlock::iterator mi = lb->begin(), me = lb->end();
-       mi != me;) {
-    MachineBasicBlock::iterator nmi = std::next(mi);
-    MachineInstr *MI = &*mi;
-    if (MI->isBundle() && InstrWithLoopReg(MI)) {
-      unsigned last_innermost;
-      last_innermost = hwloops[i_loop].LastClosedSon;
-      if (last_innermost == EMPTYREF) {
-        last_innermost = i_loop;
-      }
-      hwloops[last_innermost].LoopRegInstr.insert(MI);
+
+  Packetizer.PacketizeMIs(BBLoop, BBLoop->begin(), BBLoop->end());
+  for (MachineInstr &MI : *BBLoop) {
+    if (MI.isBundle() && isWithLoopReg(MI, *TST)) {
+      unsigned LI = getLoopRefOrDef(HWLoops[L].LastClosedSon, L);
+      HWLoops[LI].LoopRegInstr.insert(&MI);
     }
-    mi = nmi;
   }
+
   EndInstr->removeFromParent();
   StartInstr->removeFromParent();
-
-  return true;
 }
 
-
-
-void TPCUnHardwareLoops::CheckDefUsedInLoopTunes(MachineOperand &MO,
-                                                 unsigned curl) {
-  if (curl == EMPTYREF) {
+void TPCUnHardwareLoops::checkDefUsedInLoopTunes(const MachineOperand &MO,
+                                                 const unsigned L) {
+  if (L == EMPTYREF)
     return;
-  }
-  TLoopFrame lf = hwloops[curl];
-/*
-*/
-  // using is permissable if it is SAVE/RESTORE action
 
-/* used register as count initializer can be used inside loop
-  MachineOperand init = lf.StartInstr->getOperand(0);
-  if (init.isReg() && !init.isKill() && init.getReg() == MO.getReg()) {
-    hwloops[curl].spoiled = true;
-    assert(0);
-  }
-*/
 #if 1 // need to hide issue G-1926
-  MachineOperand upb = lf.StartInstr->getOperand(1);
-  MachineOperand step = lf.StartInstr->getOperand(2);
-  if (upb.isReg() && upb.getReg() == MO.getReg()) {
-    hwloops[curl].spoiled = true;
-   // assert(0);
-  }
-  if (step.isReg() && step.getReg() == MO.getReg()) {
-    hwloops[curl].spoiled = true;
-   // assert(0);
-  }
+  const MachineOperand &Bound = HWLoops[L].StartInstr->getOperand(1);
+  const MachineOperand &IncOp = HWLoops[L].StartInstr->getOperand(2);
+  if ((Bound.isReg() && Bound.getReg() == MO.getReg()) ||
+      (IncOp.isReg() && IncOp.getReg() == MO.getReg()))
+    HWLoops[L].Spoiled = true;
 #endif
-  unsigned upl = hwloops[curl].UpLoop;
-  CheckDefUsedInLoopTunes(MO, upl);
+  checkDefUsedInLoopTunes(MO, HWLoops[L].UpLoop);
 }
 
+void TPCUnHardwareLoops::markTreeAsSpoiled(const unsigned RootL) {
+  if (RootL == EMPTYREF)
+    return;
+  HWLoops[RootL].Spoiled = true;
+  markTreeAsSpoiled(HWLoops[RootL].DownLoop);  // The eldest son.
+  markTreeAsSpoiled(HWLoops[RootL].RightLoop); // Brother.
+}
 
-void TPCUnHardwareLoops::ProcessNotLoopInstr(MachineInstr *MI) {
-  for (MachineInstr::mop_iterator MOI = MI->operands_begin(),
-                                  MOE = MI->operands_end();
-       MOI != MOE; ++MOI) {
-    MachineOperand &MO = *MOI;
-    // skip loop instr for analysis
+void TPCUnHardwareLoops::escalateSpoiled() {
+  assert(!HWLoops.empty());
+
+  // no registers for counts comparing
+  // will not be transformed until sp speel will be supported
+  if (OccupiedSPRegNumbers.all())
+    HWLoops[0].Spoiled = true;
+
+  for (unsigned L = 0; L != EMPTYREF; L = HWLoops[L].RightLoop) {
+    if (isLoopTreeSpoiled(L))
+      markTreeAsSpoiled(L);
+  }
+}
+
+void TPCUnHardwareLoops::processNotLoopInstr(MachineInstr &MI) {
+  for (MachineOperand &MO : MI.operands()) {
     if (MO.isReg()) {
-      int spn = getSPnumber(MO.getReg());
-      if (spn >= 0) {
-        if (MO.isKill()) {
-          TakeSPScaleReg(spn); // mark using SP register
-        }
-        if (MO.isDef()) {
-          ExcludeSPReg(spn); // mark using SP register
-        }
+      int SPNum = getSPNumber(MO.getReg());
+      if (SPNum >= 0) {
+        if (MO.isKill())
+          OccupiedSPRegNumbers.set(SPNum, false);
+        if (MO.isDef())
+          OccupiedSPRegNumbers.set(SPNum, true);
       }
       if (MO.isDef()) {
         // need to check if this def is in used in loop instruction
         // (init,upper,step) must not be so if HW looping was correct
-        CheckDefUsedInLoopTunes(MO, CurrentTopLoop);
+        checkDefUsedInLoopTunes(MO, CurrentTopLoop);
       }
     }
   }
 }
 
-
-bool TPCUnHardwareLoops::IsLoopTreeSpoiled(unsigned rooti) { 
-  if (rooti == EMPTYREF) return false;
-  bool spoiled = hwloops[rooti].spoiled;
-  if (spoiled) return true;
-  unsigned elderson = hwloops[rooti].DownLoop;
-  unsigned brother = hwloops[rooti].RightLoop;
-  spoiled |= IsLoopTreeSpoiled(elderson);
-  spoiled |= IsLoopTreeSpoiled(brother);
-  return spoiled;
+bool TPCUnHardwareLoops::isLoopTreeSpoiled(const unsigned RootL) {
+  if (RootL == EMPTYREF)
+    return false;
+  return HWLoops[RootL].Spoiled ||                     // Self.
+         isLoopTreeSpoiled(HWLoops[RootL].DownLoop) || // The eldest son.
+         isLoopTreeSpoiled(HWLoops[RootL].RightLoop);  // Brother.
 }
 
-void TPCUnHardwareLoops::MarkTreeAsSpoiled(unsigned rooti) {
-  if (rooti == EMPTYREF) return;
-  hwloops[rooti].spoiled = true;
-  unsigned elderson = hwloops[rooti].DownLoop;
-  unsigned brother = hwloops[rooti].RightLoop;
-  MarkTreeAsSpoiled(elderson);
-  MarkTreeAsSpoiled(brother);
+void TPCUnHardwareLoops::markTreeToTransformUp(unsigned L) {
+  for (; L != EMPTYREF; L = HWLoops[L].UpLoop)
+    HWLoops[L].Transform = true;
 }
 
-void TPCUnHardwareLoops::EscalateSpoiled(void) {
-  if (hwloops.empty())
-      return;
-  unsigned FirstLoop = 0;
-  unsigned CurrTree = FirstLoop;
-  if (SPScale == 0) {//no registers for counts comparing
-    // will not be transforfed until sp speel will be supported
-    hwloops[CurrTree].spoiled = true;
+unsigned TPCUnHardwareLoops::reachRight(unsigned LeftMost) {
+  unsigned L = LeftMost;
+  for (; LeftMost != EMPTYREF; LeftMost = HWLoops[LeftMost].RightLoop)
+    L = LeftMost;
+  return L;
+}
+
+unsigned TPCUnHardwareLoops::findElderBrother(const unsigned EndLoop) {
+  const unsigned Parent = HWLoops[EndLoop].UpLoop;
+  const unsigned Left = Parent != EMPTYREF ? HWLoops[Parent].DownLoop : 0;
+  return Left == EndLoop ? EMPTYREF : reachRight(Left);
+}
+
+void TPCUnHardwareLoops::setRight(const unsigned EndLoop) {
+  unsigned Brother = findElderBrother(EndLoop);
+  if (Brother != EMPTYREF)
+    HWLoops[Brother].RightLoop = EndLoop;
+}
+
+void TPCUnHardwareLoops::processStartLoop(MachineInstr &MI,
+                                          const unsigned MICount) {
+  const unsigned LastIx = HWLoops.size();
+
+  TLoopFrame LF;
+  LF.StartInstr = &MI;
+  LF.LoopCounter = MI.getOperand(MI.getNumExplicitOperands()).getReg();
+  LF.InstrNumber = MICount;
+  LF.Spoiled = false;
+  LF.RightLoop = EMPTYREF;
+  LF.UpLoop = CurrentTopLoop;
+  LF.DownLoop = EMPTYREF;
+  LF.LastClosedSon = EMPTYREF;
+  if (CurrentTopLoop != EMPTYREF &&
+      HWLoops[CurrentTopLoop].DownLoop == EMPTYREF) {
+    HWLoops[CurrentTopLoop].DownLoop = LastIx;
   }
-  do {
-    bool TreeSpoiled = IsLoopTreeSpoiled(CurrTree);
-    if (TreeSpoiled) {
-      MarkTreeAsSpoiled(CurrTree);
-    }
-    CurrTree = hwloops[CurrTree].RightLoop;
-  } while (CurrTree != EMPTYREF);
+  if (isWithLoopReg(MI, *TST)) {
+    LF.LoopRegInstr.insert(&MI);
+  }
+  HWLoops.push_back(LF);
+  setRight(LastIx);
+
+  CurrentTopLoop = LastIx;
+
+  const unsigned Grand = HWLoops[CurrentTopLoop].UpLoop;
+  if (Grand != EMPTYREF)
+    HWLoops[Grand].LastClosedSon = EMPTYREF;
 }
 
-bool TPCUnHardwareLoops::LoopToTransform(unsigned rooti) {
-  if (rooti == EMPTYREF) return false;
-  bool transform = hwloops[rooti].transform;
-  if (transform)
-    return true;
-  unsigned elderson = hwloops[rooti].DownLoop;
-  unsigned brother = hwloops[rooti].RightLoop;
-  transform |= LoopToTransform(elderson);
-  transform |= LoopToTransform(brother);
-  return transform;
-}
-
-void TPCUnHardwareLoops::MarkTreeToTransform(unsigned rooti) {
-    if (rooti == EMPTYREF) return;
-  hwloops[rooti].transform = true;
-  unsigned elderson = hwloops[rooti].DownLoop;
-  unsigned brother = hwloops[rooti].RightLoop;
-  MarkTreeToTransform(elderson);
-  MarkTreeToTransform(brother);
-}
-
-void TPCUnHardwareLoops::MarkTreeToTransformUp(unsigned rooti) {
-  if (rooti == EMPTYREF)
-    return;
-  hwloops[rooti].transform = true;
-  unsigned father = hwloops[rooti].UpLoop;
-  MarkTreeToTransformUp(father);
-}
-
-void TPCUnHardwareLoops::EscalateTransform(void) {
-  if (hwloops.empty()) return;
-  unsigned FirstLoop = 0;
-  unsigned CurrTree = FirstLoop;
-  do {
-    if (LoopToTransform(CurrTree)) {
-      MarkTreeToTransform(CurrTree);
-    }
-    CurrTree = hwloops[CurrTree].RightLoop;
-  } while (CurrTree != EMPTYREF);
-}
-
-unsigned TPCUnHardwareLoops::ReachRight(unsigned leftmost) {
-  unsigned lastnon = leftmost;
-  while (leftmost != EMPTYREF) {
-    lastnon = leftmost;
-    leftmost = hwloops[leftmost].RightLoop;
-  }
-  return lastnon;
-}
-
-unsigned TPCUnHardwareLoops::FindElderBrother(unsigned endloop) {
-  unsigned Parent = hwloops[endloop].UpLoop;
-  unsigned left;
-  if (Parent != EMPTYREF) {
-    left = hwloops[Parent].DownLoop;
-  } else { // top level
-    left = 0;
-  }
-  if (left == endloop) {
-    return EMPTYREF;
-  }
-  unsigned right = ReachRight(left);
-  return right;
-}
-
-void TPCUnHardwareLoops::SetRight(unsigned endloop) {
-  unsigned brother = FindElderBrother(endloop);
-  if (brother != EMPTYREF) {
-    hwloops[brother].RightLoop = endloop;
-  }
-}
-
-void TPCUnHardwareLoops::ProcessStartLoop(MachineInstr *MI, unsigned nest_count,
-                                          unsigned instr_count) {
-  TLoopFrame lf;
-  memset(&lf, 0, sizeof(lf));
-  lf.StartInstr = MI;
-  lf.nest = nest_count;
-  if (isPrLoopInstr(MI))
-    nest_count += 2;
-  Register reg = MI->getOperand(nest_count).getReg();
-  lf.LoopCount = SRegToNumber(reg);
- 
-  lf.InstrNumber = instr_count;
-  lf.spoiled = false;
-  lf.RightLoop = EMPTYREF;
-  lf.UpLoop = EMPTYREF;
-  lf.DownLoop = EMPTYREF;
-  lf.LastClosedSon = EMPTYREF;
-  unsigned lasti = hwloops.size();
-  lf.UpLoop = CurrentTopLoop;
-  if (CurrentTopLoop!=EMPTYREF &&
-    hwloops[CurrentTopLoop].DownLoop == EMPTYREF) {
-    hwloops[CurrentTopLoop].DownLoop = lasti;
-  }
-  if (InstrWithLoopReg(MI)) {
-    lf.LoopRegInstr.insert(MI);
-  }
-  hwloops.push_back(lf);
-  SetRight(lasti);
-
-  CurrentTopLoop = lasti;
-  unsigned int grand = hwloops[CurrentTopLoop].UpLoop;
-  if (grand != EMPTYREF) {
-    hwloops[grand].LastClosedSon = EMPTYREF;
-  }
-}
-
-unsigned TPCUnHardwareLoops::ProcessEndLoop(MachineInstr *MI,
-                                        unsigned instr_count) {
-  unsigned inu;
-  unsigned li = CurrentTopLoop; 
-  hwloops[li].EndInstr = MI;
-  hwloops[li].InstrNumber = inu = instr_count - hwloops[li].InstrNumber + 1;
-  if (ForceUnHardwareLoops) {
-    // correct limitsize for partial transformation
-    if (limitsize == BUNDLE_EXCEED_LIMIT) {
-      //not corrected yet
-      if (inu < limitsize) {
-        limitsize = inu;
-      }
-    }
-  }
-  if (inu >= limitsize) {
-    MarkTreeToTransformUp(li); // now whole tree
-    AtLeastOneLoopWasToTRansform = true;
-  }
-  if (SPScaleEmpty()) {
-    hwloops[li].spoiled = true;
+unsigned TPCUnHardwareLoops::processEndLoop(MachineInstr &MI,
+                                            const unsigned MICount) {
+  const unsigned LI = CurrentTopLoop;
+  HWLoops[LI].EndInstr = &MI;
+  HWLoops[LI].InstrNumber = MICount - HWLoops[LI].InstrNumber + 1;
+  if (OccupiedSPRegNumbers.all()) {
+    HWLoops[LI].Spoiled = true;
   } else {
-    unsigned sp = GiveSPScaleReg();
-    hwloops[li].sp = sp;
-    TakeSPScaleReg(sp);
+    // Plan occupation of the first free SP register
+    unsigned SPNumber = OccupiedSPRegNumbers.size() - 1;
+    while (OccupiedSPRegNumbers.test(SPNumber))
+      --SPNumber;
+    HWLoops[LI].SPRegNum = SPNumber;
+    OccupiedSPRegNumbers.set(SPNumber, true);
   }
-  if (hwloops[li].spoiled) {
-    inu = li;
-    do{
-      hwloops[inu].spoiled = true;
-      inu = hwloops[inu].UpLoop;
-    } while (inu != EMPTYREF);   
+  if (HWLoops[LI].Spoiled) {
+    for (unsigned L = LI; L != EMPTYREF; L = HWLoops[L].UpLoop)
+      HWLoops[L].Spoiled = true;
   }
-  if (ForceUnHardwareLoops && !nomorelimitcorrection && hwloops[li].transform) {
-    unsigned son = hwloops[li].DownLoop;
-    if (son != EMPTYREF) {
-      if (!hwloops[son].transform && hwloops[son].RightLoop==EMPTYREF) {
-        if (hwloops[li].InstrNumber < 3*limitsize) {
-          limitsize = hwloops[li].InstrNumber;
-          hwloops[li].transform = false;
-          nomorelimitcorrection = true;
-        }
-      }
-    }
+  CurrentTopLoop = HWLoops[LI].UpLoop;
+  for (unsigned P = CurrentTopLoop; P != EMPTYREF; P = HWLoops[P].UpLoop) {
+    if (HWLoops[P].LastClosedSon == EMPTYREF)
+      HWLoops[P].LastClosedSon = LI;
   }
-  CurrentTopLoop = hwloops[li].UpLoop;
-  unsigned int grand = CurrentTopLoop;
-  while (grand != EMPTYREF) {
-    if (hwloops[grand].LastClosedSon == EMPTYREF) {
-      hwloops[grand].LastClosedSon = li;
-    }
-    grand = hwloops[grand].UpLoop;
-  }
-  return li;
+  return LI;
 }
 
-void TPCUnHardwareLoops::SetNewRoots(unsigned RootFrom) {
-  if (hwloops.empty())
-    return;
-  unsigned left = RootFrom;
-  while (left != EMPTYREF) {
-    if (hwloops[left].transform) {
-      SetNewRoots(hwloops[left].DownLoop);
-    } else {
-      newroots.insert(left);
-    }
-    left = hwloops[left].RightLoop;
-    SetNewRoots(left);
+bool TPCUnHardwareLoops::isTopMostHWLoop(const unsigned L) const {
+  // Loop L should stay in hardware form.
+  if (HWLoops[L].Transform)
+    return false;
+
+  // All parent loops should be transformed to software form.
+  for (unsigned P = HWLoops[L].UpLoop; P != EMPTYREF; P = HWLoops[P].UpLoop) {
+    if (!HWLoops[P].Transform)
+      return false;
   }
+
+  return true;
 }
 
-void TPCUnHardwareLoops::SetHWCount(unsigned root, int count) { 
-  if (root == EMPTYREF)  return;
-  if (hwloops[root].transform)
-  assert(!hwloops[root].transform);
-  assert(count >= 32 && count <= 35);
-  hwloops[root].NewCount = count;
+void TPCUnHardwareLoops::setHWCount(const unsigned Root,
+                                    const Register Counter) {
+  assert(!HWLoops[Root].Transform);
+  assert(TST->isHWLoopReg(Counter));
+  HWLoops[Root].NewLoopCounter = Counter;
+  for (auto L = HWLoops[Root].DownLoop; L != EMPTYREF; L = HWLoops[L].RightLoop)
+    setHWCount(L, Register(Counter.id() + 1));
+}
 
-  unsigned elderson = hwloops[root].DownLoop;
-  if (elderson != EMPTYREF) {
-    SetHWCount(elderson, count + 1);
-    unsigned int brother = hwloops[elderson].RightLoop;
-    while (brother != EMPTYREF) {
-      if (hwloops[brother].transform) {
-      } else {
-        SetHWCount(brother, count + 1);
-      }
-      brother = hwloops[brother].RightLoop;
+void TPCUnHardwareLoops::setSoftCounts(const unsigned RootFrom,
+                                       const Register Counter) {
+  for (unsigned L = RootFrom; L != EMPTYREF; L = HWLoops[L].RightLoop) {
+    if (HWLoops[L].Transform) {
+      HWLoops[L].NewLoopCounter = Counter;
+      setSoftCounts(HWLoops[L].DownLoop, Register(Counter.id() - 1));
     }
   }
 }
 
-void TPCUnHardwareLoops::SetSoftCounts(unsigned RootFrom,unsigned count) {
-  if (hwloops.empty())
-    return;
-  unsigned left = RootFrom;
-  while (left != EMPTYREF) {
-    if (hwloops[left].transform) {
-      hwloops[left].NewCount = count;
-      SetSoftCounts(hwloops[left].DownLoop,count-1);
-    }
-    left = hwloops[left].RightLoop;
-    if (left != EMPTYREF && hwloops[left].transform) {
-      SetSoftCounts(left, count);
-    }
+void TPCUnHardwareLoops::setNewCounts() {
+  assert(!HWLoops.empty());
+
+  for (unsigned LI = 0; LI < HWLoops.size(); ++LI) {
+    if (isTopMostHWLoop(LI))
+      setHWCount(LI, TST->getHWLoopStartReg());
+  }
+  setSoftCounts(0, TST->getHWLoopFinalReg());
+}
+
+static void updateLoopRegisters(MachineInstr &MI, const TPCSubtarget &ST,
+                                const SmallVector<Register, 4> &TransReg) {
+  const Register StartHWLoopReg = ST.getHWLoopStartReg();
+  const unsigned NumOps = isLoopInstr(MI) ? 3 : MI.getNumOperands();
+  for (unsigned I = 0; I < NumOps; I++) {
+    MachineOperand &MO = MI.getOperand(I);
+    if (MO.isReg() && ST.isHWLoopReg(MO.getReg()))
+      MO.setReg(TransReg[MO.getReg().id() - StartHWLoopReg.id()]);
   }
 }
 
-void TPCUnHardwareLoops::SetNewCounts(void) {
-  if (hwloops.empty())
-    return;
-  if (!newroots.empty()) {
-    for (unsigned r : newroots) {
-      SetHWCount(r, 32);
-    }
-  }
-  SetSoftCounts(0,35);
-}
-
-static SmallVector<unsigned, 4> TransReg;
-
-static void UpdateLoopRegisters(MachineInstr *MI) {
-  unsigned nop = MI->getNumOperands();
-  if (isLoopInstr(MI)) {
-    nop = 3;
-  }
-  for (unsigned i = 0; i< nop; i++) {
-    MachineOperand *MO = &MI->getOperand(i);
-    if (MO->isReg()) {
-      int lreg = SRegToNumber(MO->getReg());
-      if (lreg >= 32 && lreg <= 35) {
-        unsigned rel = lreg - 32;
-        unsigned newcount = TransReg[rel];
-        assert(newcount >= 32 && newcount <= 35);
-        if ((unsigned)lreg != newcount) { // need to replace
-          Register nreg = NumberToSReg(newcount);
-          MO->setReg(nreg);
-        }
-      }
-    }
-  }
-}
-
-
-void TPCUnHardwareLoops::ReplaceCounts(unsigned root) {
-  if (root == EMPTYREF)
-    return;
-  unsigned rl = root;
-  if (hwloops[rl].spoiled)
-    return;
-  do {
-    unsigned newcount = hwloops[rl].NewCount;
-    if (!(newcount >= 32 && newcount <= 35))
-    assert(newcount >= 32 && newcount <= 35);
-    TransReg.push_back(newcount);
-    for (auto MI : hwloops[rl].LoopRegInstr) {
-      if (MI == nullptr)
-        continue;
-      if (AlreadyUpdated.find(MI) == AlreadyUpdated.end()) {
-        UpdateLoopRegisters(MI);
-        AlreadyUpdated.insert(MI);
+void TPCUnHardwareLoops::replaceCounts(CountersReplacementCtx &Ctx,
+                                       unsigned RootL) {
+  for (; RootL != EMPTYREF; RootL = HWLoops[RootL].RightLoop) {
+    Ctx.TransReg.push_back(HWLoops[RootL].NewLoopCounter);
+    for (MachineInstr *MI : HWLoops[RootL].LoopRegInstr) {
+      if (!Ctx.UpdatedMIs.contains(MI)) {
+        updateLoopRegisters(*MI, *TST, Ctx.TransReg);
+        Ctx.UpdatedMIs.insert(MI);
       }
       if (MI->isBundle()) {
         const MachineBasicBlock *MBB = MI->getParent();
-        MachineBasicBlock::instr_iterator MII = MI->getIterator();
-        for (++MII; MII != MBB->instr_end() && MII->isInsideBundle(); ++MII) {
+        for (auto MII = std::next(MI->getIterator());
+             MII != MBB->instr_end() && MII->isInsideBundle(); ++MII) {
           MachineInstr &BMI = *MII;
-          MachineInstr *mi = &BMI;
-          if (AlreadyUpdated.find(mi) == AlreadyUpdated.end()) {
-            UpdateLoopRegisters(mi);
-            AlreadyUpdated.insert(mi);
+          if (!Ctx.UpdatedMIs.contains(&BMI)) {
+            updateLoopRegisters(BMI, *TST, Ctx.TransReg);
+            Ctx.UpdatedMIs.insert(&BMI);
           }
         }
       }
     }
-    ReplaceCounts(hwloops[rl].DownLoop);
-    TransReg.pop_back();
-    rl = hwloops[rl].RightLoop;
-  } while (rl != EMPTYREF);
+    replaceCounts(Ctx, HWLoops[RootL].DownLoop);
+    Ctx.TransReg.pop_back();
+  }
+}
 
+void TPCUnHardwareLoops::constructHWLoopsTree() {
+  HWLoops.clear();
+
+  OccupiedSPRegNumbers.reset();
+  // SP0 is reserved register before doron1+
+  // SP0 is ordinary register since  doron1+
+  if (!TST->getFeatureBits()[TPC::FeatureDoron1])
+    OccupiedSPRegNumbers.set(0, true);
+
+  unsigned MICount = 0;
+  unsigned LastLoop = EMPTYREF;
+  for (MachineBasicBlock &MBB : *MF) {
+    for (MachineInstr &MI : MBB) {
+      MICount++;
+
+      if (isLoopInstr(MI)) {
+        processStartLoop(MI, MICount);
+        continue;
+      }
+
+      if (MI.getOpcode() == TPC::LOOPEND) {
+        LastLoop = processEndLoop(MI, MICount);
+        continue;
+      }
+
+      processNotLoopInstr(MI);
+      if (isWithLoopReg(MI, *TST)) {
+        unsigned Loop = CurrentTopLoop != EMPTYREF ? CurrentTopLoop : LastLoop;
+        if (Loop != EMPTYREF) {
+          unsigned LS = getLoopRefOrDef(HWLoops[Loop].LastClosedSon, Loop);
+          HWLoops[LS].LoopRegInstr.insert(&MI);
+        }
+      }
+    }
+  }
+
+  LLVM_DEBUG({
+    dbgs() << "\nConstructed HW loops tree:\n";
+    dumpHWLoops();
+    dbgs() << "\n";
+  });
+}
+
+void TPCUnHardwareLoops::markLoopsToUnHardware() {
+  if (HWLoops.empty())
+    return;
+
+  escalateSpoiled();
+
+  const unsigned MICountLimit =
+      ForceUnHardwareLoops ? 0 : UnHardwareInstructionsMinCount.getValue();
+
+  for (unsigned L = 0; L < HWLoops.size(); ++L) {
+    if (HWLoops[L].InstrNumber >= MICountLimit && !isLoopTreeSpoiled(L))
+      markTreeToTransformUp(L);
+  }
+
+  LLVM_DEBUG({
+    dbgs() << "\nHW loops tree after plan markup:\n";
+    dumpHWLoops();
+    dbgs() << "\n";
+  });
+}
+
+bool TPCUnHardwareLoops::hasLoopToUnHardware() {
+  return any_of(HWLoops, [](const TLoopFrame &LF) { return LF.Transform; });
+}
+
+void TPCUnHardwareLoops::unHardwareLoops() {
+  assert(hasLoopToUnHardware());
+
+  setNewCounts();
+  for (unsigned I = 0; I < size(HWLoops); ++I) {
+    if (HWLoops[I].Transform)
+      transformHWLoopBack(I);
+  }
+
+  CountersReplacementCtx Ctx;
+  replaceCounts(Ctx);
 }
 
 bool TPCUnHardwareLoops::runOnMachineFunction(MachineFunction &Func) {
@@ -961,77 +750,49 @@ bool TPCUnHardwareLoops::runOnMachineFunction(MachineFunction &Func) {
   if (!EnableTPCUnHardwareLoops)
     return false;
 
-  hwloops.clear();
-  newroots.clear();
-  AlreadyUpdated.clear();
   MF = &Func;
-  MRI = &MF->getRegInfo();
+  TST = &MF->getSubtarget<TPCSubtarget>();
   TII = MF->getSubtarget().getInstrInfo();
-  HII = Func.getSubtarget<TPCSubtarget>().getInstrInfo();
-  HRI = Func.getSubtarget<TPCSubtarget>().getRegisterInfo();
-  MachineLoopInfo &MLI = getAnalysis<MachineLoopInfo>();
-  auto *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
-  auto *MBPI = &getAnalysis<MachineBranchProbabilityInfo>();
-  TPCPacketizerList Packetizer(Func, MLI, AA, MBPI);
-  NumReplaced = 0;
-  MachineBasicBlock *MBB;
-  unsigned instr_count = 0;
-  unsigned nest_count = PRECOUNT;
-  unsigned last_loop = EMPTYREF;
-  
-  InitSPScale(); 
 
-  for (MachineFunction::iterator MBBI = MF->begin(), MBBE = MF->end();
-       MBBI != MBBE; ++MBBI) {
-    MBB = &*MBBI;
-    for (MachineBasicBlock::iterator mi = MBB->begin(), me = MBB->end();
-         mi != me;) {
-      MachineBasicBlock::iterator nmi = std::next(mi);
-      MachineInstr *MI = &*mi;
-      instr_count++;
-      auto opc = MI->getOpcode();
-      if (isLoopInstr(MI)) {
-        nest_count++;
-        ProcessStartLoop(MI, nest_count, instr_count);
-      }
-      else if (opc == TPC::LOOPEND) {
-        last_loop = ProcessEndLoop(MI, instr_count);
-        nest_count--;
-      } else {
-        ProcessNotLoopInstr(MI);
-        if (InstrWithLoopReg(MI)) {
-          unsigned ls;
-          if (CurrentTopLoop != EMPTYREF) {
-            ls = hwloops[CurrentTopLoop].LastClosedSon;
-            if (ls == EMPTYREF) {
-              ls = CurrentTopLoop;
-            }
-            hwloops[ls].LoopRegInstr.insert(MI);
-          } else if (last_loop != EMPTYREF) {
-            ls = hwloops[last_loop].LastClosedSon;
-            if (ls == EMPTYREF) {
-              ls = last_loop;
-            }
-            hwloops[ls].LoopRegInstr.insert(MI);
-          }              
-        }
-      }
-      mi = nmi;
-    }
+  LLVM_DEBUG({
+    dbgs() << "Input function:\n";
+    Func.dump();
+  });
+
+  constructHWLoopsTree();
+
+  markLoopsToUnHardware();
+
+  if (hasLoopToUnHardware()) {
+    unHardwareLoops();
+
+    LLVM_DEBUG({
+      dbgs() << "Transformed function:\n";
+      Func.dump();
+    });
+
+    return true;
   }
-  assert(nest_count == PRECOUNT);
-  if (AtLeastOneLoopWasToTRansform) {
-    SetNewRoots(0);
-    SetNewCounts();
-    EscalateSpoiled();
-    for (unsigned int i = 0; i < size(hwloops); i++) {
-      if (TransformHWLoopBack(i, Func)) {
-        NumReplaced++;
-      }
-    }
-    if (NumReplaced > 0  && !hwloops.empty()) {
-      ReplaceCounts(0);
-    }
-  }
-  return NumReplaced > 0;
+  return false;
+}
+
+void TPCUnHardwareLoops::dumpHWLoops() {
+  if (!HWLoops.empty())
+    dumpHWLoop(0, 2);
+}
+
+void TPCUnHardwareLoops::dumpHWLoop(unsigned L, unsigned Indent) {
+  const TLoopFrame &F = HWLoops[L];
+  dbgs().indent(Indent) << *F.StartInstr;
+  dbgs().indent(Indent) << "Old Cnt = " << printReg(F.LoopCounter) << "\n";
+  dbgs().indent(Indent) << "New Cnt = " << printReg(F.NewLoopCounter) << "\n";
+  dbgs().indent(Indent) << "MICount = " << F.InstrNumber << "\n";
+  dbgs().indent(Indent) << "Spoiled = " << F.Spoiled << "\n";
+  dbgs().indent(Indent) << "Planned = " << F.Transform << "\n";
+
+  if (HWLoops[L].DownLoop != EMPTYREF)
+    dumpHWLoop(HWLoops[L].DownLoop, Indent + 2);
+
+  if (HWLoops[L].RightLoop != EMPTYREF)
+    dumpHWLoop(HWLoops[L].RightLoop, Indent);
 }

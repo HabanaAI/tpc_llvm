@@ -1,40 +1,26 @@
-//===---------------------------- ExpandSpecialFunction.cpp ----------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===------------------------------------------------------------------------===//
-// Expand special function definition for TPC
-//===------------------------------------------------------------------------===//
+// ExpandSpecialFunction --
+/*
+Expand special function definition for TPC
+*/
 
 #include "llvm/Transforms/Scalar/EvalSpecialFunctionPass.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils/TPCIntrinsicUtils.h"
 
 char EvalSpecialFunctionPass::ID = 0;
 static cl::opt<bool> EvalSpclFunc("eval-special-function",
                                   cl::desc("Evaluate Special Funtion IR"),
                                   cl::init(true), cl::ZeroOrMore, cl::Hidden);
 
-static std::string getTPCIntrinsicName(Intrinsic::ID IDNum,
-                                       FunctionType *FType) {
-  SmallVector<Intrinsic::IITDescriptor, 8> Table;
-  Intrinsic::getIntrinsicInfoTableEntries(IDNum, Table);
-  ArrayRef<Intrinsic::IITDescriptor> TableRef = Table;
-  (void)TableRef;
-  SmallVector<Type *, 4> ArgTys;
-  Intrinsic::matchIntrinsicSignature(FType, TableRef, ArgTys);
-  return Intrinsic::getName(IDNum, ArgTys);
-}
-
 Constant *EvalSpecialFunctionPass::getBfloatValue(double V) {
   APFloat APF(V);
   bool unused;
-  APF.convert(APFloat::BFloat16(), APFloat::rmNearestTiesToEven, &unused);
+  APF.convert(APFloat::BFloat(), APFloat::rmNearestTiesToEven, &unused);
   return ConstantFP::get(BF16Type->getContext(), APF);
 }
 
+#if 1 // MERGE
 void EvalSpecialFunctionPass::replaceBF16ReciprocalWithTPCIntrinsics(
     Module &M, Instruction *InstrToReplace) {
   IRBuilder<> Builder(InstrToReplace);
@@ -88,7 +74,7 @@ void EvalSpecialFunctionPass::replaceBF16ReciprocalWithTPCIntrinsics(
            getTPCIntrinsicName(Intrinsic::tpc_form_fp_num, FType), FType)
           .getCallee());
   auto FormFP = Builder.CreateCall(
-      Intrinsic, {ConstantVector::getSplat(128, getBfloatValue(1.0)), Operand,
+      Intrinsic, {ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(1.0)), Operand,
                   Operand, Sw11, ConstantInt::get(I32Type, 512),
                   UndefValue::get(Bfloat128Type), Predicate, Polarity});
 
@@ -107,12 +93,12 @@ void EvalSpecialFunctionPass::replaceBF16ReciprocalWithTPCIntrinsics(
                   UndefValue::get(Short256Type), Predicate, Polarity});
 
   // %8 = shufflevector <256 x i16> %7 0...127
-  auto Mask = createSequentialMask(Builder, 0, 128, 0);
+  auto Mask = createSequentialMask(0, 128, 0);
   auto Shuffle1 = Builder.CreateShuffleVector(
       LutEntry, UndefValue::get(Short256Type), Mask);
 
   // %9 = shufflevector <256 x i16> %7 128...255
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto Shuffle2 = Builder.CreateShuffleVector(
       LutEntry, UndefValue::get(Short256Type), Mask);
 
@@ -152,12 +138,12 @@ void EvalSpecialFunctionPass::replaceBF16ReciprocalWithTPCIntrinsics(
 
   // %C1C2.sroa.0.256.vec.extract.i = shufflevector <256 x bfloat> %13,
   // 128...255
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto Shuffle3 = Builder.CreateShuffleVector(
       Lookup2, UndefValue::get(Bfloat256Type), Mask);
 
   // %C1C2.sroa.0.0.vec.extract.i = shufflevector <256 x bfloat> %13 0...128
-  Mask = createSequentialMask(Builder, 0, 128, 0);
+  Mask = createSequentialMask(0, 128, 0);
   auto Shuffle4 = Builder.CreateShuffleVector(
       Lookup2, UndefValue::get(Bfloat256Type), Mask);
 
@@ -306,12 +292,12 @@ void EvalSpecialFunctionPass::replaceReciprocalWithTPCIntrinsics(
                   UndefValue::get(Int128Type), Predicate, Polarity});
 
   //  %6 = shufflevector <128 x i32> %5, 0...63
-  auto Mask = createSequentialMask(Builder, 0, 64, 0);
+  auto Mask = createSequentialMask(0, 64, 0);
   auto Shuffle1 =
       Builder.CreateShuffleVector(LutEntry, UndefValue::get(Int128Type), Mask);
 
   // %7 = shufflevector <128 x i32> %5, 64...127
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffle2 =
       Builder.CreateShuffleVector(LutEntry, UndefValue::get(Int128Type), Mask);
 
@@ -346,12 +332,12 @@ void EvalSpecialFunctionPass::replaceReciprocalWithTPCIntrinsics(
                   UndefValue::get(Float128Type), Predicate, Polarity});
 
   // %11 = shufflevector <128 x float> %10, 0...63
-  Mask = createSequentialMask(Builder, 0, 64, 0);
+  Mask = createSequentialMask(0, 64, 0);
   auto Shuffle3 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
   // %12 = shufflevector <128 x float> %10, 64...128
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffle4 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
@@ -380,12 +366,12 @@ void EvalSpecialFunctionPass::replaceReciprocalWithTPCIntrinsics(
   // %and.i.i = and <64 x i32> %15, <i32 2139095040...
   auto Andii = Builder.CreateAnd(
       BitCast2,
-      ConstantVector::getSplat(64, ConstantInt::get(I32Type, 2139095040)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 2139095040)));
 
   // %and4.i.i = and <64 x i32> %3, <i32 2139095040,
   auto And4ii = Builder.CreateAnd(
       BitCast,
-      ConstantVector::getSplat(64, ConstantInt::get(I32Type, 2139095040)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 2139095040)));
 
   // %sub5.i.i = sub nsw <64 x i32> %and.i.i, %and4.i.i
   auto Sub5ii = Builder.CreateNSWSub(Andii, And4ii);
@@ -421,7 +407,7 @@ void EvalSpecialFunctionPass::replaceReciprocalWithTPCIntrinsics(
   auto SelLess = Builder.CreateCall(
       Intrinsic,
       {Operand, ConstantFP::get(F32Type, 0.000000e+00),
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -0.000000e+00)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -0.000000e+00)),
        Constant::getNullValue(Float64Type), Sw10, Sw2,
        UndefValue::get(Float64Type), Predicate, Polarity});
 
@@ -533,12 +519,12 @@ void EvalSpecialFunctionPass::replaceTanhWithTPCIntrinsics(
                   Predicate, Polarity});
 
   // %8 = shufflevector <128 x i32> %7, 0...63
-  auto Mask = createSequentialMask(Builder, 0, 64, 0);
+  auto Mask = createSequentialMask(0, 64, 0);
   auto Shuffle1 =
       Builder.CreateShuffleVector(LutEntry, UndefValue::get(Int128Type), Mask);
 
   // %9 = shufflevector <128 x i32> %7, 64...127
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffle2 =
       Builder.CreateShuffleVector(LutEntry, UndefValue::get(Int128Type), Mask);
 
@@ -573,12 +559,12 @@ void EvalSpecialFunctionPass::replaceTanhWithTPCIntrinsics(
       {Shuffle1, Sw2, Sw2, UndefValue::get(Float128Type), Predicate, Polarity});
 
   // %13 = shufflevector <128 x float> %12 0...63
-  Mask = createSequentialMask(Builder, 0, 64, 0);
+  Mask = createSequentialMask(0, 64, 0);
   auto Shuffle3 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
   // %14 = shufflevector <128 x float> %12 64...127
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffle4 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
@@ -640,7 +626,7 @@ void EvalSpecialFunctionPass::replaceTanhWithTPCIntrinsics(
   auto SelLess = Builder.CreateCall(
       Intrinsic,
       {Fabs, ConstantFP::get(F32Type, 9.000000e+00),
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, 0.999999881f)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 0.999999881f)),
        Mul1, Sw10, Sw2, Mul1, CmpGeq, Polarity});
 
   //  %20 = tail call <64 x float> @llvm.tpc.sel.geq
@@ -656,7 +642,7 @@ void EvalSpecialFunctionPass::replaceTanhWithTPCIntrinsics(
   auto SelGeq = Builder.CreateCall(
       Intrinsic,
       {Fabs, ConstantFP::get(F32Type, 9.000000e+00),
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, 1.000000e+00)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 1.000000e+00)),
        SelLess, Sw10, Sw2, UndefValue::get(Float64Type), Predicate, Polarity});
 
   // %21 = tail call <64 x float> @llvm.tpc.form.fp.num
@@ -686,7 +672,7 @@ void EvalSpecialFunctionPass::replaceTanhWithTPCIntrinsics(
   auto SelGrt = Builder.CreateCall(
       Intrinsic,
       {BitCast, ConstantInt::get(I32Type, 2139095040),
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, 2147483647)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 2147483647)),
        FormFP, ConstantInt::get(I8Type, 3), Sw2, UndefValue::get(Float64Type),
        Predicate, Polarity});
 
@@ -771,12 +757,12 @@ void EvalSpecialFunctionPass::replaceBF16TanhWithTPCIntrinsics(
                   UndefValue::get(Short256Type), Predicate, Polarity});
 
   // %8 = shufflevector <256 x i16> %7 0...127
-  auto Mask = createSequentialMask(Builder, 0, 128, 0);
+  auto Mask = createSequentialMask(0, 128, 0);
   auto Shuffle1 = Builder.CreateShuffleVector(
       LutEntry, UndefValue::get(Short256Type), Mask);
 
   // %9 = shufflevector <256 x i16> %7 128...255
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto Shuffle2 = Builder.CreateShuffleVector(
       LutEntry, UndefValue::get(Short256Type), Mask);
 
@@ -816,12 +802,12 @@ void EvalSpecialFunctionPass::replaceBF16TanhWithTPCIntrinsics(
 
   // %C1C2.sroa.0.256.vec.extract.i = shufflevector <256 x bfloat> %13,
   // 128...255
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto Shuffle3 = Builder.CreateShuffleVector(
       Lookup2, UndefValue::get(Bfloat256Type), Mask);
 
   // %C1C2.sroa.0.0.vec.extract.i = shufflevector <256 x bfloat> %13 0...128
-  Mask = createSequentialMask(Builder, 0, 128, 0);
+  Mask = createSequentialMask(0, 128, 0);
   auto Shuffle4 = Builder.CreateShuffleVector(
       Lookup2, UndefValue::get(Bfloat256Type), Mask);
 
@@ -869,7 +855,7 @@ void EvalSpecialFunctionPass::replaceBF16TanhWithTPCIntrinsics(
           .getCallee());
   auto SelGrt = Builder.CreateCall(
       Intrinsic, {ExtractExp, ConstantInt::get(I16Type, 1),
-                  ConstantVector::getSplat(128, getBfloatValue(1.0)), Mul1,
+                  ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(1.0)), Mul1,
                   ConstantInt::get(I8Type, 7), Sw2,
                   UndefValue::get(Bfloat128Type), Predicate, Polarity});
 
@@ -904,6 +890,7 @@ void EvalSpecialFunctionPass::replaceBF16TanhWithTPCIntrinsics(
   InstrToReplace->replaceAllUsesWith(CalcFP);
   InstrToReplace->eraseFromParent();
 }
+#endif // MERGE
 
 void EvalSpecialFunctionPass::replaceExpWithTPCIntrinsics(
     Module &M, Instruction *InstrToReplace) {
@@ -922,9 +909,9 @@ void EvalSpecialFunctionPass::replaceExpWithTPCIntrinsics(
   auto ConstLog2E = ConstantFP::get(F32Type, 1.44269502e0);
   auto ConstResult = ConstantFP::get(F32Type, 5.000000e-01);
   auto Mac0Res = Builder.CreateCall(
-      Intrinsic, {Operand, ConstantVector::getSplat(64, ConstLog2E),
+      Intrinsic, {Operand, ConstantVector::getSplat(ElementCount::getFixed(64), ConstLog2E),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
-                  ConstantVector::getSplat(64, ConstResult),
+                  ConstantVector::getSplat(ElementCount::getFixed(64), ConstResult),
                   ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   SmallVector<Type *, 6> TypesNearbyInt0{Float64Type, I8Type, I32Type,
@@ -952,50 +939,50 @@ void EvalSpecialFunctionPass::replaceExpWithTPCIntrinsics(
   auto ConstLn21 = ConstantFP::get(F32Type, 0.693359375);
   auto Mac1Res = Builder.CreateCall(
       Intrinsic,
-      {NearbyInt0Res, ConstantVector::getSplat(64, ConstLn21),
+      {NearbyInt0Res, ConstantVector::getSplat(ElementCount::getFixed(64), ConstLn21),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 2), Operand,
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto ConstLn22 = ConstantFP::get(F32Type, -2.12194440e-4);
   auto Mac2Res = Builder.CreateCall(
       Intrinsic,
-      {NearbyInt0Res, ConstantVector::getSplat(64, ConstLn22),
+      {NearbyInt0Res, ConstantVector::getSplat(ElementCount::getFixed(64), ConstLn22),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 2), Mac1Res,
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto ConstC3 = ConstantFP::get(F32Type, 8.380148765026943e-3);
   auto ConstC4 = ConstantFP::get(F32Type, 4.191878872870153e-2);
   auto Mac3Res = Builder.CreateCall(
-      Intrinsic, {Mac2Res, ConstantVector::getSplat(64, ConstC3),
+      Intrinsic, {Mac2Res, ConstantVector::getSplat(ElementCount::getFixed(64), ConstC3),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
-                  ConstantVector::getSplat(64, ConstC4),
+                  ConstantVector::getSplat(ElementCount::getFixed(64), ConstC4),
                   ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto ConstC5 = ConstantFP::get(F32Type, 0.1666634537038239);
   auto Mac4Res = Builder.CreateCall(
       Intrinsic,
       {Mac3Res, Mac2Res, ConstantInt::get(I8Type, 0),
-       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(64, ConstC5),
+       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(ElementCount::getFixed(64), ConstC5),
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto ConstC6 = ConstantFP::get(F32Type, 0.49998858346161135);
   auto Mac5Res = Builder.CreateCall(
       Intrinsic,
       {Mac4Res, Mac2Res, ConstantInt::get(I8Type, 0),
-       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(64, ConstC6),
+       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(ElementCount::getFixed(64), ConstC6),
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto ConstXPlus1 = ConstantFP::get(F32Type, 1.0);
   auto Mac6Res = Builder.CreateCall(
       Intrinsic,
       {Mac5Res, Mac2Res, ConstantInt::get(I8Type, 0),
-       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(64, ConstXPlus1),
+       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(ElementCount::getFixed(64), ConstXPlus1),
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto Mac7Res = Builder.CreateCall(
       Intrinsic,
       {Mac6Res, Mac2Res, ConstantInt::get(I8Type, 0),
-       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(64, ConstXPlus1),
+       ConstantInt::get(I32Type, 0), ConstantVector::getSplat(ElementCount::getFixed(64), ConstXPlus1),
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto BitCast0Res = Builder.CreateBitCast(Mac7Res, Int64Type);
@@ -1043,7 +1030,7 @@ void EvalSpecialFunctionPass::replaceExpWithTPCIntrinsics(
           .getCallee());
   auto ConstExpLower = ConstantFP::get(F32Type, -87.336);
   auto TpcSelLeq0Res = Builder.CreateCall(
-      Intrinsic, {Operand, ConstantVector::getSplat(64, ConstExpLower),
+      Intrinsic, {Operand, ConstantVector::getSplat(ElementCount::getFixed(64), ConstExpLower),
                   ConstantAggregateZero::get(Float64Type), Bitcast1Res,
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   UndefValue::get(Float64Type), ConstantInt::get(I1Type, 1),
@@ -1057,8 +1044,8 @@ void EvalSpecialFunctionPass::replaceExpWithTPCIntrinsics(
   auto ConstExpUpper = ConstantFP::get(F32Type, 88.722);
   auto ConstPlusInfFP32 = ConstantFP::getInfinity(F32Type, false);
   auto TpcSelGeq0Res = Builder.CreateCall(
-      Intrinsic, {Operand, ConstantVector::getSplat(64, ConstExpUpper),
-                  ConstantVector::getSplat(64, ConstPlusInfFP32), TpcSelLeq0Res,
+      Intrinsic, {Operand, ConstantVector::getSplat(ElementCount::getFixed(64), ConstExpUpper),
+                  ConstantVector::getSplat(ElementCount::getFixed(64), ConstPlusInfFP32), TpcSelLeq0Res,
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   UndefValue::get(Float64Type), ConstantInt::get(I1Type, 1),
                   ConstantInt::get(I1Type, 0)});
@@ -1067,7 +1054,7 @@ void EvalSpecialFunctionPass::replaceExpWithTPCIntrinsics(
 
   auto ConstNan = ConstantInt::get(I32Type, 2147483647);
   auto And0Res =
-      Builder.CreateAnd(BitCast2Res, ConstantVector::getSplat(64, ConstNan));
+      Builder.CreateAnd(BitCast2Res, ConstantVector::getSplat(ElementCount::getFixed(64), ConstNan));
 
   SmallVector<Type *, 9> TypesSelGrt0{Int64Type,   I32Type, Float64Type,
                                       Float64Type, I8Type,  I32Type,
@@ -1088,6 +1075,7 @@ void EvalSpecialFunctionPass::replaceExpWithTPCIntrinsics(
   InstrToReplace->eraseFromParent();
 }
 
+#if 1 // MERGE
 void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
     Module &M, Instruction *InstrToReplace) {
   IRBuilder<> Builder(InstrToReplace);
@@ -1105,7 +1093,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
 
   // %and.i = and <128 x i16> %3, <i16 32767, ...
   auto BitCastAnd = Builder.CreateAnd(
-      BitCast, ConstantVector::getSplat(128, ConstantInt::get(I16Type, 32767)));
+      BitCast, ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 32767)));
 
   // %4 = bitcast <128 x i16> %and.i to <128 x bfloat16>
   auto BitCastToBF16 = Builder.CreateBitCast(BitCastAnd, Bfloat128Type);
@@ -1137,7 +1125,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   // %mul.i = fmul <64 x float> %X, <float 1.27323949f ....>
   auto FirstMul = Builder.CreateFMul(
       FirstHalf,
-      ConstantVector::getSplat(64, ConstantFP::get(F32Type, 1.27323949f)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 1.27323949f)));
   // %Y = shufflevector <128 x float> %5, <128 x float> undef, <64 x
   // i32>(64...128)
   auto SecondHalf = Builder.CreateShuffleVector(
@@ -1145,7 +1133,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   // %mul15.i = fmul <64 x float> %Y, <float 1.27323949f ....>
   auto SecondMul = Builder.CreateFMul(
       SecondHalf,
-      ConstantVector::getSplat(64, ConstantFP::get(F32Type, 1.27323949f)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 1.27323949f)));
 
   //  %6 = tail call <64 x i32> @llvm.tpc.convert.v64i32.v64f32.i1(<64 x float>
   //  %mul.i...
@@ -1170,7 +1158,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   // %and17.i = and <64 x i32> %6, <i32 1, i32 1,...
   auto And1 = Builder.CreateAnd(
       ConvertToInt641,
-      ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %add.i = add <64 x i32> %and17.i, %6
   auto Add1 = Builder.CreateAdd(And1, ConvertToInt641);
@@ -1178,7 +1166,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   // %and22.i = and <64 x i32> %7, <i32 1, i32 1,...
   auto And2 = Builder.CreateAnd(
       ConvertToInt642,
-      ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %add25.i = add <64 x i32> %and22.i, %7
   auto Add2 = Builder.CreateAdd(And2, ConvertToInt642);
@@ -1193,16 +1181,16 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
           .getCallee());
   auto ConvertToShort1281 = Builder.CreateCall(
       Intrinsic,
-      {Add1, ConstantVector::getSplat(256, ConstantInt::get(I8Type, 0)),
+      {Add1, ConstantVector::getSplat(ElementCount::getFixed(256), ConstantInt::get(I8Type, 0)),
        ConstantInt::get(I32Type, 720896),
-       ConstantVector::getSplat(128, ConstantInt::get(I16Type, 0)), Predicate,
+       ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 0)), Predicate,
        Polarity});
 
   // %9 = tail call <128 x i16>
   // @llvm.tpc.convert.int.v128i16.v64i32.v256i8.i1(<64 x i32> %add25.i,...
   auto ConvertToShort1282 = Builder.CreateCall(
       Intrinsic,
-      {Add2, ConstantVector::getSplat(256, ConstantInt::get(I8Type, 0)),
+      {Add2, ConstantVector::getSplat(ElementCount::getFixed(256), ConstantInt::get(I8Type, 0)),
        ConstantInt::get(I32Type, 720897), ConvertToShort1281, Predicate,
        Polarity});
 
@@ -1239,7 +1227,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   auto Mac1 = Builder.CreateCall(
       Intrinsic,
       {ConverttoFloat641,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -7.85156250e-01f)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -7.85156250e-01f)),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0), FirstHalf,
        Predicate, Polarity});
 
@@ -1248,7 +1236,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   auto Mac2 = Builder.CreateCall(
       Intrinsic,
       {ConverttoFloat642,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -7.85156250e-01f)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -7.85156250e-01f)),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0), SecondHalf,
        Predicate, Polarity});
 
@@ -1257,7 +1245,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   auto Mac3 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat641,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -2.41875648498e-4f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -2.41875648498e-4f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac1, Predicate, Polarity});
 
@@ -1266,7 +1254,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   auto Mac4 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat642,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -2.41875648498e-4f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -2.41875648498e-4f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac2, Predicate, Polarity});
 
@@ -1275,7 +1263,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   auto Mac5 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat641,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -3.7748949774e-8f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -3.7748949774e-8f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac3, Predicate, Polarity});
 
@@ -1284,13 +1272,13 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   auto Mac6 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat642,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -3.7748949774e-8f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -3.7748949774e-8f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac4, Predicate, Polarity});
 
   // %fl.sroa.0.0.vec.expand.i = shufflevector <64 x float> %16, <64 x float>
   // undef, <128 x i32>...
-  auto Mask1 = createSequentialMask(Builder, 0, 64, 64);
+  auto Mask1 = createSequentialMask(0, 64, 64);
   auto ShuffleFloat641 =
       Builder.CreateShuffleVector(Mac5, UndefValue::get(Float64Type), Mask1);
 
@@ -1351,7 +1339,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   // %and75.i = and <128 x i16> %20, <i16 32767,...
   auto AndShort128 = Builder.CreateAnd(
       BitCastShort128,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 32767)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 32767)));
 
   //  %21 = bitcast <128 x i16> %and75.i to <128 x bfloat16>
   auto BitCastBfloat128 = Builder.CreateBitCast(AndShort128, Bfloat128Type);
@@ -1372,21 +1360,21 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   // %23 = lshr <128 x i16> %9, <i16 1, i16 1,...
   auto LSHRShort128 = Builder.CreateLShr(
       ConvertToShort1282,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 1)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 1)));
 
   //  %and76.i = and <128 x i16> %23, <i16 3, i16 3...
   auto And76i = Builder.CreateAnd(
       LSHRShort128,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 3)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 3)));
 
   // %and77.i = and <128 x i16> %23, <i16 2, i16 2,...
   auto And77i = Builder.CreateAnd(
       LSHRShort128,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 2)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 2)));
 
   // %24 = lshr exact <128 x i16> %and77.i, <i16 1, i16 1,...
   auto LSHRShort1281 = Builder.CreateLShr(
-      And77i, ConstantVector::getSplat(128, ConstantInt::get(I16Type, 1)), "",
+      And77i, ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 1)), "",
       true);
 
   // %xor.i = xor <128 x i16> %22, %24
@@ -1456,13 +1444,13 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
 
   // %30 = shufflevector <256 x i16> %29, <256 x i16> undef, <128 x i32> <i32
   // 0,...127
-  auto Mask4 = createSequentialMask(Builder, 0, 128, 0);
+  auto Mask4 = createSequentialMask(0, 128, 0);
   auto ShuffleShort2561 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask4);
 
   // %31 = shufflevector <256 x i16> %29, <256 x i16> undef, <128 x i32> <i32
   // 128, i32 129...255
-  Mask4 = createSequentialMask(Builder, 128, 128, 0);
+  Mask4 = createSequentialMask(128, 128, 0);
   auto ShuffleShort2562 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask4);
 
@@ -1472,7 +1460,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
 
   // %shl.i = shl nsw <128 x i16> %sub.i, <i16 4, i16 4...
   auto Shli = Builder.CreateShl(
-      Subi, ConstantVector::getSplat(128, ConstantInt::get(I16Type, 4)));
+      Subi, ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 4)));
 
   // %33 = or <128 x i16> %30, %shl.i
   auto OrShort1282 = Builder.CreateOr(ShuffleShort2561, Shli);
@@ -1495,13 +1483,13 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
                   Constant::getNullValue(Bfloat256Type), Predicate, Polarity});
 
   // %C0C1.sroa.0.256.vec.extract.i = shufflevector <256 x bfloat16> %35,...
-  Mask4 = createSequentialMask(Builder, 128, 128, 0);
+  Mask4 = createSequentialMask(128, 128, 0);
   auto ShuffleBfloat2561 = Builder.CreateShuffleVector(
       LookupBfloat2561, UndefValue::get(Bfloat256Type), Mask4);
 
   // %C0C1.sroa.0.0.vec.extract.i = shufflevector <256 x bfloat16> %35, <256 x
   // bfloat16> undef, <128 x i32> <i32 0,...
-  Mask4 = createSequentialMask(Builder, 0, 128, 0);
+  Mask4 = createSequentialMask(0, 128, 0);
   auto ShuffleBfloat2562 = Builder.CreateShuffleVector(
       LookupBfloat2561, UndefValue::get(Bfloat256Type), Mask4);
 
@@ -1568,7 +1556,7 @@ void EvalSpecialFunctionPass::replaceBF16SinWithTPCIntrinsics(
   auto SelGrt1 = Builder.CreateCall(
       Intrinsic,
       {BitCastAnd, ConstantInt::get(I16Type, 17920),
-       ConstantVector::getSplat(128, ConstantInt::get(I16Type, 32767)),
+       ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 32767)),
        XorShort1281, ConstantInt::get(I8Type, 8), ConstantInt::get(I32Type, 0),
        UndefValue::get(Short128Type), Predicate, Polarity});
 
@@ -1596,7 +1584,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
 
   // %and.i = and <128 x i16> %4, <i16 32767, ...
   auto BitCastAnd = Builder.CreateAnd(
-      BitCast, ConstantVector::getSplat(128, ConstantInt::get(I16Type, 32767)));
+      BitCast, ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 32767)));
 
   // %5 = bitcast <128 x i16> %and.i to <128 x bfloat16>
   auto BitCastToBF16 = Builder.CreateBitCast(BitCastAnd, Bfloat128Type);
@@ -1628,7 +1616,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   // %mul.i = fmul <64 x float> %X, <float 1.27323949f ....>
   auto FirstMul = Builder.CreateFMul(
       FirstHalf,
-      ConstantVector::getSplat(64, ConstantFP::get(F32Type, 1.27323949f)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 1.27323949f)));
   // %Y = shufflevector <128 x float> %5, <128 x float> undef, <64 x
   // i32>(64...128)
   auto SecondHalf = Builder.CreateShuffleVector(
@@ -1636,7 +1624,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   // %mul15.i = fmul <64 x float> %Y, <float 1.27323949f ....>
   auto SecondMul = Builder.CreateFMul(
       SecondHalf,
-      ConstantVector::getSplat(64, ConstantFP::get(F32Type, 1.27323949f)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 1.27323949f)));
 
   //  %7 = tail call <64 x i32> @llvm.tpc.convert.v64i32.v64f32.i1(<64 x float>
   //  %mul.i...
@@ -1661,7 +1649,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   // %and17.i = and <64 x i32> %7, <i32 1, i32 1,...
   auto And1 = Builder.CreateAnd(
       ConvertToInt641,
-      ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %add.i = add <64 x i32> %and17.i, %7
   auto Add1 = Builder.CreateAdd(And1, ConvertToInt641);
@@ -1669,7 +1657,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   // %and22.i = and <64 x i32> %8, <i32 1, i32 1,...
   auto And2 = Builder.CreateAnd(
       ConvertToInt642,
-      ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %add25.i = add <64 x i32> %and22.i, %8
   auto Add2 = Builder.CreateAdd(And2, ConvertToInt642);
@@ -1684,16 +1672,16 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
           .getCallee());
   auto ConvertToShort1281 = Builder.CreateCall(
       Intrinsic,
-      {Add1, ConstantVector::getSplat(256, ConstantInt::get(I8Type, 0)),
+      {Add1, ConstantVector::getSplat(ElementCount::getFixed(256), ConstantInt::get(I8Type, 0)),
        ConstantInt::get(I32Type, 720900),
-       ConstantVector::getSplat(128, ConstantInt::get(I16Type, 0)), Predicate,
+       ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 0)), Predicate,
        Polarity});
 
   // %10 = tail call <128 x i16>
   // @llvm.tpc.convert.int.v128i16.v64i32.v256i8.i1(<64 x i32> %add25.i,...
   auto ConvertToShort1282 = Builder.CreateCall(
       Intrinsic,
-      {Add2, ConstantVector::getSplat(256, ConstantInt::get(I8Type, 0)),
+      {Add2, ConstantVector::getSplat(ElementCount::getFixed(256), ConstantInt::get(I8Type, 0)),
        ConstantInt::get(I32Type, 720901), ConvertToShort1281, Predicate,
        Polarity});
 
@@ -1730,7 +1718,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   auto Mac1 = Builder.CreateCall(
       Intrinsic,
       {ConverttoFloat641,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -7.85156250e-01f)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -7.85156250e-01f)),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0), FirstHalf,
        Predicate, Polarity});
 
@@ -1739,7 +1727,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   auto Mac2 = Builder.CreateCall(
       Intrinsic,
       {ConverttoFloat642,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -7.85156250e-01f)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -7.85156250e-01f)),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0), SecondHalf,
        Predicate, Polarity});
 
@@ -1748,7 +1736,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   auto Mac3 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat641,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -2.41875648498e-4f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -2.41875648498e-4f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac1, Predicate, Polarity});
 
@@ -1757,7 +1745,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   auto Mac4 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat642,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -2.41875648498e-4f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -2.41875648498e-4f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac2, Predicate, Polarity});
 
@@ -1766,7 +1754,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   auto Mac5 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat641,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -3.7748949774e-8f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -3.7748949774e-8f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac3, Predicate, Polarity});
 
@@ -1775,13 +1763,13 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   auto Mac6 = Builder.CreateCall(
       Intrinsic, {ConverttoFloat642,
                   ConstantVector::getSplat(
-                      64, ConstantFP::get(F32Type, -3.7748949774e-8f)),
+                      ElementCount::getFixed(64), ConstantFP::get(F32Type, -3.7748949774e-8f)),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
                   Mac4, Predicate, Polarity});
 
   // %fl.sroa.0.0.vec.expand.i = shufflevector <64 x float> %16, <64 x float>
   // undef, <128 x i32>...
-  auto Mask1 = createSequentialMask(Builder, 0, 64, 64);
+  auto Mask1 = createSequentialMask(0, 64, 64);
   auto ShuffleFloat641 =
       Builder.CreateShuffleVector(Mac5, UndefValue::get(Float64Type), Mask1);
 
@@ -1842,7 +1830,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   // %and75.i = and <128 x i16> %21, <i16 32767,...
   auto AndShort128 = Builder.CreateAnd(
       BitCastShort128,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 32767)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 32767)));
 
   // %22 = bitcast <128 x i16> %and75.i to <128 x bfloat16>
   auto BitCastBfloat128 = Builder.CreateBitCast(AndShort128, Bfloat128Type);
@@ -1850,21 +1838,21 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   // %23 = lshr <128 x i16> %10, <i16 1, i16 1,...
   auto LSHRShort128 = Builder.CreateLShr(
       ConvertToShort1282,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 1)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 1)));
 
   //  %and76.i = and <128 x i16> %23, <i16 3, i16 3...
   auto And76i = Builder.CreateAnd(
       LSHRShort128,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 3)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 3)));
 
   // %and77.i = and <128 x i16> %23, <i16 2, i16 2,...
   auto And77i = Builder.CreateAnd(
       LSHRShort128,
-      ConstantVector::getSplat(128, ConstantInt::get(I16Type, 2)));
+      ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 2)));
 
   // %24 = lshr exact <128 x i16> %and77.i, <i16 1, i16 1,...
   auto LSHRShort1281 = Builder.CreateLShr(
-      And77i, ConstantVector::getSplat(128, ConstantInt::get(I16Type, 1)), "",
+      And77i, ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 1)), "",
       true);
 
   // %Mov = tail call <128 x i16> @llvm.tpc.mov.v128i16.i16.i1(i16 0, i8 7, i32
@@ -1947,13 +1935,13 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
 
   // %30 = shufflevector <256 x i16> %29, <256 x i16> undef, <128 x i32> <i32
   // 0,...127
-  auto Mask4 = createSequentialMask(Builder, 0, 128, 0);
+  auto Mask4 = createSequentialMask(0, 128, 0);
   auto ShuffleShort2561 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask4);
 
   // %31 = shufflevector <256 x i16> %29, <256 x i16> undef, <128 x i32> <i32
   // 128, i32 129...255
-  Mask4 = createSequentialMask(Builder, 128, 128, 0);
+  Mask4 = createSequentialMask(128, 128, 0);
   auto ShuffleShort2562 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask4);
 
@@ -1963,7 +1951,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
 
   // %shl.i = shl nsw <128 x i16> %sub.i, <i16 4, i16 4...
   auto Shli = Builder.CreateShl(
-      Subi, ConstantVector::getSplat(128, ConstantInt::get(I16Type, 4)));
+      Subi, ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 4)));
 
   // %33 =  <128 x i16> @llvm.tpc.or..
   // (<128 x i16> ShuffleShort2561, <128 x i16> %shl.i, i8 8, i32 0,
@@ -2028,13 +2016,13 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
        Constant::getNullValue(Bfloat256Type), Predicate, Polarity});
 
   // %C0C1.sroa.0.256.vec.extract.i = shufflevector <256 x bfloat16> %37,...
-  Mask4 = createSequentialMask(Builder, 128, 128, 0);
+  Mask4 = createSequentialMask(128, 128, 0);
   auto ShuffleBfloat2561 = Builder.CreateShuffleVector(
       LookupBfloat2561, UndefValue::get(Bfloat256Type), Mask4);
 
   // %C0C1.sroa.0.0.vec.extract.i = shufflevector <256 x bfloat16> %37, <256 x
   // bfloat16> undef, <128 x i32> <i32 0,...
-  Mask4 = createSequentialMask(Builder, 0, 128, 0);
+  Mask4 = createSequentialMask(0, 128, 0);
   auto ShuffleBfloat2562 = Builder.CreateShuffleVector(
       LookupBfloat2561, UndefValue::get(Bfloat256Type), Mask4);
 
@@ -2115,7 +2103,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   auto SelGrt1 = Builder.CreateCall(
       Intrinsic,
       {BitCastAnd, ConstantInt::get(I16Type, 17920),
-       ConstantVector::getSplat(128, ConstantInt::get(I16Type, 32767)),
+       ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 32767)),
        BitCastShort1281, ConstantInt::get(I8Type, 8),
        ConstantInt::get(I32Type, 0), UndefValue::get(Short128Type), Predicate,
        Polarity});
@@ -2126,6 +2114,7 @@ void EvalSpecialFunctionPass::replaceBF16CosWithTPCIntrinsics(
   InstrToReplace->replaceAllUsesWith(BitCastBfloat1282);
   InstrToReplace->eraseFromParent();
 }
+#endif // MERGE
 
 void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
     Module &M, Instruction *InstrToReplace) {
@@ -2154,7 +2143,7 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
 
   // add.i.i = add <64 x i32> %3, <i32 1, i32 1...
   auto Addii = Builder.CreateAdd(
-      ExtractExp, ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ExtractExp, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %4 = tail call <64 x float> @llvm.tpc.form.fp.num...(<256 x i8> {126...},
   // <64 x float> %2, <64 x float> %2, i8 0, i32 2048)
@@ -2166,14 +2155,14 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
            getTPCIntrinsicName(Intrinsic::tpc_form_fp_num, FType), FType)
           .getCallee());
   auto FormFP = Builder.CreateCall(
-      Intrinsic, {ConstantVector::getSplat(256, ConstantInt::get(I8Type, 126)),
+      Intrinsic, {ConstantVector::getSplat(ElementCount::getFixed(256), ConstantInt::get(I8Type, 126)),
                   Operand, Operand, Sw10, ConstantInt::get(I32Type, 2048),
                   UndefValue::get(Float64Type), Predicate, Polarity});
 
   // %sub.i.i = fadd <64 x float> %4, <float -0.70710677
   auto Subii = Builder.CreateFAdd(
       FormFP,
-      ConstantVector::getSplat(64, ConstantFP::get(F32Type, -0.70710677)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -0.70710677)));
 
   // %5 = bitcast <64 x float> %sub.i.i to <64 x i32>
   auto BitCast1 = Builder.CreateBitCast(Subii, Int64Type);
@@ -2212,7 +2201,7 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
 
   // %sub2.i.i = fadd <64 x float> %mul.i.i, <float -1...
   auto Sub2ii = Builder.CreateFAdd(
-      Mulii, ConstantVector::getSplat(64, ConstantFP::get(F32Type, -1)));
+      Mulii, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -1)));
 
   // %add3.i.i = fadd <64 x float> %4, %sub2.i.i
   auto Add3ii = Builder.CreateFAdd(FormFP, Sub2ii);
@@ -2228,51 +2217,51 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
                          .getCallee());
   auto Mac1 = Builder.CreateCall(
       Intrinsic,
-      {ConstantVector::getSplat(64, ConstantFP::get(F32Type, 7.0376836292e-2)),
+      {ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 7.0376836292e-2)),
        Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -1.1514610310e-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -1.1514610310e-1)),
        Predicate, Polarity});
 
   auto Mac2 = Builder.CreateCall(
       Intrinsic,
       {Mac1, Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, 1.1676998740E-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 1.1676998740E-1)),
        Predicate, Polarity});
 
   auto Mac3 = Builder.CreateCall(
       Intrinsic,
       {Mac2, Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -1.2420140846E-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -1.2420140846E-1)),
        Predicate, Polarity});
 
   auto Mac4 = Builder.CreateCall(
       Intrinsic,
       {Mac3, Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, 1.4249322787E-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 1.4249322787E-1)),
        Predicate, Polarity});
 
   auto Mac5 = Builder.CreateCall(
       Intrinsic,
       {Mac4, Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -1.6668057665E-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -1.6668057665E-1)),
        Predicate, Polarity});
 
   auto Mac6 = Builder.CreateCall(
       Intrinsic,
       {Mac5, Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, 2.0000714765E-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 2.0000714765E-1)),
        Predicate, Polarity});
 
   auto Mac7 = Builder.CreateCall(
       Intrinsic,
       {Mac6, Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, -2.4999993993E-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, -2.4999993993E-1)),
        Predicate, Polarity});
 
   auto Mac8 = Builder.CreateCall(
       Intrinsic,
       {Mac7, Add3ii, Sw10, Sw2,
-       ConstantVector::getSplat(64, ConstantFP::get(F32Type, 3.3333331174E-1)),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 3.3333331174E-1)),
        Predicate, Polarity});
 
   // %16 = tail call <64 x float> @llvm.tpc.convert...<64 x i32> %sub1.i.i, i8
@@ -2300,7 +2289,7 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
   // %mul10.i.i = fmul <64 x float> %mul4.i.i, <float 5.000000
   auto Mul10ii = Builder.CreateFMul(
       Mul4ii,
-      ConstantVector::getSplat(64, ConstantFP::get(F32Type, 5.000000e-01)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 5.000000e-01)));
 
   // %sub11.i.i = fsub <64 x float> %mul9.i.i, %mul10.i.i
   auto Sub11ii = Builder.CreateFSub(Mul9ii, Mul10ii);
@@ -2309,13 +2298,13 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
   // 0.44269504088896340735992..
   auto Mul12ii = Builder.CreateFMul(
       Sub11ii, ConstantVector::getSplat(
-                   64, ConstantFP::get(F32Type, 0.44269504088896340735992)));
+        ElementCount::getFixed(64), ConstantFP::get(F32Type, 0.44269504088896340735992)));
 
   // %mul13.i.i = fmul <64 x float> %add3.i.i, <float
   // 0.44269504088896340735992..
   auto Mul13ii = Builder.CreateFMul(
       Add3ii, ConstantVector::getSplat(
-                  64, ConstantFP::get(F32Type, 0.44269504088896340735992)));
+        ElementCount::getFixed(64), ConstantFP::get(F32Type, 0.44269504088896340735992)));
 
   // %add14.i.i = fadd <64 x float> %mul13.i.i, %mul12.i.i
   auto Add14ii = Builder.CreateFAdd(Mul13ii, Mul12ii);
@@ -2332,7 +2321,7 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
   // %mul18.i.i = fmul <64 x float> %add17.i.i, <float 0.69314718056...
   auto Mul18ii = Builder.CreateFMul(
       Add17ii,
-      ConstantVector::getSplat(64, ConstantFP::get(F32Type, 0.69314718056)));
+      ConstantVector::getSplat(ElementCount::getFixed(64), ConstantFP::get(F32Type, 0.69314718056)));
 
   // %17 = tail call <64 x float> @llvm.tpc.fclass...(<64 x float> %2, i8 0, i32
   // 0,
@@ -2363,6 +2352,7 @@ void EvalSpecialFunctionPass::replaceLogWithTPCIntrinsics(
   InstrToReplace->eraseFromParent();
 }
 
+#if 1 // MERGE
 void EvalSpecialFunctionPass::replaceReciprocalSqrtWithTPCIntrinsics(
     Module &M, Instruction *InstrToReplace) {
 
@@ -2390,7 +2380,7 @@ void EvalSpecialFunctionPass::replaceReciprocalSqrtWithTPCIntrinsics(
 
   // %and.i.i = and <64 x i32> %3, <i32 1, i32 1...
   auto Andii = Builder.CreateAnd(
-      ExtractExp, ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ExtractExp, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %4 = bitcast <64 x i32> %and.i.i to <256 x i8>
   auto BitCastI8256 = Builder.CreateBitCast(Andii, I8256Type);
@@ -2424,12 +2414,12 @@ void EvalSpecialFunctionPass::replaceReciprocalSqrtWithTPCIntrinsics(
                   UndefValue::get(Int128Type), Predicate, Polarity});
 
   // %7 = shufflevector <128 x i32> %6...0...63
-  auto Mask = createSequentialMask(Builder, 0, 64, 0);
+  auto Mask = createSequentialMask(0, 64, 0);
   auto Shuffe1 =
       Builder.CreateShuffleVector(LutEntry1, UndefValue::get(Int128Type), Mask);
 
   // %8 = shufflevector <128 x i32> %6...64...127
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffe2 =
       Builder.CreateShuffleVector(LutEntry1, UndefValue::get(Int128Type), Mask);
 
@@ -2466,12 +2456,12 @@ void EvalSpecialFunctionPass::replaceReciprocalSqrtWithTPCIntrinsics(
        UndefValue::get(Float128Type), Predicate, Polarity});
 
   // %12 = shufflevector <128 x float> %11, 0...63
-  Mask = createSequentialMask(Builder, 0, 64, 0);
+  Mask = createSequentialMask(0, 64, 0);
   auto Shuffle3 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
   // %13 = shufflevector <128 x float> %11, 64...127
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffle4 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
@@ -2497,11 +2487,11 @@ void EvalSpecialFunctionPass::replaceReciprocalSqrtWithTPCIntrinsics(
 
   // %17 = lshr <64 x i32> %3, <i32 1...
   auto Lshr = Builder.CreateLShr(
-      ExtractExp, ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ExtractExp, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %shl.i.i = shl <64 x i32> %17, <i32 23,...
   auto Shlii = Builder.CreateShl(
-      Lshr, ConstantVector::getSplat(64, ConstantInt::get(I32Type, 23)));
+      Lshr, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 23)));
 
   // %sub4.i.i = sub <64 x i32> %16, %shl.i.i
   auto Sub4ii = Builder.CreateSub(BitCast2, Shlii);
@@ -2565,7 +2555,7 @@ void EvalSpecialFunctionPass::replaceSqrtWithTPCIntrinsics(
 
   // %and.i.i = and <64 x i32> %3, <i32 1, i32 1...
   auto Andii = Builder.CreateAnd(
-      ExtractExp, ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ExtractExp, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %4 = bitcast <64 x i32> %and.i.i to <256 x i8>
   auto BitCastI8256 = Builder.CreateBitCast(Andii, I8256Type);
@@ -2599,12 +2589,12 @@ void EvalSpecialFunctionPass::replaceSqrtWithTPCIntrinsics(
                   UndefValue::get(Int128Type), Predicate, Polarity});
 
   // %7 = shufflevector <128 x i32> %6...0...63
-  auto Mask = createSequentialMask(Builder, 0, 64, 0);
+  auto Mask = createSequentialMask(0, 64, 0);
   auto Shuffe1 =
       Builder.CreateShuffleVector(LutEntry1, UndefValue::get(Int128Type), Mask);
 
   // %8 = shufflevector <128 x i32> %6...64...127
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffe2 =
       Builder.CreateShuffleVector(LutEntry1, UndefValue::get(Int128Type), Mask);
 
@@ -2641,12 +2631,12 @@ void EvalSpecialFunctionPass::replaceSqrtWithTPCIntrinsics(
        UndefValue::get(Float128Type), Predicate, Polarity});
 
   // %12 = shufflevector <128 x float> %11, 0...63
-  Mask = createSequentialMask(Builder, 0, 64, 0);
+  Mask = createSequentialMask(0, 64, 0);
   auto Shuffle3 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
   // %13 = shufflevector <128 x float> %11, 64...127
-  Mask = createSequentialMask(Builder, 64, 64, 0);
+  Mask = createSequentialMask(64, 64, 0);
   auto Shuffle4 =
       Builder.CreateShuffleVector(Lookup2, UndefValue::get(Float128Type), Mask);
 
@@ -2672,11 +2662,11 @@ void EvalSpecialFunctionPass::replaceSqrtWithTPCIntrinsics(
 
   // %17 = lshr <64 x i32> %3, <i32 1...
   auto Lshr = Builder.CreateLShr(
-      ExtractExp, ConstantVector::getSplat(64, ConstantInt::get(I32Type, 1)));
+      ExtractExp, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 1)));
 
   // %shl.i.i = shl <64 x i32> %17, <i32 23,...
   auto Shlii = Builder.CreateShl(
-      Lshr, ConstantVector::getSplat(64, ConstantInt::get(I32Type, 23)));
+      Lshr, ConstantVector::getSplat(ElementCount::getFixed(64), ConstantInt::get(I32Type, 23)));
 
   // %add.i.i = add <64 x i32> %shl.i.i, %16
   auto Addii = Builder.CreateAdd(Shlii, BitCast2);
@@ -2789,13 +2779,13 @@ void EvalSpecialFunctionPass::replaceBF16LogWithTPCIntrinsics(
 
   // %8 = shufflevector <256 x i16> %7, <256 x i16> undef, <128 x i32> <i32 0,
   // i32 1,...
-  auto Mask = createSequentialMask(Builder, 0, 128, 0);
+  auto Mask = createSequentialMask(0, 128, 0);
   auto Shuffe1 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask);
 
   // %9 = shufflevector <256 x i16> %7, <256 x i16> undef, <128 x i32> <i32
   // 128...
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto Shuffe2 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask);
 
@@ -2827,7 +2817,7 @@ void EvalSpecialFunctionPass::replaceBF16LogWithTPCIntrinsics(
            getTPCIntrinsicName(Intrinsic::tpc_form_fp_num, FType), FType)
           .getCallee());
   auto FormFP1 = Builder.CreateCall(
-      Intrinsic, {ConstantVector::getSplat(128, getBfloatValue(1.0)),
+      Intrinsic, {ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(1.0)),
                   BitCastBfloat1282, BitCastBfloat1282, Sw1, Sw2,
                   UndefValue::get(Bfloat128Type), Predicate, Polarity});
 
@@ -2876,12 +2866,12 @@ void EvalSpecialFunctionPass::replaceBF16LogWithTPCIntrinsics(
 
   // %C0C1.sroa.0.256.vec.extract.i.i = shufflevector <256 x bfloat>
   // %16...128...255
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto ShuffleBfloat2561 = Builder.CreateShuffleVector(
       Lookup1, UndefValue::get(Bfloat256Type), Mask);
 
   // %C0C1.sroa.0.0.vec.extract.i.i = shufflevector <256 x bfloat> %16...0...128
-  Mask = createSequentialMask(Builder, 0, 128, 0);
+  Mask = createSequentialMask(0, 128, 0);
   auto ShuffleBfloat2562 = Builder.CreateShuffleVector(
       Lookup1, UndefValue::get(Bfloat256Type), Mask);
 
@@ -2988,7 +2978,7 @@ void EvalSpecialFunctionPass::replaceBF16LogWithTPCIntrinsics(
 
   // %25 = fmul <128 x bfloat> %24, <bfloat 0xH3F31,...
   auto Final = Builder.CreateFMul(
-      FPSpecial, ConstantVector::getSplat(128, getBfloatValue(0.69314718)));
+      FPSpecial, ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(0.69314718)));
   InstrToReplace->replaceAllUsesWith(Final);
   InstrToReplace->eraseFromParent();
 }
@@ -3081,13 +3071,13 @@ void EvalSpecialFunctionPass::replaceBF16ReciprocalSqrtWithTPCIntrinsics(
 
   // %9 = shufflevector <256 x i16> %8, <256 x i16> undef, <128 x i32> <i32
   // 0..128
-  auto Mask = createSequentialMask(Builder, 0, 128, 0);
+  auto Mask = createSequentialMask(0, 128, 0);
   auto Shuffle1 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask);
 
   // %10 = shufflevector <256 x i16> %8, <256 x i16> undef, <128 x i32> <i32
   // 128..255
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto Shuffle2 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask);
 
@@ -3112,13 +3102,13 @@ void EvalSpecialFunctionPass::replaceBF16ReciprocalSqrtWithTPCIntrinsics(
 
   // %C1C2.sroa.0.256.vec.extract.i = shufflevector <256 x bfloat> %13, <256 x
   // bfloat> undef, <128 x i32>
-  Mask = createSequentialMask(Builder, 128, 128, 0);
+  Mask = createSequentialMask(128, 128, 0);
   auto Shuffle3 = Builder.CreateShuffleVector(
       Lookup1, UndefValue::get(Bfloat256Type), Mask);
 
   // %C1C2.sroa.0.0.vec.extract.i = shufflevector <256 x bfloat> %13, <256 x
   // bfloat> undef, <128 x i32>
-  Mask = createSequentialMask(Builder, 0, 128, 0);
+  Mask = createSequentialMask(0, 128, 0);
   auto Shuffle4 = Builder.CreateShuffleVector(
       Lookup1, UndefValue::get(Bfloat256Type), Mask);
 
@@ -3296,7 +3286,7 @@ void EvalSpecialFunctionPass::replaceBF16SqrtWithTPCIntrinsics(
 
   // %10 = shufflevector <256 x i16> %9, <256 x i16> undef, <128 x i32> <i32
   // 0..128
-  auto Mask = createSequentialMask(Builder, 0, 128, 0);
+  auto Mask = createSequentialMask(0, 128, 0);
   auto Shuffe1 = Builder.CreateShuffleVector(
       LutEntry1, UndefValue::get(Short256Type), Mask);
 
@@ -3361,6 +3351,7 @@ void EvalSpecialFunctionPass::replaceBF16SqrtWithTPCIntrinsics(
   InstrToReplace->replaceAllUsesWith(FPSpecial);
   InstrToReplace->eraseFromParent();
 }
+#endif // MERGE
 
 void EvalSpecialFunctionPass::replaceBF16ExpWithTPCIntrinsics(
     Module &M, Instruction *InstrToReplace) {
@@ -3385,8 +3376,8 @@ void EvalSpecialFunctionPass::replaceBF16ExpWithTPCIntrinsics(
                          .getCallee());
   auto Mac1 = Builder.CreateCall(
       Intrinsic,
-      {Operand, ConstantVector::getSplat(128, getBfloatValue(1.4453125)), Sw11,
-       Sw2, ConstantVector::getSplat(128, getBfloatValue(0.5)), Predicate,
+      {Operand, ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(1.4453125)), Sw11,
+       Sw2, ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(0.5)), Predicate,
        Polarity});
 
   // %4 = tail call <128 x bfloat> @llvm.tpc.nearbyint...<128 x bfloat> %3, i8
@@ -3424,7 +3415,7 @@ void EvalSpecialFunctionPass::replaceBF16ExpWithTPCIntrinsics(
                          .getCallee());
   auto Mac2 = Builder.CreateCall(
       Intrinsic,
-      {Nearby, ConstantVector::getSplat(128, getBfloatValue(-0.6875)), Sw11,
+      {Nearby, ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(-0.6875)), Sw11,
        Sw2, Operand, Predicate, Polarity});
 
   // %7 = tail call <128 x bfloat> @llvm.tpc.mac...<128 x bfloat> %4, <128 x
@@ -3438,7 +3429,7 @@ void EvalSpecialFunctionPass::replaceBF16ExpWithTPCIntrinsics(
                          .getCallee());
   auto Mac3 = Builder.CreateCall(
       Intrinsic,
-      {Nearby, ConstantVector::getSplat(128, getBfloatValue(-0.00564575195)),
+      {Nearby, ConstantVector::getSplat(ElementCount::getFixed(128), getBfloatValue(-0.00564575195)),
        Sw11, Sw2, Mac2, Predicate, Polarity});
 
   // %8 = tail call <128 x bfloat> @llvm.tpc.sel.leq...(<128 x bfloat> %2,
@@ -3453,7 +3444,7 @@ void EvalSpecialFunctionPass::replaceBF16ExpWithTPCIntrinsics(
   auto SelLeq = Builder.CreateCall(
       Intrinsic,
       {Operand, getBfloatValue(-87.3365479),
-       ConstantVector::getSplat(128, ConstantFP::getInfinity(BF16Type, true)),
+       ConstantVector::getSplat(ElementCount::getFixed(128), ConstantFP::getInfinity(BF16Type, true)),
        Operand, Sw11, Sw2, UndefValue::get(Bfloat128Type), Predicate,
        Polarity});
 
@@ -3469,7 +3460,7 @@ void EvalSpecialFunctionPass::replaceBF16ExpWithTPCIntrinsics(
   auto SelGrt = Builder.CreateCall(
       Intrinsic,
       {SelLeq, getBfloatValue(88.7228394),
-       ConstantVector::getSplat(128, ConstantFP::getInfinity(BF16Type, false)),
+       ConstantVector::getSplat(ElementCount::getFixed(128), ConstantFP::getInfinity(BF16Type, false)),
        SelLeq, Sw11, Sw2, UndefValue::get(Bfloat128Type), Predicate, Polarity});
 
   // %10 = tail call <128 x bfloat> @llvm.tpc.add...<128 x bfloat> %7, bfloat
@@ -3516,7 +3507,7 @@ void EvalSpecialFunctionPass::replaceBF16ExpWithTPCIntrinsics(
 
   // %14 = shl <128 x i16> %5, <i16 7,...
   auto Shl1 = Builder.CreateShl(
-      Convert1, ConstantVector::getSplat(128, ConstantInt::get(I16Type, 7)));
+      Convert1, ConstantVector::getSplat(ElementCount::getFixed(128), ConstantInt::get(I16Type, 7)));
 
   // %15 = bitcast <128 x bfloat> %13 to <128 x i16>
   auto BitCast2 = Builder.CreateBitCast(Lookup1, Short128Type);
@@ -3582,8 +3573,8 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   auto SelGrtRes = Builder.CreateCall(
       Intrinsic,
       {Operand, ConstantFP::get(F32Type, 0.0),
-       ConstantVector::getSplat(64, ConstOne),
-       ConstantVector::getSplat(64, ConstNegOne),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstOne),
+       ConstantVector::getSplat(ElementCount::getFixed(64), ConstNegOne),
        llvm::ConstantInt::get(IntegerType::get(M.getContext(), 8), 0),
        llvm::ConstantInt::get(IntegerType::get(M.getContext(), 32), 0),
        UndefValue::get(Float64Type), llvm::ConstantInt::get(I1Type, 1),
@@ -3620,7 +3611,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
                   ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   auto ConstOneInt = ConstantInt::get(I32Type, 1);
-  auto Op0And = ConstantVector::getSplat(64, ConstOneInt);
+  auto Op0And = ConstantVector::getSplat(ElementCount::getFixed(64), ConstOneInt);
   auto AndRes = Builder.CreateAnd(ConvertRes, Op0And);
 
   auto AddRes = Builder.CreateAdd(ConvertRes, AndRes);
@@ -3658,7 +3649,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   auto Const0Mac = ConstantFP::get(F32Type, 7.85156250e-01);
   auto MacRes = Builder.CreateCall(
       Intrinsic,
-      {ConvertRes, ConstantVector::getSplat(64, Const0Mac),
+      {ConvertRes, ConstantVector::getSplat(ElementCount::getFixed(64), Const0Mac),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 2), FabsRes,
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
@@ -3678,7 +3669,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   Const0Mac = ConstantFP::get(F32Type, 2.41875648498e-4);
   auto Mac2Res = Builder.CreateCall(
       Intrinsic,
-      {ConvertRes, ConstantVector::getSplat(64, Const0Mac),
+      {ConvertRes, ConstantVector::getSplat(ElementCount::getFixed(64), Const0Mac),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 2), MacRes,
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
@@ -3698,7 +3689,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   Const0Mac = ConstantFP::get(F32Type, 3.7748949774e-8);
   auto Mac3Res = Builder.CreateCall(
       Intrinsic,
-      {ConvertRes, ConstantVector::getSplat(64, Const0Mac),
+      {ConvertRes, ConstantVector::getSplat(ElementCount::getFixed(64), Const0Mac),
        ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 2), Mac2Res,
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
@@ -3715,11 +3706,11 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
 
   auto Op0And2 = ConstantInt::get(I32Type, 3);
   auto And2Res =
-      Builder.CreateAnd(LshrRes, ConstantVector::getSplat(64, Op0And2));
+      Builder.CreateAnd(LshrRes, ConstantVector::getSplat(ElementCount::getFixed(64), Op0And2));
 
   auto Op0And3 = ConstantInt::get(I32Type, 2);
   auto And3Res =
-      Builder.CreateAnd(LshrRes, ConstantVector::getSplat(64, Op0And3));
+      Builder.CreateAnd(LshrRes, ConstantVector::getSplat(ElementCount::getFixed(64), Op0And3));
 
   FType = FunctionType::get(Float64Type, TypesConvert2, false);
   Intrinsic = cast<Function>(
@@ -3737,7 +3728,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
     SubRes = Builder.CreateFSub(SelGrtRes, MulRes);
   } else {
     auto ConstOne0 = ConstantFP::get(F32Type, 1.000000e+00);
-    auto Op0Sub4 = ConstantVector::getSplat(64, ConstOne0);
+    auto Op0Sub4 = ConstantVector::getSplat(ElementCount::getFixed(64), ConstOne0);
     MulRes = Builder.CreateFSub(Op0Sub4, ConvertRes);
   }
   auto Sub2Res = Builder.CreateNSWSub(And2Res, And3Res);
@@ -3765,11 +3756,11 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
                                           IntegerType::get(M.getContext(), 8),
                                           IntegerType::get(M.getContext(), 8),
                                           IntegerType::get(M.getContext(), 32),
-                                          VectorType::get(I32Type, 128),
+                                          FixedVectorType::get(I32Type, 128),
                                           I1Type,
                                           I1Type};
   FType =
-      FunctionType::get(VectorType::get(I32Type, 128), TypesGetLutEntry, false);
+      FunctionType::get(FixedVectorType::get(I32Type, 128), TypesGetLutEntry, false);
   Intrinsic = cast<Function>(
       InstrToReplace->getModule()
           ->getOrInsertFunction(
@@ -3778,7 +3769,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   auto GetLutEntryRes = Builder.CreateCall(
       Intrinsic, {FabsRes2, ConstantInt::get(I8Type, 17),
                   ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 24576),
-                  UndefValue::get(VectorType::get(I32Type, 128)),
+                  UndefValue::get(FixedVectorType::get(I32Type, 128)),
                   ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
   SmallVector<uint32_t, 64> Vec0;
   SmallVector<uint32_t, 64> Vec1;
@@ -3788,9 +3779,9 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   }
 
   auto FirstHalf = Builder.CreateShuffleVector(
-      GetLutEntryRes, UndefValue::get(VectorType::get(I32Type, 128)), Vec0);
+      GetLutEntryRes, UndefValue::get(FixedVectorType::get(I32Type, 128)), Vec0);
   auto SecondHalf = Builder.CreateShuffleVector(
-      GetLutEntryRes, UndefValue::get(VectorType::get(I32Type, 128)), Vec1);
+      GetLutEntryRes, UndefValue::get(FixedVectorType::get(I32Type, 128)), Vec1);
 
   auto DestType = Float64Type;
   auto BitCastRes = Builder.CreateBitCast(SecondHalf, DestType);
@@ -3826,10 +3817,10 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
        ConstantInt::get(I1Type, 0)});
 
   SmallVector<Type *, 6> TypesLookUp2c{Int64Type, I32Type,
-                                       I32Type,   VectorType::get(F32Type, 128),
+                                       I32Type,   FixedVectorType::get(F32Type, 128),
                                        I1Type,    I1Type};
   FType =
-      FunctionType::get(VectorType::get(F32Type, 128), TypesLookUp2c, false);
+      FunctionType::get(FixedVectorType::get(F32Type, 128), TypesLookUp2c, false);
   Intrinsic = cast<Function>(
       InstrToReplace->getModule()
           ->getOrInsertFunction(
@@ -3838,13 +3829,13 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   auto LookUp2cRes = Builder.CreateCall(
       Intrinsic,
       {Add4Res, ConstantInt::get(I32Type, 130), ConstantInt::get(I32Type, 0),
-       UndefValue::get(VectorType::get(F32Type, 128)),
+       UndefValue::get(FixedVectorType::get(F32Type, 128)),
        ConstantInt::get(I1Type, 1), ConstantInt::get(I1Type, 0)});
 
   FirstHalf = Builder.CreateShuffleVector(
-      LookUp2cRes, UndefValue::get(VectorType::get(F32Type, 128)), Vec0);
+      LookUp2cRes, UndefValue::get(FixedVectorType::get(F32Type, 128)), Vec0);
   SecondHalf = Builder.CreateShuffleVector(
-      LookUp2cRes, UndefValue::get(VectorType::get(F32Type, 128)), Vec1);
+      LookUp2cRes, UndefValue::get(FixedVectorType::get(F32Type, 128)), Vec1);
 
   FType = FunctionType::get(Float64Type, Types3Mac, false);
   Intrinsic = cast<Function>(
@@ -3971,7 +3962,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
   auto ConstNanFP32 = ConstantFP::getNaN(F32Type);
   auto TPCSelGrt2Res = Builder.CreateCall(
       Intrinsic,
-      {FabsRes, ConvertRes2, ConstantVector::getSplat(64, ConstNanFP32),
+      {FabsRes, ConvertRes2, ConstantVector::getSplat(ElementCount::getFixed(64), ConstNanFP32),
        TPCSelGrtRes, ConstantInt::get(I8Type, 0), ConstantInt::get(I32Type, 0),
        UndefValue::get(Float64Type), ConstantInt::get(I1Type, 1),
        ConstantInt::get(I1Type, 0)});
@@ -3990,7 +3981,7 @@ void EvalSpecialFunctionPass::replaceSinCosWithTPCIntrinsics(
           .getCallee());
   auto TPCSelGeqRes = Builder.CreateCall(
       Intrinsic, {BitCastRes2, ConstantInt::get(I32Type, 2139095040),
-                  ConstantVector::getSplat(64, ConstNanFP32), TPCSelGrt2Res,
+                  ConstantVector::getSplat(ElementCount::getFixed(64), ConstNanFP32), TPCSelGrt2Res,
                   ConstantInt::get(I8Type, 3), ConstantInt::get(I32Type, 0),
                   UndefValue::get(Float64Type), ConstantInt::get(I1Type, 1),
                   ConstantInt::get(I1Type, 0)});
@@ -4093,7 +4084,8 @@ void EvalSpecialFunctionPass::expandSpecialCaseLLVMIR(Module &M) {
          ++It) {
       Instruction *I = &*It;
       // Handle vector FDIV case.
-      if (I->getType()->isVectorTy() && I->getOpcode() == Instruction::FDiv) {
+      if (I->getType()->isVectorTy() && I->getOpcode() == Instruction::FDiv 
+          /*&& cast<FixedVectorType>(I->getType())->getElementType()->getTypeID() != Type::FloatTyID*/) {
         expandFDiv(M, I);
         EraseList.push_back(I);
       }
@@ -4113,17 +4105,17 @@ bool EvalSpecialFunctionPass::runOnModule(Module &M) {
   I8Type = Type::getInt8Ty(M.getContext());
   I16Type = Type::getInt16Ty(M.getContext());
   F32Type = Type::getFloatTy(M.getContext());
-  BF16Type = Type::getBFloat16Ty(M.getContext());
-  Int64Type = VectorType::get(I32Type, 64);
-  Int128Type = VectorType::get(I32Type, 128);
-  Float64Type = VectorType::get(F32Type, 64);
-  Float128Type = VectorType::get(F32Type, 128);
-  Short128Type = VectorType::get(I16Type, 128);
-  Short256Type = VectorType::get(I16Type, 256);
-  Bfloat128Type = VectorType::get(BF16Type, 128);
-  Bfloat256Type = VectorType::get(BF16Type, 256);
-  Char256Type = VectorType::get(I1Type, 256);
-  I8256Type = VectorType::get(I8Type, 256);
+  BF16Type = Type::getBFloatTy(M.getContext());
+  Int64Type = FixedVectorType::get(I32Type, 64);
+  Int128Type = FixedVectorType::get(I32Type, 128);
+  Float64Type = FixedVectorType::get(F32Type, 64);
+  Float128Type = FixedVectorType::get(F32Type, 128);
+  Short128Type = FixedVectorType::get(I16Type, 128);
+  Short256Type = FixedVectorType::get(I16Type, 256);
+  Bfloat128Type = FixedVectorType::get(BF16Type, 128);
+  Bfloat256Type = FixedVectorType::get(BF16Type, 256);
+  Char256Type = FixedVectorType::get(I1Type, 256);
+  I8256Type = FixedVectorType::get(I8Type, 256);
 
   expandSpecialCaseLLVMIR(M);
   expandSpecialFunction(M);

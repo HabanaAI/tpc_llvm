@@ -1,5 +1,5 @@
 ; RUN: llc < %s
-; REQUIRES: x86-registered-target
+
 @.str_1 = internal constant [4 x i8] c"%d\0A\00"                ; <[4 x i8]*> [#uses=1]
 
 declare i32 @printf(i8*, ...)

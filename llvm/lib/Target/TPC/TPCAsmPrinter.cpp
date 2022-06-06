@@ -37,6 +37,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/TargetRegistry.h"
+#include <memory>
 using namespace llvm;
 
 extern Target TheTPCTarget;
@@ -46,8 +47,10 @@ extern "C" void LLVMInitializeTPCAsmPrinter() {
   RegisterAsmPrinter<TPCAsmPrinter> X(TheTPCTarget);
 }
 
-void TPCAsmPrinter::EmitInstruction(const MachineInstr* MI) {
+void TPCAsmPrinter::emitInstruction(const MachineInstr* MI) {
   if (MI->isBundle()) {
+    SmallVector<std::unique_ptr<MCInst>, 4> Instructions;
+
     MCInst MCB = TPCMCInstrInfo::createBundle();
     const MachineBasicBlock* MBB = MI->getParent();
     MachineBasicBlock::const_instr_iterator MII = MI->getIterator();
@@ -55,26 +58,31 @@ void TPCAsmPrinter::EmitInstruction(const MachineInstr* MI) {
 
     for (++MII; MII != MBB->instr_end() && MII->isInsideBundle(); ++MII)
     {
-      MCInst *instb = new (OutContext) MCInst;
-
       if (MII->getOpcode() == TargetOpcode::DBG_VALUE ||
           MII->getOpcode() == TargetOpcode::IMPLICIT_DEF ||
           MII->getOpcode() == TPC::LOOPEND)
         ++IgnoreCount;
       else
       {
-        instb->setOpcode(MII->getOpcode());
-        for (unsigned i = 0; i < MII->getNumOperands(); ++i) {
-          MachineOperand sOp = MII->getOperand(i);
-          if (sOp.isImm()) {
-            instb->addOperand(MCOperand::createImm(sOp.getImm()));
-          } else if (sOp.isFPImm()) {
+         Instructions.push_back(std::make_unique<MCInst>());
+         MCInst *instb = Instructions.back().get();
+
+	 instb->setOpcode(MII->getOpcode());
+	 for (unsigned i = 0; i < MII->getNumOperands(); ++i) {
+	   MachineOperand sOp = MII->getOperand(i);
+	   if (sOp.isImm()) {
+             if (MII->getOpcode() == TPC::MOV_DUAL_GROUP_UNPACKp ||
+               MII->getOpcode() == TPC::MOV_DUAL_GROUP_UNPACKm)
+               instb->addOperand(MCOperand::createImm(sOp.getImm() & 0x00000000ffffffff));
+             else
+               instb->addOperand(MCOperand::createImm(sOp.getImm()));
+	   } else if (sOp.isFPImm()) {
              // TODO: Think about a better way than turn floats to ints
              APFloat Val = sOp.getFPImm()->getValueAPF();
              instb->addOperand(MCOperand::createImm(Val.bitcastToAPInt().getZExtValue()));
-          } else if (sOp.isReg()) {
+	   } else if (sOp.isReg()) {
              instb->addOperand(MCOperand::createReg(sOp.getReg()));
-          } else if (sOp.isMBB()) {
+	   } else if (sOp.isMBB()) {
              MCOperand MCOp = MCOperand::createExpr(MCSymbolRefExpr::create(
                                 	   sOp.getMBB()->getSymbol(), this->OutContext));
              instb->addOperand(MCOp);
@@ -91,7 +99,7 @@ void TPCAsmPrinter::EmitInstruction(const MachineInstr* MI) {
         MCB.addOperand(MCOperand::createInst(instb));
      }
    }
-   OutStreamer->EmitInstruction(MCB, getSubtargetInfo());
+   OutStreamer->emitInstruction(MCB, getSubtargetInfo());
    return;
   }
 
@@ -127,7 +135,7 @@ void TPCAsmPrinter::EmitInstruction(const MachineInstr* MI) {
     break;
   }
 
-  OutStreamer->EmitInstruction(inst, getSubtargetInfo());
+  OutStreamer->emitInstruction(inst, getSubtargetInfo());
 }
 
 static void printOperand(const MachineInstr *MI, unsigned OpNo, raw_ostream &O) {
@@ -171,12 +179,11 @@ bool TPCAsmPrinter::isBlockOnlyReachableByFallthrough(
     const MachineBasicBlock *Block = &*I;
     for (const MachineInstr& MI : Block->instrs()) {
       if (isLoop(MI)) {
-        int idx = TPCII::getIsPredicated(MI.getDesc()) ? MI.getNumOperands() - 7 : MI.getNumOperands() - 5;
-        const MachineOperand& MO = MI.getOperand(idx);
-
-        assert(MO.isMBB() && "Last operand in a LOOP instruction should be a block");
-
-        if (MO.getMBB() == MBB) return false;
+        int idx = TPCII::getIsPredicated(MI.getDesc()) ? MI.getNumOperands() - 4 : MI.getNumOperands() - 2;
+        const MachineOperand &LastOperand = MI.getOperand(idx);
+        assert(LastOperand.isMBB() && "Last operand in a LOOP instruction should be a block");
+        if (LastOperand.getMBB() == MBB)
+          return false;
       }
     }
   }

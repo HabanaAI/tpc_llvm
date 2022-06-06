@@ -35,14 +35,17 @@ struct CodeGenTypeCache {
 
   /// i8, i16, i32, and i64
   llvm::IntegerType *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
-  /// float, double
-  llvm::Type *HalfTy, *FloatTy, *DoubleTy;
+  /// half, bfloat, float, double
+  llvm::Type *HalfTy, *BFloatTy, *FloatTy, *DoubleTy;
 #ifdef LLVM_TPC_COMPILER
-  llvm::Type *BFloat16Ty, *Float8_143Ty, *Float8_152Ty;
+  llvm::Type *Float8_143Ty, *Float8_152Ty;
 #endif
 
   /// int
   llvm::IntegerType *IntTy;
+
+  /// char
+  llvm::IntegerType *CharTy;
 
   /// intptr_t, size_t, and ptrdiff_t, which we assume are the same size.
   union {

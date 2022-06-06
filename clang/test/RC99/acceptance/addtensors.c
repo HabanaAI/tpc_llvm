@@ -29,11 +29,11 @@ void main(tensor in0, tensor in1, tensor out)
 				{
 					curInputOutputIndex[1] = W_itr;
 					float64 input0ValVec = 0;
-					input0ValVec = v_f32_ld_tnsr_i_b(curInputOutputIndex, in0, input0ValVec, 1, 0);
+					input0ValVec = v_f32_ld_tnsr_b(curInputOutputIndex, in0, 0, input0ValVec, 1, 0);
 					float64 input1ValVec = 0;
-					input0ValVec = v_f32_ld_tnsr_i_b(curInputOutputIndex, in1, input0ValVec, 1, 0);
+					input0ValVec = v_f32_ld_tnsr_b(curInputOutputIndex, in1, 0, input0ValVec, 1, 0);
 					float64 resultValVec = input0ValVec + input1ValVec;
-					f32_st_tnsr_i_v_b(curInputOutputIndex, out, resultValVec, 1, 0);
+					v_f32_st_tnsr(curInputOutputIndex, out, resultValVec, 0, 1, 0);
 				} // W loop
 			} // H loop
 		} // B loop

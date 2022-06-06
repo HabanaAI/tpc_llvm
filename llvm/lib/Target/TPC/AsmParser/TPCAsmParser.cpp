@@ -6,8 +6,6 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/InstructionDB.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
@@ -38,6 +36,7 @@
 #include "llvm/Target/TPCKernelInfo.h"
 #include "TPCAsmInstCompress.h"
 #include <algorithm>
+#include <deque>
 #include <bitset>
 #include <map>
 #include <unordered_set>
@@ -822,7 +821,7 @@ public:
       break;
     case OpKind::DataType: {
       static const StringRef OpTypes[] = {
-        "f32", "bf16", "i32", "u32", "i8", "u8", "b", "i16", "u16", "f16"
+        "f32", "bf16", "i32", "u32", "i8", "u8", "b", "i16", "u16", "f16", "f8_143", "f8_152", "i64"
       };
       assert(DataType <= TPCII::OpType::Max);
       OS << "DataType: " << OpTypes[DataType];
@@ -906,12 +905,13 @@ class TPCAsmParser : public MCTargetAsmParser {
 private:
   MCAsmParser &Parser;
   MCAsmLexer &Lexer;
-  TPCAsmInstCompress *AC;
+  TPCAsmInstCompress AC;
   const MCRegisterInfo *MRI;
   const MCRegisterClass &SPRegClass;
   const MCRegisterClass &VPRegClass;
 
   MCInst Bundle;
+  std::deque<MCInst> BundledSubInstructions;
   SlotParser CurrentSlot = SlotParser::Unknown;
   bool IsLastInstrInBundle = false;
   bool NewAsmFormat = false;
@@ -930,20 +930,21 @@ public:
     : MCTargetAsmParser(Options, sti, MII)
     , Parser(Parser)
     , Lexer(Parser.getLexer())
+    , AC(MII)
     , MRI(Parser.getContext().getRegisterInfo())
     , SPRegClass(MRI->getRegClass(TPC::SPRFRegClassID))
     , VPRegClass(MRI->getRegClass(TPC::VPRFRegClassID)) {
-    AC = new TPCAsmInstCompress(MII);
-    AC->setCompressEnabled(Options.MCCompressInst);
+    AC.setCompressEnabled(Options.MCCompressInst);
     MCAsmParserExtension::Initialize(Parser);
     TPCII::setSubTargetInfo(&sti);
+    TPCII::setInstrInfo(&MII);
 
     // Initialize the set of available features.
     setAvailableFeatures(ComputeAvailableFeatures(getSTI().getFeatureBits()));
   }
 
   void onLabelParsed(MCSymbol *Symbol) override {
-    AC->onLabelEmited(Symbol);
+    AC.onLabelEmited(Symbol);
 
     FreeLabels.insert(Symbol->getName());
     LLVM_DEBUG(dbgs() << "Label detected: " << Symbol->getName() << "\n");
@@ -1176,8 +1177,9 @@ private:
     }
   }
 
-  static std::unique_ptr<TPCOperand> defaultSPredicateOperands() {
-    return TPCOperand::CreatePredicate(TPC::SP0, false, false, SMLoc(), SMLoc());
+  std::unique_ptr<TPCOperand> defaultSPredicateOperands() {
+    return TPCOperand::CreatePredicate(TPC::SPRF_TRUE, false, false, SMLoc(),
+                                       SMLoc());
   }
 
   static std::unique_ptr<TPCOperand> defaultRhuOperands() {
@@ -1253,6 +1255,7 @@ private:
   bool parseIndexMap();
 public:
   bool ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) override;
+  OperandMatchResultTy tryParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) override;
   bool ParseImmediate(const MCExpr *&Val, SMLoc &StartLoc, SMLoc &EndLoc);
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
@@ -1285,30 +1288,32 @@ static bool isDimMask(StringRef Identifier) {
 }
 
 bool TPCAsmParser::ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) {
-  MCAsmParser &Parser = getParser();
-  RegNo = 0;
+  OperandMatchResultTy Res = tryParseRegister(RegNo, StartLoc, EndLoc);
+  if (Res == MatchOperand_Success) {
+    Parser.Lex();
+    return false;
+  }
+  return Error(StartLoc, "invalid register name", SMRange(StartLoc, EndLoc));
+}
 
+OperandMatchResultTy TPCAsmParser::tryParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) {
+  MCAsmParser &Parser = getParser();
   const AsmToken &Tok = Parser.getTok();
+
+  // Registers in TPC assembler are always identifiers.
+  if (Tok.isNot(AsmToken::Identifier))
+    return MatchOperand_NoMatch;
+
   StartLoc = Tok.getLoc();
   EndLoc = Tok.getEndLoc();
-
-  if (Tok.isNot(AsmToken::Identifier))
-    return Error(StartLoc, "invalid register name", SMRange(StartLoc, EndLoc));
-  RegNo = MatchRegisterName(Tok.getString());
+  StringRef TokStr = Tok.getString();
+  RegNo = MatchRegisterName(TokStr);
 
   // If the match failed, try the register name as lowercase.
   if (RegNo == 0)
-    RegNo = MatchRegisterName(Tok.getString().lower());
+    RegNo = MatchRegisterName(TokStr.lower());
 
-  EndLoc = Parser.getTok().getEndLoc();
-
-  if (RegNo == 0) {
-    return Error(StartLoc, "invalid register name",
-                 SMRange(StartLoc, EndLoc));
-  }
-
-  Parser.Lex(); // Eat identifier token.
-  return false;
+  return RegNo ? MatchOperand_Success : MatchOperand_NoMatch;
 }
 
 bool TPCAsmParser::ParseImmediate(const MCExpr *&Val, SMLoc &StartLoc, SMLoc &EndLoc) {
@@ -1455,9 +1460,13 @@ OperandMatchResultTy TPCAsmParser::parseRegister(OperandVector &Operands) {
   SMLoc StartLoc = Tok.getLoc();
   SMLoc EndLoc = Tok.getEndLoc();
   int RegClassNo = -1;
-  for (int ClsId : { TPC::SRFRegClassID, TPC::SPRFRegClassID,
+  for (int ClsId : { TPC::SRFRegClassID, TPC::SPRFRegClassID, TPC::MRFRegClassID,
                      TPC::VRFRegClassID, TPC::VPRFRegClassID, TPC::ADRFRegClassID, TPC::IRFRegClassID,
-                     TPC::DRFRegClassID, TPC::ARFRegClassID, TPC::ZRFRegClassID })
+                     TPC::DRFRegClassID, TPC::ARFRegClassID, TPC::ZRFRegClassID,
+                     // HW reg classes:
+		     TPC::HWTnsrRegLdRegClassID, TPC::HWTnsrRegStRegClassID, TPC::HWOffsSizeRegLdRegClassID,
+		     TPC::HWOffsSizeRegStRegClassID, TPC::HWRMWRegRegClassID, TPC::HWDivStepRegClassID,
+		     TPC::HWSCarryRegClassID, TPC::HWVCarryRegClassID, TPC::HWZPRegRegClassID })
     if (MRI->getRegClass(ClsId).contains(RegNo)) {
       RegClassNo = ClsId;
       break;
@@ -1528,7 +1537,7 @@ OperandMatchResultTy TPCAsmParser::parseNumber(OperandVector &Operands) {
       } else if(SuffixStr.compare_lower("h") == 0) {
         Semantics = &APFloat::IEEEhalf();
       } else if(SuffixStr.compare_lower("bf") == 0) {
-        Semantics = &APFloat::BFloat16();
+        Semantics = &APFloat::BFloat();
       } else {
         Error(Suffix.getLoc(), "invalid suffix for real number",
               SMRange(StartLoc, EndLoc));
@@ -1626,7 +1635,7 @@ OperandMatchResultTy TPCAsmParser::parseImmediate(OperandVector &Operands) {
     const fltSemantics &FSem =
         (BitWidth == 32)
             ? APFloat::IEEEsingle()
-        : (IsBFloat16 ? APFloat::BFloat16() : APFloat::IEEEhalf());
+        : (IsBFloat16 ? APFloat::BFloat() : APFloat::IEEEhalf());
     APFloat BinValue(Value);
     bool LoosesInfo;
     auto Status = BinValue.convert(FSem,
@@ -1929,19 +1938,6 @@ static TPCII::OpType parseDataTypeSuffix(StringRef Suffix) {
     .Default(TPCII::OpType::Invalid);
 }
 
-// Checks if the instruction represented by the given mnemonic needs datatype
-// as a part of its mnemonic, which is used in parsing. It does not define if
-// datatype is also represented as an operand.
-static bool keepDataTypeInMnemonic(StringRef Mnemonic, SlotParser Slot, const FeatureBitset& Features) {
-  if (Mnemonic.equals_lower("mac") && Slot == SlotParser::Vector)
-    return true;
-  if (Mnemonic.equals_lower("madd") && Slot == SlotParser::Vector)
-    return true;
-  if (Mnemonic.equals_lower("mul") && Slot == SlotParser::Vector)
-    return true;
-  return false;
-}
-
 
 // Checks if the instruction represented by the given mnemonic needs datatype
 // as an operand.
@@ -2032,17 +2028,36 @@ bool TPCAsmParser::parseAsSeparateSwitch(
 }
 
 
-static bool shallSuffixBeAPartOfMnemonic(StringRef Mnemonic, StringRef Suffix, SlotParser Slot, bool &NeedAsSwitch) {
+static bool shallSuffixBeAPartOfMnemonic(StringRef Mnemonic, StringRef Suffix,
+                                         SlotParser Slot, bool &NeedAsSwitch) {
   // TODO: Initially Slot is Unknown.
-  if (Mnemonic.equals_lower("mov") /*&& Slot == SlotParser::Load*/) {
+  if (Mnemonic.equals_lower("mov") /*&& Slot == SlotParser::Load*/)
     return Suffix.equals_lower("from_hw_reg") || Suffix.equals_lower("to_hw_reg");
-  }
-  if (Mnemonic.equals_lower("mov_dg") || Mnemonic.equals_lower("mov_dual_group")) {
-    if (Suffix.equals_lower("all") || Suffix.equals_lower("pack")) {
+
+  if (Mnemonic.equals_lower("convert") && Suffix.equals_lower("i64"))
+    return true;
+
+  if (StringSwitch<bool>(Suffix)
+      // MSVC has an issue with compilation of CasesLower.
+      .CasesLower("i8", "i16", "i32", true)
+      .CasesLower("u8", "u16", "u32", true)
+      .CasesLower("f32", "bf16", "f16", true)
+      .CasesLower("f8_143", "f8_152", true)
+      .Default(false)) {
+    if (Mnemonic.equals_lower("mac") && Slot == SlotParser::Vector) {
+      NeedAsSwitch = true;
+      return true;
+    }
+    if (Mnemonic.equals_lower("madd") && Slot == SlotParser::Vector) {
+      NeedAsSwitch = true;
+      return true;
+    }
+    if (Mnemonic.equals_lower("mul") && Slot == SlotParser::Vector) {
       NeedAsSwitch = true;
       return true;
     }
   }
+
   return false;
 }
 
@@ -2058,7 +2073,6 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                     OperandVector &Operands) {
   if (Mnemonic.equals("{") || Mnemonic.equals("}")) {
     NewAsmFormat = !Mnemonic.equals("}");
-
     return true;
   }
 
@@ -2074,36 +2088,24 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
       CurrentSlot = SlotParser::Special;
   }
 
-  // If we need to make message referring to the instruction mnemonic or a part
-  // of it, we cannot use 'Name', because it is allocated aside of input buffer
-  // and we cannot use SMLoc to address it. So recreate real name, which is
-  // resides in the input buffer. However this name is not canocicalized to
-  // lower case.
+  // If we need to make a message referring to the instruction mnemonic or a
+  // part of it, 'Mnemonic' cannot be used, because it is allocated aside of
+  // input buffer and SMLoc does not point to it. So recreate the real name,
+  // which resides in the input buffer. This name however is not canonicalized
+  // to lower case.
   StringRef FullName = StringRef(MnemonicLoc.getPointer(), Mnemonic.size());
 
   // Many instructions may have suffixes in their opcode, like 'ADD.I32.ST.CARRY'.
   // In this case we split such opcode into real opcode and operand(s) that
   // represent these suffixes.
   SmallVector<StringRef, 4> Suffixes;
-  if (!FullName.contains(".i64") && FullName.contains('.'))
+  StringRef                 BareMnemonic;   // Mnemonic without suffixes.
+  if (FullName.contains('.')) {
     FullName.split(Suffixes, '.');
-  else if (FullName.contains(".i64")) {
-    // do not split convert.i64
-  }
-
-  StringRef BareMnemonic;   // Mnemonic without suffixes.
-  if (Suffixes.empty())
-    BareMnemonic = Mnemonic;
-  else
     BareMnemonic = Mnemonic.take_front(Suffixes.front().size());
-
-  // The first suffix may be a part of mnemonic.
-  bool NeedAsSwitch = false;
-  if (Suffixes.size() > 1 &&
-      shallSuffixBeAPartOfMnemonic(Suffixes.front(), Suffixes[1], CurrentSlot, NeedAsSwitch)) {
-    Suffixes[0] = FullName.take_front(Suffixes.front().size() + Suffixes[1].size() + 1);
-    if (!NeedAsSwitch)
-      Suffixes.erase(Suffixes.begin() + 1);
+    Suffixes.erase(Suffixes.begin());
+  } else {
+    BareMnemonic = Mnemonic;
   }
 
   // If data type suffix (like '.I32') presents, it must be the first one.
@@ -2112,13 +2114,13 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
   SMLoc DataTypeEndLoc;
   StringRef DataTypeSuffix;
   SMRange DataTypeRange;
-  for (unsigned I = 1, E = Suffixes.size(); I < E; ++I) {
+  for (unsigned I = 0, E = Suffixes.size(); I < E; ++I) {
     StringRef Suffix = Suffixes[I];
     SMLoc SuffixStartLoc = SMLoc::getFromPointer(Suffix.begin());
     SMLoc SuffixEndLoc = SMLoc::getFromPointer(Suffix.end());
     TPCII::OpType DT = parseDataTypeSuffix(Suffix);
     if (DT != TPCII::OpType::Invalid) {
-      if (I != 1) {
+      if (I != 0) {
         SMRange SuffixRange(SuffixStartLoc, SuffixEndLoc);
         Error(SuffixStartLoc, "Data type must be specified first", SuffixRange);
         return true;
@@ -2129,6 +2131,20 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
     }
   }
 
+  // The first suffix may be a part of mnemonic.
+  if (!Suffixes.empty()) {
+    bool NeedAsSwitch = false;
+    StringRef FirstSuffix = Suffixes.front();
+    if (shallSuffixBeAPartOfMnemonic(BareMnemonic, FirstSuffix, CurrentSlot, NeedAsSwitch)) {
+      Mnemonic = Mnemonic.take_front(BareMnemonic.size() + FirstSuffix.size() + 1);
+      if (!NeedAsSwitch) {
+        Suffixes.erase(Suffixes.begin());
+      }
+    } else {
+      Mnemonic = BareMnemonic;
+    }
+  }
+
   // Make datatype argument. Data type may be represented by a separate argument
   // of type 'DataType', be incorporated into instruction mnemonic or treated as
   // switch set.
@@ -2136,20 +2152,12 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
   bool DataTypeAsSwitch = false;
   if (!Suffixes.empty()) {
     if (DataType != TPCII::OpType::Invalid) {
-      if (keepDataTypeInMnemonic(Suffixes[0], CurrentSlot, getSTI().getFeatureBits())) {
-        Mnemonic = Mnemonic.take_front(Suffixes.front().size() + Suffixes[1].size() + 1);
-      } else {
-        Mnemonic = Mnemonic.take_front(Suffixes.front().size());
-      }
       if (needDataTypeAsOperand(Mnemonic, CurrentSlot, getSTI().getFeatureBits()))
         DataTypeOp = TPCOperand::CreateDataType(DataType, DataTypeStartLoc, DataTypeEndLoc);
       else
         DataTypeAsSwitch = true;
       Suffixes.erase(Suffixes.begin());
-    } else {
-      Mnemonic = Mnemonic.take_front(Suffixes.front().size());
     }
-    Suffixes.erase(Suffixes.begin());
   }
 
   // Split bare mnemonic and switch for same instructions
@@ -2159,9 +2167,6 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
     Mnemonic = BareMnemonic = "mov_dg";
   else if (Mnemonic.startswith_lower("mov_dg"))
     Mnemonic = Mnemonic.substr(0, 6);
-
-  if (BareMnemonic.empty())
-    BareMnemonic = Mnemonic;
 
   // The first operand is the instruction name.
   Operands.push_back(TPCOperand::CreateToken(Mnemonic, MnemonicLoc));
@@ -2238,6 +2243,17 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
         // The last operand is not separated by a comma from the next operand.
         // It is allowed only for limited kinds of operands.
         if (!LastOp.isDimMask() &&        // ADD.I32 b11011 I5, I4, I2
+            !(LastOp.isReg() &&           // MUL.I32 M1 I5, I4, I2
+              (LastOp.getRegClass() == TPC::MRFRegClassID ||
+               LastOp.getRegClass() == TPC::HWTnsrRegLdRegClassID ||
+               LastOp.getRegClass() == TPC::HWTnsrRegStRegClassID ||
+               LastOp.getRegClass() == TPC::HWOffsSizeRegLdRegClassID ||
+               LastOp.getRegClass() == TPC::HWOffsSizeRegStRegClassID ||
+               LastOp.getRegClass() == TPC::HWRMWRegRegClassID ||
+               LastOp.getRegClass() == TPC::HWDivStepRegClassID ||
+               LastOp.getRegClass() == TPC::HWSCarryRegClassID ||
+               LastOp.getRegClass() == TPC::HWVCarryRegClassID ||
+               LastOp.getRegClass() == TPC::HWZPRegRegClassID )) &&
             !LastOp.isRegSelTo() &&
             !LastOp.isAccumulator() &&
             !LastOp.isImm() &&            // MOV_IRF_DIM 0 S2, I4
@@ -2269,6 +2285,17 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
   if (LabelOperand)
     OperatorLabels.insert(getStringFromLoc(LabelOperand->getStartLoc(),
                                            LabelOperand->getEndLoc()));
+
+  // Add AUTO_INC for ld_g for goya2
+  if (BareMnemonic.equals_lower("ld_g") &&
+      getSTI().getFeatureBits()[TPC::FeatureGreco]){
+    TPCOperand &SwitchSetOp = static_cast<TPCOperand &>(*Operands[SwitchSetPos]);
+    unsigned SwitchValue = SwitchSetOp.getSwitchSet();
+    if (SwitchValue & TPCII::SW_INC_VAL_G3)
+      SwitchValue = SwitchValue | TPCII::SW_AUTO_INC_G3;
+
+    SwitchSetOp.setSwitchSet(SwitchValue);
+  }
 
   // If the instruction has a switchset operand, set proper default values
   // switches that were not specified and have non-zero default value.
@@ -2321,8 +2348,8 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
           static_cast<const TPCOperand &>(*Operands[5]);
       const TPCOperand &SrcDOp =
           static_cast<const TPCOperand &>(*Operands[6]);
-      if (IsBothImm(SrcBOp, SrcDOp) && SrcBOp.getImm() != SrcDOp.getImm() ||
-          IsBothSrf(SrcBOp, SrcDOp) && SrcBOp.getReg() != SrcDOp.getReg()) {
+      if ((IsBothImm(SrcBOp, SrcDOp) && (SrcBOp.getImm() != SrcDOp.getImm())) ||
+          (IsBothSrf(SrcBOp, SrcDOp) && (SrcBOp.getReg() != SrcDOp.getReg()))) {
         Error(SrcDOp.getStartLoc(),
               "The second and the third sources must be equal in the case both are SRFs or immediates",
               SrcDOp.getLocRange());
@@ -2337,8 +2364,8 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
           static_cast<const TPCOperand &>(*Operands[5]);
       const TPCOperand &SrcDOp =
           static_cast<const TPCOperand &>(*Operands[6]);
-      if (IsBothImm(SrcBOp, SrcDOp) && SrcBOp.getImm() != SrcDOp.getImm() ||
-          IsBothSrf(SrcBOp, SrcDOp) && SrcBOp.getReg() != SrcDOp.getReg()) {
+      if ((IsBothImm(SrcBOp, SrcDOp) && (SrcBOp.getImm() != SrcDOp.getImm())) ||
+          (IsBothSrf(SrcBOp, SrcDOp) && (SrcBOp.getReg() != SrcDOp.getReg()))) {
         Error(SrcDOp.getStartLoc(),
               "The second and the fourth sources must be equal in the case both are SRFs or immediates",
               SrcDOp.getLocRange());
@@ -2351,7 +2378,7 @@ bool TPCAsmParser::ParseInstruction(ParseInstructionInfo &Info,
     dbgs() << "Operands: ";
     for (unsigned I = 0; I < Operands.size(); ++I)
       Operands[I]->dump();
-      dbgs() << '\n';
+    dbgs() << '\n';
   });
 
   // To properly parse instruction we need to recognize end-of-line, which
@@ -2404,7 +2431,7 @@ bool TPCAsmParser::ParseDirective(AsmToken DirectiveID) {
     if (TPCHeader) {
       Error(DirectiveID.getLoc(),
             formatv(MultipleDefErrorMessage,
-                    StringTPCMetadataSectionName),
+                    BinaryTPCMetadataSectionName),
             DirectiveID.getLocRange());
       return false;
     }
@@ -2454,42 +2481,44 @@ void TPCAsmParser::eatToEndOfLine() {
 
 
 MCInst *TPCAsmParser::getNOP(SlotParser Slot, SMLoc Loc) {
-  MCInst *Result = new (getParser().getContext()) MCInst;
-  Result->setLoc(Loc);
+  BundledSubInstructions.emplace_back();
+  MCInst &Result = BundledSubInstructions.back();
+  Result.setLoc(Loc);
   switch (Slot) {
   case SlotParser::Load:
-    Result->setOpcode(TPC::NOPld);
+    Result.setOpcode(TPC::NOPld);
     break;
   case SlotParser::Scalar:
-    Result->setOpcode(TPC::NOPs);
+    Result.setOpcode(TPC::NOPs);
     break;
   case SlotParser::Vector:
-    Result->setOpcode(TPC::NOPv);
+    Result.setOpcode(TPC::NOPv);
     break;
   case SlotParser::Store:
-    Result->setOpcode(TPC::NOPst);
+    Result.setOpcode(TPC::NOPst);
     break;
   default:
     llvm_unreachable("Invalid slot");
   }
-  return Result;
+  return &Result;
 }
 
 
 MCInst *TPCAsmParser::getHALT(SlotParser Slot, SMLoc Loc) {
-  MCInst *Result = new (getParser().getContext()) MCInst;
-  Result->setLoc(Loc);
+  BundledSubInstructions.emplace_back();
+  MCInst &Result = BundledSubInstructions.back();
+  Result.setLoc(Loc);
   switch (Slot) {
   case SlotParser::Scalar:
-    Result->setOpcode(TPC::HALTs);
+    Result.setOpcode(TPC::HALTs);
     break;
   case SlotParser::Vector:
-    Result->setOpcode(TPC::HALTv);
+    Result.setOpcode(TPC::HALTv);
     break;
   default:
     llvm_unreachable("Invalid slot");
   }
-  return Result;
+  return &Result;
 }
 
 
@@ -2539,7 +2568,11 @@ bool TPCAsmParser::canLastArgBeAPredicate(StringRef Mnemonic,
         NumNonPredOperand = 2;  // ST_L_V S1, VP1
       }
     } else if (Mnemonic.startswith_lower("st_tnsr")) {
-      NumNonPredOperand = 3;    // ST_TNSR 1, I3, VP4
+      if (Mnemonic.startswith_lower("st_tnsr_sqz")) {
+        NumNonPredOperand = ~0U; // st_tnsr_sqz can not use predicates as use regiters
+      } else {
+        NumNonPredOperand = 3;    // ST_TNSR 1, I3, VP4
+      }
     } else {
       NumNonPredOperand = StringSwitch<unsigned>(Mnemonic)
         .Case("st_g", 2)          // ST_G AD1, SP1
@@ -2725,8 +2758,14 @@ bool TPCAsmParser::adjustLongRegister(OperandVector &Operands) {
       HasAccFlag = true;
       LongRegOp = static_cast<TPCOperand*>(Operands[++DestRegOpNum].get());
       AccRegNo = LongRegOp->getReg();
+      if (MRI->getRegClass(TPC::HWZPRegRegClassID).contains(AccRegNo)) {
+        LongRegOp = static_cast<TPCOperand *>(Operands[++DestRegOpNum].get());
+      }
     } else if (LongRegOp->isReg()) {
       AccRegNo = LongRegOp->getReg();
+      if (MRI->getRegClass(TPC::HWZPRegRegClassID).contains(AccRegNo)) {
+        LongRegOp = static_cast<TPCOperand *>(Operands[++DestRegOpNum].get());
+      }
     }
 
     if (!LongRegOp->isReg())
@@ -2817,10 +2856,18 @@ bool TPCAsmParser::adjustLongRegister(OperandVector &Operands) {
     const unsigned DestRegOpNum = 2;
     return replaceRegisterWithLong(Operands, DestRegOpNum, LongRegisterKind::DRF);
   } else if (Mnemonic.startswith_lower("udiv_")) {
-    DestRegOpNum = 4;
+    DestRegOpNum = 2;
     LongRegOp = static_cast<TPCOperand*>(Operands[DestRegOpNum].get());
     if (LongRegOp->isReg())
         AccRegNo = LongRegOp->getReg();
+    if (!LongRegOp->isReg() || MRI->getRegClass(TPC::HWDivStepRegClassID).contains(AccRegNo)) {
+      LongRegOp = static_cast<TPCOperand*>(Operands[++DestRegOpNum].get());
+      if (LongRegOp->isReg())
+        AccRegNo = LongRegOp->getReg();
+      if (!LongRegOp->isReg() || MRI->getRegClass(TPC::HWDivStepRegClassID).contains(AccRegNo)) {
+        LongRegOp = static_cast<TPCOperand*>(Operands[++DestRegOpNum].get());
+      }
+    }
     assert(LongRegOp->isReg() && "Incorrect argument in udiv_step instruction");
 
     AccRegNo = LongRegOp->getReg();
@@ -2895,7 +2942,7 @@ bool TPCAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       // All-bundle instruction just parsed.
       Bundle.setLoc(IDLoc);
       if (!MatchingInlineAsm)
-        AC->EmitInstruction(Bundle, Out, getSTI());
+        AC.EmitInstruction(Bundle, Out, getSTI());
       Bundle.clear();
       Bundle.setOpcode(0);
       Bundle.setLoc(SMLoc());
@@ -2950,14 +2997,16 @@ bool TPCAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   }
 
   // Parse current slot instruction.
-  MCInst *SubInst = new (getParser().getContext()) MCInst;
-  MatchResult = MatchSlotInstruction(IDLoc, Operands, *SubInst,
+  BundledSubInstructions.emplace_back();
+  MCInst &SubInst = BundledSubInstructions.back();
+  MatchResult = MatchSlotInstruction(IDLoc, Operands, SubInst,
                                 ErrorInfo, MatchingInlineAsm, Out, CurrentSlot);
   if (MatchResult != MatchCode::Ok)
     return true;
 
-  Bundle.addOperand(MCOperand::createInst(SubInst));
-  Opcode = SubInst->getOpcode();
+
+  Bundle.addOperand(MCOperand::createInst(&SubInst));
+  Opcode = SubInst.getOpcode();
 
   if (NewAsmFormat && CurrentSlot == SlotParser::Store) {
     IsLastInstrInBundle = true;
@@ -3023,7 +3072,7 @@ void TPCAsmParser::outputBundle(MCStreamer &Out, SMLoc IDLoc, bool UseStreamer) 
   LLVM_DEBUG(dbgs() << "--\n");
 
   if (UseStreamer)
-    AC->EmitInstruction(Bundle, Out, getSTI());
+    AC.EmitInstruction(Bundle, Out, getSTI());
 
   // Clear current bundle.
   Bundle.clear();
@@ -3032,26 +3081,14 @@ void TPCAsmParser::outputBundle(MCStreamer &Out, SMLoc IDLoc, bool UseStreamer) 
   CurrentSlot = SlotParser::Unknown;
 }
 
-
-// If it is not name for .TPC_METADATA returns std::end(TPCMetadataFieldsInfo)
-static const TPCMetadataFieldInfo *GetTPCMetadataInfo(
-    const StringRef &FieldName) {
-  return std::find_if(std::begin(TPCMetadataFieldsInfo),
-                      std::end(TPCMetadataFieldsInfo),
-                      [&FieldName](const TPCMetadataFieldInfo &Value) {
-                        return FieldName.compare_lower(Value.fieldName) == 0;}
-  );
-}
-
-
 bool TPCAsmParser::parseTPCMetadata() {
   const AsmToken &Tok = Lexer.getTok();
 
   TPCHeader = TPCMetadataSection();
-  std::unordered_set<unsigned> SetField;
+  std::unordered_set<const TPCMetadataFieldInfo *> SetField;
 
   std::string RedefinitionField = formatv("Redefintion of {0} field: ",
-                                          StringTPCMetadataSectionName);
+                                          BinaryTPCMetadataSectionName);
 
   // scalarLds set indexes.
   std::bitset<TPCNumTensors> ScalarIdSetIndexes;
@@ -3059,7 +3096,6 @@ bool TPCAsmParser::parseTPCMetadata() {
   std::bitset<TPCNumTensors> RMWStoreIndexes;
   // Parse field by field
 
-  const TPCMetadataFieldInfo *CurrentFieldInfo = nullptr;
   for (;;) {
     while (Tok.getKind() == AsmToken::EndOfStatement)
       Lexer.Lex();
@@ -3067,29 +3103,28 @@ bool TPCAsmParser::parseTPCMetadata() {
     if (Tok.getKind() == AsmToken::Eof)
       break;
 
-    CurrentFieldInfo = GetTPCMetadataInfo(Tok.getString());
+    const TPCMetadataFieldInfo *CurrentFieldInfo =
+        getTPCMetadataFieldInfo(Tok.getString());
+    if (!CurrentFieldInfo)
+      break;  // Possible, if it is start of an assembler program
     if (StringRef(CurrentFieldInfo->fieldName).compare(TPCScalarLdName) == 0) {
       if (!parseTPCMetadataArrayField(ScalarIdSetIndexes, *CurrentFieldInfo))
         return false;
       continue;
-    } else if (StringRef(CurrentFieldInfo->fieldName).compare(TPCRMWStoreName) == 0) {
+    }
+    if (StringRef(CurrentFieldInfo->fieldName).compare(TPCRMWStoreName) == 0) {
       if (!parseTPCMetadataArrayField(RMWStoreIndexes, *CurrentFieldInfo))
         return false;
       continue;
-    } else if (CurrentFieldInfo != std::end(TPCMetadataFieldsInfo)) {
-      unsigned CurrentFieldNumber = CurrentFieldInfo - TPCMetadataFieldsInfo;
-      if (SetField.find(CurrentFieldNumber) != SetField.end()){
-        Error(Tok.getLoc(),
-              Twine(RedefinitionField.data(), Tok.getString()),
-              Tok.getLocRange());
-        return false;
-      }
+    }
+    if (SetField.find(CurrentFieldInfo) != SetField.end()) {
+      Error(Tok.getLoc(), Twine(RedefinitionField.data(), Tok.getString()),
+            Tok.getLocRange());
+      return false;
+    }
 
-
-      SetField.insert(CurrentFieldNumber);
-      Lexer.Lex();
-    } else // Possible, it is start of a assembler program
-      break;
+    SetField.insert(CurrentFieldInfo);
+    Lexer.Lex();
 
    // Parse ':'
    if (Tok.getKind() == AsmToken::Colon) {
@@ -3126,6 +3161,18 @@ bool TPCAsmParser::parseTPCMetadata() {
        case 2:
          WrongArch = CPU.compare_lower("gaudi") != 0;
          break;
+       case 3:
+         WrongArch = CPU.compare_lower("greco") != 0;
+         break;
+       case 4:
+         WrongArch = CPU.compare_lower("gaudi2") != 0;
+         break;
+       case 5:
+         WrongArch = CPU.compare_lower("gaudib") != 0;
+         break;
+       case 6:
+         WrongArch = CPU.compare_lower("doron1") != 0;
+         break;
        default:
          llvm_unreachable("Unknown arch");
        }
@@ -3160,14 +3207,16 @@ bool TPCAsmParser::parseTPCMetadataArrayField(
   AsmToken FieldTok;
 
   const std::string RedefinitionMessage = formatv("Redefintion of {0} field.",
-                                                  StringTPCMetadataSectionName);
+                                                  BinaryTPCMetadataSectionName);
 
   // Parse field by field
   for (;;) {
     // Eat end of lines and end of statement
-    while (Tok.getKind() == AsmToken::Eof ||
-          Tok.getKind() == AsmToken::EndOfStatement)
+    while (Tok.getKind() == AsmToken::EndOfStatement)
      Lexer.Lex();
+
+    if (Tok.getKind() == AsmToken::Eof)
+      return true;
 
     // Possible it is other TPC_METADATA field
     if (Tok.getKind() != AsmToken::Identifier)
@@ -3328,7 +3377,7 @@ bool TPCAsmParser::parseIndexMap() {
 void TPCAsmParser::flushPendingInstructions(MCStreamer &Out) {
   if (CurrentSlot != SlotParser::Unknown)
     outputBundle(Out, SMLoc(), true);
-  AC->flushPendingInstructions(Out, getSTI());
+  AC.flushPendingInstructions(Out, getSTI());
 
   if (TPCHeader) {
     Out.PushSection();
@@ -3339,7 +3388,7 @@ void TPCAsmParser::flushPendingInstructions(MCStreamer &Out) {
     MCDataFragment* Fragment = new MCDataFragment(MetadataSection);
 
     const TPCMetadataSection &Header = TPCHeader.getValue();
-    std::vector<uint8_t> BinaryValue = bianrySerializeTPCProgramHeader(Header);
+    std::vector<uint8_t> BinaryValue = binarySerializeTPCProgramHeader(Header);
     Fragment->getContents().append(BinaryValue.begin(), BinaryValue.end());
     Fragment->setAlignToBundleEnd(true);
     Out.SwitchSection(MetadataSection);

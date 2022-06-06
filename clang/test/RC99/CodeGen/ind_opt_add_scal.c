@@ -6,10 +6,10 @@ void main(int src,int step) {
   storeCoord[0]+=step;
   storeCoord[1]+=step;
   storeCoord[2]+=step;
-  i32_st_tnsr_i_v_b(storeCoord, 1, val, 1, 0);
+  v_i32_st_tnsr(storeCoord, 1, val, 0, 1, 0);
   storeCoord[3]+=step;
   storeCoord[4]+=step;
-  i32_st_tnsr_i_v_b(storeCoord, 1, val, 1, 0);
+  v_i32_st_tnsr(storeCoord, 1, val, 0, 1, 0);
 }
 
 // CHECK: add.i32  b00111 [[NDX1:%I[0-9]+]], %S1, %I{{[0-9]+}}

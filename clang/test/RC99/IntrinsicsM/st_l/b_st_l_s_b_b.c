@@ -1,10 +1,13 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none  -mllvm -emit-index-factors=false -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -mllvm -emit-index-factors=false -std=rc99 -bfloat16 -target-cpu gaudi %s -o - | FileCheck %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none  -mllvm -emit-index-factors=false -std=rc99 -bfloat16 -target-cpu goya2 -mllvm -tpc-lock-mismatch-error=0 %s -o - | FileCheck --check-prefixes=CHECK,GEN3P %s
 
 void main(unsigned dest, _Bool value, _Bool pred) {
-  b_st_l_s_b_b(dest, value, 0, pred, 0);
-  b_st_l_s_b_b(dest+4, value, 1, pred, 1);
+  s_i1_st_l(dest, value, 0, pred, 0);
+  s_i1_st_l(dest+4, value, 1, pred, 1);
+#if defined(__goya2__)
+  s_i1_st_l(dest+8, value, 3, pred, 1);
+#endif
 }
 
 // CHECK-DAG: mov     %SP[[VALUE:[0-9]+]], %S1

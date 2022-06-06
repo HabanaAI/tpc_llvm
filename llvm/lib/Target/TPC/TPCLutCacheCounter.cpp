@@ -1,8 +1,7 @@
 //===---- TPCLutCacheCounter.cpp --- Optimizes predicates ----------------===//
+//                     The LLVM Compiler Infrastructure:
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//              2021 - This pass is a property of Habana labs
 //
 // Author: Michael Zuckerman
 //===----------------------------------------------------------------------===//
@@ -29,6 +28,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Target/TargetMachine.h"
 #include <map>
 #include <set>
 

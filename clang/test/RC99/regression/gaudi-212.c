@@ -5,7 +5,7 @@ void main(tensor ifm, tensor ofm)
   const int5 index_space_start = get_index_space_offset();
   int5 Ind;
   char256 Val;
-  Val = 0; //v_i8_ld_tnsr_i_b(Ind, ifm, 1, 0);
+  Val = 0; //v_i8_ld_tnsr_b(Ind, ifm, 0, 1, 0, );
 
   const int row0 = index_space_start[2];
   const int row1 = row0 + 1;
@@ -15,7 +15,7 @@ void main(tensor ifm, tensor ofm)
   Ind[3] = row2;
   Ind[2] = row0;
   Ind[4] = row0;
-  i8_st_tnsr_i_v_b(Ind, ofm, Val, 1, 0);
+  v_i8_st_tnsr(Ind, ofm, Val, 0, 1, 0);
 }
 
 // CHECK: 	set_indx [[IRF:%I[0-9]+]], b00011, %S{{[0-9]+}}

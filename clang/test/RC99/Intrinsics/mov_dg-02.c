@@ -1,6 +1,7 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi %s  -o - | FileCheck %s
-
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 %s  -o - | FileCheck %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 %s -o - | FileCheck %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu doron1 %s -o - | FileCheck %s
 
 void main(int dest, int src, int vpredp, _Bool pred) {
   float64 __local *dest_ptr = (float64 __local *)dest;

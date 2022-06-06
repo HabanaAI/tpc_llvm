@@ -7,4 +7,4 @@ void main(int src, int dest) {
   *dptr = convert_bfloat256_to_float256(src_val, 0);
 }
 
-// CHECK-IR: fpext <256 x bfloat> {{.*}} to <256 x float>
+// CHECK-IR: call <256 x float> @llvm.tpc.convert.v256f32.v256bf16.i1(<256 x bfloat> {{.*}}, i8 1, i32 0, <256 x float> undef, i1 true, i1 false)

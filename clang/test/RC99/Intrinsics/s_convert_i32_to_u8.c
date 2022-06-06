@@ -1,5 +1,5 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN2P %s
 
 void main(unsigned int dest, int x, _Bool pred) {
   volatile unsigned char __local *dest_ptr = (unsigned char __local *)dest;

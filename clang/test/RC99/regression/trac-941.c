@@ -73,19 +73,19 @@ void main(tensor ifm,
                             for (int kh = h - 1 ; kh <= h + 1; kh++)
                             {
                                 int5 ifmIndex = { d, kw, kh, b, 0 } ;
-                                char256 ifmValue = v_i8_ld_tnsr_i_b(ifmIndex, ifm, 0 /*source*/, 1, 1);
+                                char256 ifmValue = v_i8_ld_tnsr_b(ifmIndex, ifm, 0, 0 /*source*/, 1, 1);
 
-                                accum = av_i8_mac_v_s_b(ifmValue, mul_factor, accum, 1/*saturated*/, 1, 1);
+                                accum = v_i8_mac_b(ifmValue, mul_factor, accum, 1/*saturated*/, 1, 1);
                             }
                         }
 
                         char256 accum_out;
-                        accum_out = v_convert_int32_to_i8_v_s_b(accum.v1, -shift_factor, 0 /*source*/, 0 /*RNE*/, 0, 1 /*don't predicate */, 1);
-                        accum_out = v_convert_int32_to_i8_v_s_b(accum.v2, -shift_factor, 0 /*source*/, 0 /*RNE*/, 1, 1 /*don't predicate */, 1);
-                        accum_out = v_convert_int32_to_i8_v_s_b(accum.v3, -shift_factor, 0 /*source*/, 0 /*RNE*/, 2, 1 /*don't predicate */, 1);
-                        accum_out = v_convert_int32_to_i8_v_s_b(accum.v4, -shift_factor, 0 /*source*/, 0 /*RNE*/, 3, 1 /*don't predicate */, 1);
+                        accum_out = v_convert_int32_to_i8_b(accum.v1, -shift_factor, 0, ((0 /*RNE*/) << 16), 0 /*source*/, 1 /*don't predicate */, 1);
+                        accum_out = v_convert_int32_to_i8_b(accum.v2, -shift_factor, 1, ((0 /*RNE*/) << 16), 0 /*source*/, 1 /*don't predicate */, 1);
+                        accum_out = v_convert_int32_to_i8_b(accum.v3, -shift_factor, 2, ((0 /*RNE*/) << 16), 0 /*source*/, 1 /*don't predicate */, 1);
+                        accum_out = v_convert_int32_to_i8_b(accum.v4, -shift_factor, 3, ((0 /*RNE*/) << 16), 0 /*source*/, 1 /*don't predicate */, 1);
 
-                        i8_st_tnsr_i_v_b(output_coords, ofm, accum_out, 1, 1);
+                        v_i8_st_tnsr(output_coords, ofm, accum_out, 0, 1, 1);
 
                     } //iteration over OFM depth
                 } //iteration over OFM height

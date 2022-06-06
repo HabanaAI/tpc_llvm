@@ -1,11 +1,12 @@
 add_llvm_component_library(LLVMScalarOpts
   ADCE.cpp
   AlignmentFromAssumptions.cpp
+  AnnotationRemarks.cpp
   BDCE.cpp
   CallSiteSplitting.cpp
   EliminateSwizzleCast.cpp
   ConstantHoisting.cpp
-  ConstantProp.cpp
+  ConstraintElimination.cpp
   CoordUpdateSimplify.cpp
   CorrelatedValuePropagation.cpp
   DCE.cpp
@@ -37,6 +38,7 @@ add_llvm_component_library(LLVMScalarOpts
   LoopIdiomRecognize.cpp
   LoopInstSimplify.cpp
   LoopInterchange.cpp
+  LoopFlatten.cpp
   LoopLoadElimination.cpp
   LoopPassManager.cpp
   LoopPredication.cpp
@@ -66,13 +68,13 @@ add_llvm_component_library(LLVMScalarOpts
   PlaceSafepoints.cpp
   Reassociate.cpp
   TPCIterationClusterizer.cpp
-  TPCReplaceCmpSel.cpp
   Reg2Mem.cpp
   RewriteStatepointsForGC.cpp
   SCCP.cpp
   SROA.cpp
   Scalar.cpp
   Scalarizer.cpp
+  ScalarizeMaskedMemIntrin.cpp
   SeparateConstOffsetFromGEP.cpp
   SimpleLoopUnswitch.cpp
   SimplifyCFGPass.cpp
@@ -91,4 +93,15 @@ add_llvm_component_library(LLVMScalarOpts
 
   DEPENDS
   intrinsics_gen
+
+  COMPONENT_NAME
+  Scalar
+
+  LINK_COMPONENTS
+  AggressiveInstCombine
+  Analysis
+  Core
+  InstCombine
+  Support
+  TransformUtils
   )

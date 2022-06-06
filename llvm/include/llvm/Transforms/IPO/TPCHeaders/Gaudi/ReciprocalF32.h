@@ -1,12 +1,3 @@
-//===--------ReciprocalF32.h-----------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 const llvm::StringRef GaudiRecipF32LL = R"(
 ; Function Attrs: alwaysinline nounwind
 define  dso_local <64 x float> @reciprocal_f32(<64 x float> %input) local_unnamed_addr #2 {
@@ -71,3 +62,4 @@ attributes #2 = { alwaysinline nounwind "correctly-rounded-divide-sqrt-fp-math"=
 attributes #3 = { nounwind writeonly }
 attributes #4 = { nounwind readnone   willreturn }
 )";
+

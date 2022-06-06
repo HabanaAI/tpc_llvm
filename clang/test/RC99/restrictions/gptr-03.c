@@ -3,9 +3,9 @@
 void main(int dest, tensor out) {
   int __global *ptr, *ptr1;
   int5 c0 = 0;
-  ptr = (__global int *) a_gen_addr_i(c0, out);
+  ptr = (__global int *) gen_addr(c0, out, 0, 0, 1, 0);
   c0[0] = 1;
-  ptr1 = (__global int *) a_gen_addr_i(c0, out);
+  ptr1 = (__global int *) gen_addr(c0, out, 0, 0, 1, 0);
   int *dptr = (int __local *)dest;
 
   dptr[0] = ptr == ptr1;  // expected-error{{unsupported operation on global pointer}}

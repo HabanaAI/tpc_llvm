@@ -1,12 +1,3 @@
-//===--------ReduceMinI16.h-----------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 const llvm::StringRef GaudiReduceMinI16LL = R"(
 ; Function Attrs: alwaysinline nounwind
 define  dso_local <128 x i16> @v_i16_reduce_min(<128 x i16> %0) local_unnamed_addr #2 {
@@ -22,9 +13,9 @@ define  dso_local <128 x i16> @v_i16_reduce_min(<128 x i16> %0) local_unnamed_ad
   %11 = bitcast <64 x float> %5 to <256 x i8>
   %12 = bitcast <64 x float> %8 to <256 x i8>
   %13 = bitcast <64 x float> %9 to <256 x i8>
-  %14 = call <128 x i16> @llvm.tpc.mov.dual.group.all.v128i16.i1(<128 x i16> %0, i32 -1, i32 16756992, <128 x i16> zeroinitializer, i1 true, i1 false)
+  %14 = call <128 x i16> @llvm.tpc.mov.dual.group.all.v128i16.i1(<128 x i16> %0, i32 -1, i32 0, i32 16756992, <128 x i16> zeroinitializer, i1 true, i1 false)
   %15 = call <128 x i16> @llvm.tpc.min.v128i16.v128i16.v128i16.i1(<128 x i16> %0, <128 x i16> %14, i8 7, i32 0, <128 x i16> undef, i1 true, i1 false)
-  %16 = call <128 x i16> @llvm.tpc.mov.dual.group.all.v128i16.i1(<128 x i16> %15, i32 -1, i32 16731648, <128 x i16> %14, i1 true, i1 false)
+  %16 = call <128 x i16> @llvm.tpc.mov.dual.group.all.v128i16.i1(<128 x i16> %15, i32 -1, i32 0, i32 16731648, <128 x i16> %14, i1 true, i1 false)
   %17 = call <128 x i16> @llvm.tpc.min.v128i16.v128i16.v128i16.i1(<128 x i16> %15, <128 x i16> %16, i8 7, i32 0, <128 x i16> undef, i1 true, i1 false)
   %18 = call <128 x i16> @llvm.tpc.mov.group.v128i16.v128i16.i1(<128 x i16> %17, i32 -1, i32 63, <128 x i16> %16, i1 true, i1 false)
   %19 = call <128 x i16> @llvm.tpc.min.v128i16.v128i16.v128i16.i1(<128 x i16> %17, <128 x i16> %18, i8 7, i32 0, <128 x i16> undef, i1 true, i1 false)
@@ -47,7 +38,7 @@ declare <64 x i32> @llvm.read_register.v64i32(metadata) #3
 
 declare <128 x float> @llvm.tpc.lookup.2c.v128f32.v64i32(<64 x i32>, i32, i32, <128 x float>, i1, i1) #1
 
-declare <128 x i16> @llvm.tpc.mov.dual.group.all.v128i16.i1(<128 x i16>, i32, i32, <128 x i16>, i1, i1) #1
+declare <128 x i16> @llvm.tpc.mov.dual.group.all.v128i16.i1(<128 x i16>, i32, i32, i32, <128 x i16>, i1, i1) #1
 
 declare <128 x i16> @llvm.tpc.min.v128i16.v128i16.v128i16.i1(<128 x i16>, <128 x i16>, i8, i32, <128 x i16>, i1, i1) #1
 

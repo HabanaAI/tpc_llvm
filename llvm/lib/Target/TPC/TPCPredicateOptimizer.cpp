@@ -1,13 +1,9 @@
 //===---- TPCPredicateOptimizer.cpp --- Optimizes predicates --------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // This pass:
-// - replaces predicates with known value with SP0.
+// - replaces predicates with known value with UNPR.
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,8 +11,12 @@
 #include "TPCSubtarget.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/Support/Debug.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "MCTargetDesc/TPCMCInstrInfo.h"
+
+#define DEBUG_TYPE "tpc-pred"
+
 using namespace llvm;
 
 namespace llvm {
@@ -40,8 +40,9 @@ class TPCPredicateOptimizer : public MachineFunctionPass {
   MachineFunction *MF = nullptr;
   unsigned NumReplaced = 0;
   unsigned NumRemoved = 0;
-  const TargetInstrInfo *TII = nullptr;
+  const TPCInstrInfo *TII = nullptr;
   const TargetRegisterInfo *TRI = nullptr;
+  const TPCSubtarget *TST = nullptr;
   MachineRegisterInfo *MRI = nullptr;
 
 public:
@@ -76,74 +77,36 @@ FunctionPass *llvm::createTPCPredicateOptimizer() {
 bool TPCPredicateOptimizer::isSPRFPredicated(const MachineInstr &I,
                                              unsigned &PredRegLoc,
                                              unsigned &IncomeValue) {
-  // Instruction is predicated if its last two arguments are of type i1, and the
-  // last argument (polarity) is a constant.
+  bool Polarity;
+  int Predicate;
 
-  const MCInstrDesc &MCD = I.getDesc();
-  if (MCD.getNumOperands() <= 2)
+  if (!looksLikeHavingAPredicate(I, Predicate, Polarity))
     return false;
 
-  const MCOperandInfo &PredicateOp = MCD.OpInfo[MCD.getNumOperands() - 2];
-  if (PredicateOp.OperandType != TPC::OperandType::OPERAND_PREDICATE)
-    return false;
-
-  const MCOperandInfo &PolarityOp = MCD.OpInfo[MCD.getNumOperands() - 1];
-  if (PolarityOp.OperandType != TPC::OperandType::OPERAND_PREDICATE)
-    return false;
-
-  if (!I.getOperand(MCD.getNumOperands() - 1).isImm())
-    return false;
-
-  const MachineOperand &PredOp = I.getOperand(MCD.getNumOperands() - 2);
-  if (!PredOp.isReg())
-    return false;
-
-  Register RegNo = PredOp.getReg();
-  const TargetRegisterClass *RC;
-  if (RegNo.isVirtual()) {
-    RC = MRI->getRegClass(RegNo);
-  } else {
-    RC = static_cast<const TPCInstrInfo*>(TII)->getClassOfPhysicalRegister(RegNo, *TRI);
-  }
-
+  Register Reg = I.getOperand(Predicate).getReg();
+  const TargetRegisterClass *RC = getRegisterClass(Reg, *MRI);
   if (RC != &TPC::SPRFRegClass)
-    return false;
+    return false; //TODO VP0 ??
 
-  PredRegLoc = MCD.getNumOperands() - 2;
+  PredRegLoc = Predicate;
   IncomeValue = ~0U;
 
-  // Instructions that do not produce values do not need income value.
-  if (!I.getOperand(0).isReg() || !I.getOperand(0).isDef())
+  if (I.getDesc().getNumDefs() == 0)
     return true;
-
-  // Calculate income source operand. It must be of the same type as the result
-  // of the instruction and be tired to the instruction result.
-  unsigned NIncome;
-  for (NIncome = PredRegLoc; NIncome > 0; --NIncome) {
-    const MachineOperand &Op = I.getOperand(NIncome);
-    if (Op.isReg()) {
-      if (Op.isTied()) {
-        unsigned TiredOp = I.findTiedOperandIdx(NIncome);
-        if (TiredOp == 0)
-          break;
-      }
-    }
+  
+  int NIncome = getIncome(I);
+  if (NIncome > 0) {
+    IncomeValue = NIncome;
+  } else {
+    assert(TPCII::isStoreInst(I.getDesc()) && "Def under predicate must have income");
   }
-  if (NIncome == 0)
-    return false;
 
-  IncomeValue = NIncome;
   return true;
 }
 
 bool TPCPredicateOptimizer::isDstFullyWritten(const MachineInstr &I) {
   Register ireg = I.getOperand(0).getReg();
-  const TargetRegisterClass *RC;
-  if (ireg.isVirtual()) {
-    RC = MRI->getRegClass(ireg);
-  } else {
-    RC = static_cast<const TPCInstrInfo*>(TII)->getClassOfPhysicalRegister(ireg, *TRI);
-  }
+  const TargetRegisterClass *RC = getRegisterClass(ireg, *MRI);
   // Currently, we optimize only for SRF and VRF dest
   if (RC != &TPC::SRFRegClass && RC != &TPC::VRFRegClass) {
     return false;
@@ -156,47 +119,24 @@ bool TPCPredicateOptimizer::isDstFullyWritten(const MachineInstr &I) {
     case TPCII::vpuMSAC:
       return false;
 
-    case TPCII::vpuCONVERT:
-    {
-      //  "f32", "bf16", "i32", "u32", "i8", "u8", "b", "i16", "u16", "f16"
-      int isDown[12][12]{
-          //  f32, bf16, i32, u32, i8, u8,   b, i16, u16, i4, u4, f16
-          {0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1}, // f32
-          {0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0}, // bf16
-          {0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1}, // i32
-          {0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1}, // u32
-          {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0}, // i8
-          {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0}, // u8
-          {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0}, // b
-          {0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0}, // i16
-          {0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0}, // u16
-          {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, // i4
-          {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, // u4
-          {0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0}  // f16
-      };
+    case TPCII::vpuCONVERT: {
+      if (isAllLanesVpuConvert(I, *TST))
+        return true;
 
-      // Check if it is a down-convert
-      const MachineOperand &SwOp = I.getOperand(3);
-      if (!SwOp.isImm()) {
-        return false;
-      }
-      unsigned SwVal = SwOp.getImm();
-      // extract 'To' data type from the switch
-      SwVal = (SwVal >> 8) & 0xF;
-      const MachineOperand &DTOp = I.getOperand(2);
-      if (!DTOp.isImm()) {
-        return false;
-      }
-      unsigned DTVal = DTOp.getImm();
-      if (isDown[DTVal][SwVal]) {
-        return false;
-      }
-      return true;
+      const unsigned SrcTy = I.getOperand(2).getImm();
+      const unsigned DstTy = (getSwitches(I) >> 8) & 0xF;
+      return TPCII::getOpTypeMinSizeBits(static_cast<TPCII::OpType>(DstTy)) >
+             TPCII::getOpTypeMinSizeBits(static_cast<TPCII::OpType>(SrcTy));
     }
+    case TPCII::vpuCONVERT_INT8:
+    case TPCII::vpuCONVERT_UINT8:
+      return false;
     case TPCII::vpuCONVERT_INT16:
     case TPCII::vpuCONVERT_UINT16:
+      return isAllLanesVpuConvertI16(I, *TST);
     case TPCII::vpuCONVERT_INT32:
     case TPCII::vpuCONVERT_UINT32:
+      return isAllLanesVpuConvertI32(I, *TST);
     case TPCII::vpuCALC_FP_SPECIAL:
       // CALC_FP_SPECIAL leaves DST unchanged for some input values
     case TPCII::vpuPACK:
@@ -206,19 +146,10 @@ bool TPCPredicateOptimizer::isDstFullyWritten(const MachineInstr &I) {
 
     case TPCII::vpuMOV_DUAL_GROUP:
     {
-      bool hasAllSw = false;
-      unsigned Sw = 0;
-      if (MF->getSubtarget<TPCSubtarget>().hasGaudiISA()) {
-        const MachineOperand &SwOp = I.getOperand(3);
-        if (!SwOp.isImm()) {
-          return false;
-        }
-        Sw = SwOp.getImm();
-        if ((Sw & 0x01) == 0x01) { // ALL switch
-          hasAllSw = true;
-        }
-      }
-      if (!hasAllSw) {
+      unsigned Sw = llvm::getSwitches(I);
+      bool hasAllSw = (Sw & TPCII::SW_MDG_TYPE_MASK) == TPCII::SW_MDG_TYPE_ALL;
+
+      if (!hasAllSw || (Sw & TPCII::SW_MDG_SWAP_TYPE)) {
         return false;
       }
       // Extract SrcC from Sw operand (sw{23-16} according to InstrFormat)
@@ -226,6 +157,15 @@ bool TPCPredicateOptimizer::isDstFullyWritten(const MachineInstr &I) {
 
       if (SrcC != 0xFF)
         return false;
+
+      const MachineOperand &ImmOp = I.getOperand(2);
+      unsigned Imm = ImmOp.getImm();
+      if (!ImmOp.isImm()) {
+        return false;
+      }
+      if (Imm != 0xFFFFFFFF) {
+        return false;
+      }
       return true;
     }
     case TPCII::vpuMOV_GROUP:
@@ -284,9 +224,16 @@ bool TPCPredicateOptimizer::runOnMachineFunction(MachineFunction &Func) {
   if (!EnablePredicateOptimizer)
     return false;
 
+  LLVM_DEBUG({
+    dbgs() << "Input function:\n";
+    Func.dump();
+    dbgs() << "\n";
+  });
+
   MF = &Func;
   TRI = MF->getSubtarget().getRegisterInfo();
-  TII = MF->getSubtarget().getInstrInfo();
+  TII = MF->getSubtarget<TPCSubtarget>().getInstrInfo();
+  TST = &MF->getSubtarget<TPCSubtarget>();
   MRI = &MF->getRegInfo();
   NumReplaced = NumRemoved = 0;
 
@@ -307,7 +254,7 @@ bool TPCPredicateOptimizer::runOnMachineFunction(MachineFunction &Func) {
 
         // Try to evaluate predicate value.
         bool PredicateValue;
-        if (PredReg == TPC::SP0) {
+        if (PredReg == TPC::SPRF_TRUE) {
           PredicateValue = true;
         } else {
           // Get instruction that defines the predicate.
@@ -317,18 +264,23 @@ bool TPCPredicateOptimizer::runOnMachineFunction(MachineFunction &Func) {
           case TPC::COPY:
             DefiningValueNo = 1;
             break;
-          case TPC::MOVpip:
-            if (PredDef->getOperand(PredDef->getNumOperands() - 2).getReg() == TPC::SP0) {
-              DefiningValueNo = 1;
-              break;
+          case TPC::MOVpip: {
+            bool Polarity;
+            int Predicate;
+            if (looksLikeHavingAPredicate(*PredDef, Predicate, Polarity)) {
+              if (PredDef->getOperand(Predicate).getReg() == TPC::SPRF_TRUE) {
+                DefiningValueNo = 1;
+                break;
+              }
             }
             LLVM_FALLTHROUGH;
+          }
           default:
             continue;
           }
           if (PredDef->getOperand(DefiningValueNo).isReg()) {
             unsigned DefReg = PredDef->getOperand(DefiningValueNo).getReg();
-            if (DefReg == TPC::SP0) {
+            if (DefReg == TPC::SPRF_TRUE) {
               PredicateValue = true;
             } else {
               continue;
@@ -342,9 +294,12 @@ bool TPCPredicateOptimizer::runOnMachineFunction(MachineFunction &Func) {
 
         // Predicate value evaluated. Transform the instruction.
         if (PredicateValue != InvertedPolarity) {
-          // Replace register with SP0
-          I.getOperand(PredRegLoc).setReg(TPC::SP0);
+          // Replace register with UNPR
+          LLVM_DEBUG(dbgs() << "del pred: " << I);
+          I.getOperand(PredRegLoc).setReg(TPC::SPRF_TRUE);
+          I.getOperand(PredRegLoc).setIsKill(false);
           I.getOperand(PredRegLoc + 1).setImm(0);
+          LLVM_DEBUG(dbgs() << "      to: " << I);
 
           // TODO: Replace income operand with undef for scalar data but only
           // if it is not used as accumulator.
@@ -353,23 +308,21 @@ bool TPCPredicateOptimizer::runOnMachineFunction(MachineFunction &Func) {
             unsigned IncomeReg = I.getOperand(IncomeArg).getReg();
             MachineInstr* IncomeDef = MRI->getVRegDef(IncomeReg);
             if (IncomeDef->getOpcode() != TPC::IMPLICIT_DEF) {
+              LLVM_DEBUG(dbgs() << "replace: " << I);
               Register ireg = I.getOperand(0).getReg();
-              const TargetRegisterClass *RC;
-              if (ireg.isVirtual()) {
-                RC = MRI->getRegClass(ireg);
-              } else {
-                RC = static_cast<const TPCInstrInfo*>(TII)->getClassOfPhysicalRegister(ireg, *TRI);
-              }
+              const TargetRegisterClass *RC = getRegisterClass(ireg, *MRI);
               unsigned Undef = MRI->createVirtualRegister(RC);
               const DebugLoc &DL = I.getDebugLoc();
               BuildMI(*(I.getParent()), &I, DL, TII->get(TPC::IMPLICIT_DEF), Undef);
               I.getOperand(IncomeArg).setReg(Undef);
               //I.getOperand(IncomeArg).setIsUndef();
+              LLVM_DEBUG(dbgs() << "   with: " << I);
             }
           }
           ++NumReplaced;
         } else {
           // Remove instruction.
+          LLVM_DEBUG(dbgs() << "remove: " << I);
           unsigned NIn = IncomeArg;
           for (MachineOperand &D : I.defs()) {
             assert(D.isReg());
@@ -385,5 +338,12 @@ bool TPCPredicateOptimizer::runOnMachineFunction(MachineFunction &Func) {
     }
   }
 
-  return NumReplaced > 0 || NumRemoved > 0;
+  const bool Changed = NumReplaced > 0 || NumRemoved > 0;
+
+  LLVM_DEBUG(if (Changed) {
+    dbgs() << "\nOutput function:\n";
+    Func.dump();
+  });
+
+  return Changed;
 }

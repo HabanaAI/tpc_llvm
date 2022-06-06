@@ -45,15 +45,15 @@ void sort4Step(char256 unsorted[K], uchar256_char256_pair_t sorted[K], int k)
     //get maximum value
     sorted[k].v2 = unsorted[0];
     sorted[k].v1 = 0;
-    sorted[k] = v_i8_u8_sel2_grt_v_v_v_v(unsorted[1], sorted[k].v2, 1, sorted[k].v1);
-    sorted[k] = v_i8_u8_sel2_grt_v_v_v_v(unsorted[2], sorted[k].v2, 2, sorted[k].v1);
-    sorted[k] = v_i8_u8_sel2_grt_v_v_v_v(unsorted[3], sorted[k].v2, 3, sorted[k].v1);
+    sorted[k] = v_u8_sel2_grt_i8_b(unsorted[1], sorted[k].v2, 1, sorted[k].v1, 0, (uchar256_char256_pair_t){0}, 1, 0);
+    sorted[k] = v_u8_sel2_grt_i8_b(unsorted[2], sorted[k].v2, 2, sorted[k].v1, 0, (uchar256_char256_pair_t){0}, 1, 0);
+    sorted[k] = v_u8_sel2_grt_i8_b(unsorted[3], sorted[k].v2, 3, sorted[k].v1, 0, (uchar256_char256_pair_t){0}, 1, 0);
 
     //minimize maximum value
-    unsorted[0] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 0, -128, unsorted[0]);
-    unsorted[1] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 1, -128, unsorted[1]);
-    unsorted[2] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 2, -128, unsorted[2]);
-    unsorted[3] = v_u8_i8_sel_eq_v_s_v_v(sorted[k].v1, 3, -128, unsorted[3]);
+    unsorted[0] = v_i8_sel_eq_u8_b(sorted[k].v1, 0, -128, unsorted[0], 0, 0, 1, 0);
+    unsorted[1] = v_i8_sel_eq_u8_b(sorted[k].v1, 1, -128, unsorted[1], 0, 0, 1, 0);
+    unsorted[2] = v_i8_sel_eq_u8_b(sorted[k].v1, 2, -128, unsorted[2], 0, 0, 1, 0);
+    unsorted[3] = v_i8_sel_eq_u8_b(sorted[k].v1, 3, -128, unsorted[3], 0, 0, 1, 0);
 }
 
 
@@ -84,16 +84,16 @@ void main(tensor ifm, tensor ofm_val, tensor ofm_index, char firstActivation, ch
         int5 ifmIndex = index_space_start;
         uint16_t baseIndx = index_space_start[0];
 
-        unsorted[0] = v_i8_ld_tnsr_i(ifmIndex,ifm);
+        unsorted[0] = v_i8_ld_tnsr_b(ifmIndex, ifm, 0, 0, 1, 0);
         ifmIndex[0]++;
 
-        unsorted[1] = v_i8_ld_tnsr_i(ifmIndex,ifm);
+        unsorted[1] = v_i8_ld_tnsr_b(ifmIndex, ifm, 0, 0, 1, 0);
         ifmIndex[0]++;
 
-        unsorted[2] = v_i8_ld_tnsr_i(ifmIndex,ifm);
+        unsorted[2] = v_i8_ld_tnsr_b(ifmIndex, ifm, 0, 0, 1, 0);
         ifmIndex[0]++;
 
-        unsorted[3] = v_i8_ld_tnsr_i(ifmIndex,ifm);
+        unsorted[3] = v_i8_ld_tnsr_b(ifmIndex, ifm, 0, 0, 1, 0);
         ifmIndex[0]++;
 
         sort4(unsorted, sorted_uchar);
@@ -101,24 +101,24 @@ void main(tensor ifm, tensor ofm_val, tensor ofm_index, char firstActivation, ch
 
         for (int i=0; i<K; i++) {
             sorted[i].v1 = sorted_uchar[i].v2;
-            sorted[i].v21 = v_u16_and_v_s((ushort128)sorted_uchar[i].v1, 0xFFFF);
-            sorted[i].v22 = v_u16_shr_v_s((ushort128)sorted_uchar[i].v1, 16);
-            sorted[i].v22 = v_u16_and_v_s(sorted[i].v22, 0xFFFF);
+            sorted[i].v21 = v_u16_and_b((ushort128)sorted_uchar[i].v1, 0xFFFF, 0, 0, 1, 0);
+            sorted[i].v22 = v_u16_shr_b((ushort128)sorted_uchar[i].v1, 16, 0, 0, 1, 0);
+            sorted[i].v22 = v_u16_and_b(sorted[i].v22, 0xFFFF, 0, 0, 1, 0);
 
         }
     
         ushort128 tmp = sorted[0].v21;
-        i8_st_tnsr_i_v(ofmValCord, ofm_val, sorted_uchar[0].v2);
-        u16_st_tnsr_i_v(ofmIndxCord, ofm_index, tmp);
+        v_i8_st_tnsr(ofmValCord, ofm_val, sorted_uchar[0].v2, 0, 1, 0);
+        v_u16_st_tnsr(ofmIndxCord, ofm_index, tmp, 0, 1, 0);
 
-        i8_st_tnsr_i_v(ofmValCord, ofm_val, sorted_uchar[1].v2);
-        u8_st_tnsr_i_v(ofmIndxCord, ofm_index, sorted_uchar[1].v1);
+        v_i8_st_tnsr(ofmValCord, ofm_val, sorted_uchar[1].v2, 0, 1, 0);
+        v_u8_st_tnsr(ofmIndxCord, ofm_index, sorted_uchar[1].v1, 0, 1, 0);
 
-        i8_st_tnsr_i_v(ofmValCord, ofm_val, sorted_uchar[2].v2);
-        u8_st_tnsr_i_v(ofmIndxCord, ofm_index, sorted_uchar[2].v1);
+        v_i8_st_tnsr(ofmValCord, ofm_val, sorted_uchar[2].v2, 0, 1, 0);
+        v_u8_st_tnsr(ofmIndxCord, ofm_index, sorted_uchar[2].v1, 0, 1, 0);
 
-        i8_st_tnsr_i_v(ofmValCord, ofm_val, sorted_uchar[3].v2);
-        u8_st_tnsr_i_v(ofmIndxCord, ofm_index, sorted_uchar[3].v1);
+        v_i8_st_tnsr(ofmValCord, ofm_val, sorted_uchar[3].v2, 0, 1, 0);
+        v_u8_st_tnsr(ofmIndxCord, ofm_index, sorted_uchar[3].v1, 0, 1, 0);
 
     }
 }

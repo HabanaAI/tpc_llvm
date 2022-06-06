@@ -1,4 +1,4 @@
-; RUN: opt < %s -has-usedef-edge=false -ddg-pi-blocks=true -disable-output "-passes=print<ddg>" 2>&1 | FileCheck %s
+; RUN: opt < %s -disable-output -ddg-simplify -ddg-pi-blocks -has-usedef-edge=false "-passes=print<ddg>" 2>&1 | FileCheck %s
 
 ; CHECK-LABEL: 'DDG' for loop 'test1.for.body':
 

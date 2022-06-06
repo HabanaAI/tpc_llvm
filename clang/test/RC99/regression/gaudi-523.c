@@ -16,5 +16,5 @@ void main(int int_par, tensor input_tnsr, tensor out_tnsr)
         }
     }
 
-    i32_st_tnsr_i_v(out_index, out_tnsr, total_count_for_level_2); // comment out this line - no crash
+    v_i32_st_tnsr(out_index, out_tnsr, total_count_for_level_2, 0, 1, 0); // comment out this line - no crash
 }

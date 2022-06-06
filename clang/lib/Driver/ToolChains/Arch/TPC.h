@@ -17,8 +17,7 @@ namespace driver {
 namespace tools {
 namespace tpc {
 
-const char *getTPCTargetCPU(const llvm::opt::ArgList &Args,
-                            const llvm::Triple &Triple);
+const char *getTPCTargetCPU(const llvm::opt::ArgList &Args);
 
 void getTPCTargetFeatures(const Driver &D, const llvm::opt::ArgList &Args,
                           std::vector<llvm::StringRef> &Features);

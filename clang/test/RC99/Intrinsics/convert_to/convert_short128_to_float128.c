@@ -7,4 +7,4 @@ void main(int src, int dest) {
   *dptr = convert_short128_to_float128(src_val, 0);
 }
 
-// CHECK-IR: sitofp <128 x i16> {{.*}} to <128 x float>
+// CHECK-IR: call <128 x float> @llvm.tpc.convert.v128f32.v128i16.i1(<128 x i16> {{.*}}, i8 7, i32 0, <128 x float> undef, i1 true, i1 false)

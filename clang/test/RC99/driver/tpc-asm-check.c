@@ -5,8 +5,8 @@ void main(tensor tensor0, int src,int dst1,int dst2) {
 
   int storeCoord[5] = { 0, 1, 2, 3, 4 };
   int a = storeCoord[src];
-  __global__ void* addr = a_gen_addr_i(offset, tensor0);
-  i32_st_g_a_s_b(addr, a,1,0);
+  __global__ void* addr = gen_addr(offset, tensor0, 0, 0, 1, 0);
+  s_i32_st_g(addr, a, 0, 1, 0);
 
 }
-//CHECK:     ld_l  S{{[0-9]+}}, S{{[0-9]+}}, SP0;   nop;    nop;    nop
+//CHECK:     ld_l  S{{[0-9]+}}, S{{[0-9]+}};   nop;    nop;    nop

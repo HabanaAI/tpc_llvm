@@ -1,12 +1,3 @@
-//===---- TPCTargetMachine.h -------------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===-------------------------------------------------------------------------------===//
-//
-//===-------------------------------------------------------------------------------===//
 #ifndef _TPC_TARGET_MACHINE_H_
 #define _TPC_TARGET_MACHINE_H_
 
@@ -41,8 +32,8 @@ void initializeTPCIndexMapPass(PassRegistry&);
 FunctionPass *createTPCIndexGen();
 void initializeTPCIndexGenPass(PassRegistry &);
 
-FunctionPass *createNodePreLegalizer();
-void initializeNodePreLegalizerPass(PassRegistry&);
+FunctionPass *createTPCModuleLegalizer();
+void initializeTPCModuleLegalizerPass(PassRegistry&);
 
 FunctionPass *createTpcCopyElision();
 void initializeTpcCopyElisionPass(PassRegistry&);
@@ -53,6 +44,26 @@ void initializeAttributeAdjusterPass(PassRegistry&);
 FunctionPass *createPromoteMemoryToRegsPass();
 void initializePromoteMemoryToRegsPass(PassRegistry&);
 
+struct TPCEliminateRedundantLinearityPassConfig {
+  bool HasFeatureTensorStorePack32To16 = false;
+  bool HasFeatureTensorStorePack32To8 = false;
+  bool HasFeatureTensorStorePack16To8 = false;
+  bool HasFeatureTensorLoadUnpack = false;
+};
+
+FunctionPass *createTPCEliminateRedundantLinearityPass(
+    TPCEliminateRedundantLinearityPassConfig Cfg);
+void initializeEliminateRedundantLinearityLegacyPassPass(PassRegistry &);
+
+FunctionPass *createMarkupDirectMMIOAccessPass();
+void initializeMarkupDirectMMIOAccessPassPass(PassRegistry &);
+
+FunctionPass *createTPCPredicateOptimizer();
+void initializeTPCPredicateOptimizerPass(PassRegistry &);
+
+FunctionPass *createTPCIncMerger();
+void initializeTPCIncMergerPass(PassRegistry &);
+
 FunctionPass *createTPCTransformIntrinPass();
 FunctionPass *createTPCHardwareLoops();
 FunctionPass *createTPCPipeliner();
@@ -61,8 +72,9 @@ FunctionPass *createTPCExpandHWRegCopies();
 FunctionPass *createTPCUnHardwareLoops();
 FunctionPass *createTPCSetSpillBase();
 FunctionPass *createTPCSetIndxCoalescer();
-FunctionPass *createTPCPredicateOptimizer();
+#ifdef DEPRECATED_TPC_ADDR_OPT
 FunctionPass *createTPCAddrOpt();
+#endif
 FunctionPass *createTPCHWWA2();
 FunctionPass *createTPCRegisterBalancer();
 FunctionPass *createTPCRegisterCounter();
@@ -70,6 +82,7 @@ FunctionPass *createTPCElfSpecSet();
 FunctionPass *createTPCLutCacheCounter();
 FunctionPass *createTPCLatencyResolver();
 FunctionPass *createTPCCostModelEmitter();
+FunctionPass *createEventProfilerInject();
 FunctionPass *createTPCFMAoptPass();
 FunctionPass *createTPCUnbranchPass();
 FunctionPass *createTPCSelectorPreshaper();
@@ -83,6 +96,7 @@ FunctionPass *createTPCHWWAGeneral();
 FunctionPass *createTPCMovCoalescer();
 FunctionPass *createTPCImmToReg();
 FunctionPass *createTPCScalarSink();
+FunctionPass *createTPCSwapFakePredicate();
 
 class TPCTargetMachine : public LLVMTargetMachine {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
@@ -111,7 +125,7 @@ public:
 
   TargetTransformInfo getTargetTransformInfo(const Function &F) override;
 
-  bool usesPhysRegsForPEI() const override { return false; }
+ bool usesPhysRegsForValues() const override { return false; }
 };
 
 } // end namespace llvm

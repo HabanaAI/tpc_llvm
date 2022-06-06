@@ -17,15 +17,15 @@ set( LLVM_LINK_COMPONENTS
   Vectorize
   )
 
+if("TPC" IN_LIST LLVM_TARGETS_TO_BUILD)
+    list(APPEND LLVM_LINK_COMPONENTS TPCDesc)
+endif()
+
 option(CLANG_PLUGIN_SUPPORT "Build clang with plugin support" ON)
 
 # Support plugins.
 if(CLANG_PLUGIN_SUPPORT)
   set(support_plugins SUPPORT_PLUGINS)
-endif()
-
-if(NOT CLANG_BUILT_STANDALONE)
-  set(tablegen_deps intrinsics_gen)
 endif()
 
 add_clang_tool(clang
@@ -35,7 +35,7 @@ add_clang_tool(clang
   cc1gen_reproducer_main.cpp
 
   DEPENDS
-  ${tablegen_deps}
+  intrinsics_gen
   ${support_plugins}
   )
 
@@ -49,6 +49,17 @@ clang_target_link_libraries(clang
   clangSerialization
   )
 
+if("TPC" IN_LIST LLVM_TARGETS_TO_BUILD)
+  add_custom_target(clang-and-libs
+    ALL
+    DEPENDS clang tpclib
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target clang
+  )
+  set_target_properties(clang-and-libs PROPERTIES
+    FOLDER "Misc"
+  )
+endif()
+
 if(WIN32 AND NOT CYGWIN)
   # Prevent versioning if the buildhost is targeting for Win32.
 else()
@@ -57,7 +68,7 @@ endif()
 
 # Support plugins.
 if(CLANG_PLUGIN_SUPPORT)
-  export_executable_symbols(clang)
+  export_executable_symbols_for_plugins(clang)
 endif()
 
 add_dependencies(clang clang-resource-headers)

@@ -8,7 +8,7 @@ void main(int x) {
 }
 
 
-// CHECK: define void @main(i32 %x) {{.*}} {
+// CHECK: define dso_local void @main(i32 %x) {{.*}} {
 // CHECK:   store <64 x i32> <i32 1, {{.*}}, i32 1>, <64 x i32> addrspace(2)* getelementptr inbounds ([2 x <64 x i32>], [2 x <64 x i32>] addrspace(2)* null, i32 0, i32 1), align 256
 
 

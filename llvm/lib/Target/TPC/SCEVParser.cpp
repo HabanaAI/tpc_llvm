@@ -1,12 +1,3 @@
-//===- SCEVParser.cpp ----------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
 #include "SCEVParser.h"
 
 void SCEVParser::searchForValue(const SCEV *s, vector<Instruction *> &InsVecUpdate) {
@@ -210,7 +201,7 @@ std::string SCEVParser::printH(const SCEV *scev) {
         return std::to_string(
                 dyn_cast<ConstantInt>(m_SCE.visit(conValue))->getSExtValue());
     if (const SCEVUnknown *unknown = dyn_cast<SCEVUnknown>(scev))
-        return m_SCE.visit(unknown)->getName();
+        return m_SCE.visit(unknown)->getName().str();
     return result;
 }
 

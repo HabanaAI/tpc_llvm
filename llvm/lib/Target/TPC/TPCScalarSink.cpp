@@ -1,8 +1,9 @@
 //===---- TPCScalarSink.cpp - Convert vector operands into scalar operands -----===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -108,6 +109,8 @@ bool TPCScalarSink::runOnMachineFunction(MachineFunction &MF) {
   //       Think of something better
   V2S[TPC::MACf32vvp] = TPC::MACf32vsp; V2I[TPC::MACf32vvp] = TPC::MACf32vip;
   V2S[TPC::MACf32vvm] = TPC::MACf32vsm; V2I[TPC::MACf32vvm] = TPC::MACf32vim;
+  V2S[TPC::MACf16vvp] = TPC::MACf16vsp; V2I[TPC::MACf16vvp] = TPC::MACf16vip;
+  V2S[TPC::MACf16vvm] = TPC::MACf16vsm; V2I[TPC::MACf16vvm] = TPC::MACf16vim;
   V2S[TPC::MACi16vvp] = TPC::MACi16vsp; V2I[TPC::MACi16vvp] = TPC::MACi16vip;
   V2S[TPC::MACi16vvm] = TPC::MACi16vsm; V2I[TPC::MACi16vvm] = TPC::MACi16vim;
   V2S[TPC::MACu16vvp] = TPC::MACu16vsp; V2I[TPC::MACu16vvp] = TPC::MACu16vip;
@@ -118,9 +121,25 @@ bool TPCScalarSink::runOnMachineFunction(MachineFunction &MF) {
   V2S[TPC::MACu8vvm] = TPC::MACu8vsm; V2I[TPC::MACu8vvm] = TPC::MACu8vim;
   V2S[TPC::MACAbf16vvp] = TPC::MACAbf16vsp; V2I[TPC::MACAbf16vvp] = TPC::MACAbf16vip;
   V2S[TPC::MACAbf16vvm] = TPC::MACAbf16vsm; V2I[TPC::MACAbf16vvm] = TPC::MACAbf16vim;
+  V2S[TPC::MACAf16vvp] = TPC::MACAf16vsp; V2I[TPC::MACAf16vvp] = TPC::MACAf16vip;
+  V2S[TPC::MACAf16vvm] = TPC::MACAf16vsm; V2I[TPC::MACAf16vvm] = TPC::MACAf16vim;
+  V2S[TPC::MACAf8_143vvp] = TPC::MACAf8_143vsp; V2I[TPC::MACAf8_143vvp] = TPC::MACAf8_143vip;
+  V2S[TPC::MACAf8_143vvm] = TPC::MACAf8_143vsm; V2I[TPC::MACAf8_143vvm] = TPC::MACAf8_143vim;
+  V2S[TPC::MACAf8_152vvp] = TPC::MACAf8_152vsp; V2I[TPC::MACAf8_152vvp] = TPC::MACAf8_152vip;
+  V2S[TPC::MACAf8_152vvm] = TPC::MACAf8_152vsm; V2I[TPC::MACAf8_152vvm] = TPC::MACAf8_152vim;
+  V2S[TPC::MACAi8vvp] = TPC::MACAi8vsp; V2I[TPC::MACAi8vvp] = TPC::MACAi8vip;
+  V2S[TPC::MACAi8vvm] = TPC::MACAi8vsm; V2I[TPC::MACAi8vvm] = TPC::MACAi8vim;
+  V2S[TPC::MACAu8vvp] = TPC::MACAu8vsp; V2I[TPC::MACAu8vvp] = TPC::MACAu8vip;
+  V2S[TPC::MACAu8vvm] = TPC::MACAu8vsm; V2I[TPC::MACAu8vvm] = TPC::MACAu8vim;
+  V2S[TPC::MACA32u8vvp] = TPC::MACA32u8vsp; V2I[TPC::MACA32u8vvp] = TPC::MACA32u8vip;
+  V2S[TPC::MACA32u8vvm] = TPC::MACA32u8vsm; V2I[TPC::MACA32u8vvm] = TPC::MACA32u8vim;
+  V2S[TPC::MACA32u16vvp] = TPC::MACA32u16vsp; V2I[TPC::MACA32u16vvp] = TPC::MACA32u16vip;
+  V2S[TPC::MACA32u16vvm] = TPC::MACA32u16vsm; V2I[TPC::MACA32u16vvm] = TPC::MACA32u16vim;
 
   V2S[TPC::MULf32vvp] = TPC::MULf32vsp; V2I[TPC::MULf32vvp] = TPC::MULf32vip;
   V2S[TPC::MULf32vvm] = TPC::MULf32vsm; V2I[TPC::MULf32vvm] = TPC::MULf32vim;
+  V2S[TPC::MULf16vvp] = TPC::MULf16vsp; V2I[TPC::MULf16vvp] = TPC::MULf16vip;
+  V2S[TPC::MULf16vvm] = TPC::MULf16vsm; V2I[TPC::MULf16vvm] = TPC::MULf16vim;
   V2S[TPC::MULi32vvp] = TPC::MULi32vsp; V2I[TPC::MULi32vvp] = TPC::MULi32vip;
   V2S[TPC::MULi32vvm] = TPC::MULi32vsm; V2I[TPC::MULi32vvm] = TPC::MULi32vim;
   V2S[TPC::MULu32vvp] = TPC::MULu32vsp; V2I[TPC::MULu32vvp] = TPC::MULu32vip;
@@ -135,10 +154,43 @@ bool TPCScalarSink::runOnMachineFunction(MachineFunction &MF) {
   V2S[TPC::MULu8vvm] = TPC::MULu8vsm; V2I[TPC::MULu8vvm] = TPC::MULu8vim;
   V2S[TPC::MULAbf16vvp] = TPC::MULAbf16vsp; V2I[TPC::MULAbf16vvp] = TPC::MULAbf16vip;
   V2S[TPC::MULAbf16vvm] = TPC::MULAbf16vsm; V2I[TPC::MULAbf16vvm] = TPC::MULAbf16vim;
+  V2S[TPC::MULAf16vvp] = TPC::MULAf16vsp; V2I[TPC::MULAf16vvp] = TPC::MULAf16vip;
+  V2S[TPC::MULAf16vvm] = TPC::MULAf16vsm; V2I[TPC::MULAf16vvm] = TPC::MULAf16vim;
+  V2S[TPC::MULAf8_143vvp] = TPC::MULAf8_143vsp; V2I[TPC::MULAf8_143vvp] = TPC::MULAf8_143vip;
+  V2S[TPC::MULAf8_143vvm] = TPC::MULAf8_143vsm; V2I[TPC::MULAf8_143vvm] = TPC::MULAf8_143vim;
+  V2S[TPC::MULAf8_152vvp] = TPC::MULAf8_152vsp; V2I[TPC::MULAf8_152vvp] = TPC::MULAf8_152vip;
+  V2S[TPC::MULAf8_152vvm] = TPC::MULAf8_152vsm; V2I[TPC::MULAf8_152vvm] = TPC::MULAf8_152vim;
   V2S[TPC::MULAi32vvp] = TPC::MULAi32vsp; V2I[TPC::MULAi32vvp] = TPC::MULAi32vip;
   V2S[TPC::MULAi32vvm] = TPC::MULAi32vsm; V2I[TPC::MULAi32vvm] = TPC::MULAi32vim;
   V2S[TPC::MULAu32vvp] = TPC::MULAu32vsp; V2I[TPC::MULAu32vvp] = TPC::MULAu32vip;
   V2S[TPC::MULAu32vvm] = TPC::MULAu32vsm; V2I[TPC::MULAu32vvm] = TPC::MULAu32vim;
+
+  V2S[TPC::MADDf32vvvp] = TPC::MADDf32vsvp; V2I[TPC::MADDf32vvvp] = TPC::MADDf32vivp;
+  V2S[TPC::MADDf32vvvm] = TPC::MADDf32vsvm; V2I[TPC::MADDf32vvvm] = TPC::MADDf32vivm;
+  V2S[TPC::MADDf16vvvp] = TPC::MADDf16vsvp; V2I[TPC::MADDf16vvvp] = TPC::MADDf16vivp;
+  V2S[TPC::MADDf16vvvm] = TPC::MADDf16vsvm; V2I[TPC::MADDf16vvvm] = TPC::MADDf16vivm;
+  V2S[TPC::MADDbf16vvvp] = TPC::MADDbf16vsvp; V2I[TPC::MADDbf16vvvp] = TPC::MADDbf16vivp;
+  V2S[TPC::MADDbf16vvvm] = TPC::MADDbf16vsvm; V2I[TPC::MADDbf16vvvm] = TPC::MADDbf16vivm;
+  V2S[TPC::MADDi16vvvp] = TPC::MADDi16vsvp; V2I[TPC::MADDi16vvvp] = TPC::MADDi16vivp;
+  V2S[TPC::MADDi16vvvm] = TPC::MADDi16vsvm; V2I[TPC::MADDi16vvvm] = TPC::MADDi16vivm;
+  V2S[TPC::MADDu16vvvp] = TPC::MADDu16vsvp; V2I[TPC::MADDu16vvvp] = TPC::MADDu16vivp;
+  V2S[TPC::MADDu16vvvm] = TPC::MADDu16vsvm; V2I[TPC::MADDu16vvvm] = TPC::MADDu16vivm;
+  V2S[TPC::MADDi8vvvp] = TPC::MADDi8vsvp; V2I[TPC::MADDi8vvvp] = TPC::MADDi8vivp;
+  V2S[TPC::MADDi8vvvm] = TPC::MADDi8vsvm; V2I[TPC::MADDi8vvvm] = TPC::MADDi8vivm;
+  V2S[TPC::MADDu8vvvp] = TPC::MADDu8vsvp; V2I[TPC::MADDu8vvvp] = TPC::MADDu8vivp;
+  V2S[TPC::MADDu8vvvm] = TPC::MADDu8vsvm; V2I[TPC::MADDu8vvvm] = TPC::MADDu8vivm;
+  V2S[TPC::MADDAbf16vvvp] = TPC::MADDAbf16vsvp; V2I[TPC::MADDAbf16vvvp] = TPC::MADDAbf16vivp;
+  V2S[TPC::MADDAbf16vvvm] = TPC::MADDAbf16vsvm; V2I[TPC::MADDAbf16vvvm] = TPC::MADDAbf16vivm;
+  V2S[TPC::MADDAf16vvvp] = TPC::MADDAf16vsvp; V2I[TPC::MADDAf16vvvp] = TPC::MADDAf16vivp;
+  V2S[TPC::MADDAf16vvvm] = TPC::MADDAf16vsvm; V2I[TPC::MADDAf16vvvm] = TPC::MADDAf16vivm;
+  V2S[TPC::MADDAf8_143vvvp] = TPC::MADDAf8_143vsvp; V2I[TPC::MADDAf8_143vvvp] = TPC::MADDAf8_143vivp;
+  V2S[TPC::MADDAf8_143vvvm] = TPC::MADDAf8_143vsvm; V2I[TPC::MADDAf8_143vvvm] = TPC::MADDAf8_143vivm;
+  V2S[TPC::MADDAf8_152vvvp] = TPC::MADDAf8_152vsvp; V2I[TPC::MADDAf8_152vvvp] = TPC::MADDAf8_152vivp;
+  V2S[TPC::MADDAf8_152vvvm] = TPC::MADDAf8_152vsvm; V2I[TPC::MADDAf8_152vvvm] = TPC::MADDAf8_152vivm;
+  V2S[TPC::MADDAi8vvvp] = TPC::MADDAi8vsvp; V2I[TPC::MADDAi8vvvp] = TPC::MADDAi8vivp;
+  V2S[TPC::MADDAi8vvvm] = TPC::MADDAi8vsvm; V2I[TPC::MADDAi8vvvm] = TPC::MADDAi8vivm;
+  V2S[TPC::MADDAu8vvvp] = TPC::MADDAu8vsvp; V2I[TPC::MADDAu8vvvp] = TPC::MADDAu8vivp;
+  V2S[TPC::MADDAu8vvvm] = TPC::MADDAu8vsvm; V2I[TPC::MADDAu8vvvm] = TPC::MADDAu8vivm;
 
   V2S[TPC::ADDvvp] = TPC::ADDvsp; V2I[TPC::ADDvvp] = TPC::ADDvip;
   V2S[TPC::ADDvvm] = TPC::ADDvsm; V2I[TPC::ADDvvm] = TPC::ADDvim;
@@ -156,6 +208,8 @@ bool TPCScalarSink::runOnMachineFunction(MachineFunction &MF) {
   V2S[TPC::XORvvm] = TPC::XORvsm; V2I[TPC::XORvvm] = TPC::XORvim;
   V2S[TPC::ASHvvp] = TPC::ASHvsp; V2I[TPC::ASHvvp] = TPC::ASHvip;
   V2S[TPC::ASHvvm] = TPC::ASHvsm; V2I[TPC::ASHvvm] = TPC::ASHvim;
+  V2S[TPC::ASHvvpRhaz] = TPC::ASHvspRhaz; V2I[TPC::ASHvvpRhaz] = TPC::ASHvipRhaz;
+  V2S[TPC::ASHvvmRhaz] = TPC::ASHvsmRhaz; V2I[TPC::ASHvvmRhaz] = TPC::ASHvimRhaz;
   V2S[TPC::SHRvvp] = TPC::SHRvsp; V2I[TPC::SHRvvp] = TPC::SHRvip;
   V2S[TPC::SHRvvm] = TPC::SHRvsm; V2I[TPC::SHRvvm] = TPC::SHRvim;
   V2S[TPC::SHLvvp] = TPC::SHLvsp; V2I[TPC::SHLvvp] = TPC::SHLvip;

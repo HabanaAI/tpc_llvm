@@ -1,6 +1,6 @@
 // RUN: %clang_cc1 -triple x86_64-unknown-unknown -emit-llvm -o - %s | FileCheck %s
 // RUN: %clang_cc1 -triple i386-mingw32 -fms-extensions -emit-llvm -o - %s | FileCheck %s
-// XFAIL: *
+
 int nonconst(void);
 int isconst(void) __attribute__((const));
 int ispure(void) __attribute__((pure));

@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 %s -verify -pedantic -fsyntax-only -Wno-gnu-statement-expression
-// XFAIL: *
+
 int stmtexpr_fn();
 void stmtexprs(int i) {
   __builtin_assume( ({ 1; }) ); // no warning about "side effects"

@@ -10,6 +10,6 @@ void main(int dest, int x, int y) {
   *dptr = res;
 }
 
-// CHECK: cmp_less.i32  [[SPREG:%SP[0-9]+]], %S1, %S2, %SP0
-// CHECK: mov           [[VPREG:%VP[0-9]+]], [[SPREG]], %SP0
-// CHECK: st_l_v        %S0,{{.*}} [[VPREG]], %SP0
+// CHECK: cmp_less.i32  [[SPREG:%SP[0-9]+]], %S1, %S2
+// CHECK: mov           [[VPREG:%VP[0-9]+]], [[SPREG]]
+// CHECK: st_l_v        %S0,{{.*}} [[VPREG]]

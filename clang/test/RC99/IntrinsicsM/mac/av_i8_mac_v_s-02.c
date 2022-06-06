@@ -5,7 +5,7 @@ void main(int x0, signed char x1, int dest0)
     char256 __local *ptr_x0 = (char256 __local *)x0;
     int64 __local *res0 = (int64 __local *)dest0;
     int256 temp_res0 = {0,0,0,0};
-    temp_res0 = av_i8_mac_v_s(*ptr_x0, x1, temp_res0, 1);
+    temp_res0 = v_i8_mac_b(*ptr_x0, x1, temp_res0, 1, 1, 0);
     *res0 = temp_res0.v1;
 }
 
@@ -13,5 +13,5 @@ void main(int x0, signed char x1, int dest0)
 // CHECK-ASM:     main:
 // CHECK-ASM-DAG: ld_l_v    %V{{[0-9]+}}, %S0, 0x0
 // CHECK-ASM-DAG: mov.i32   %V{{[0-9]+}}, 0x0
-// CHECK-ASM:     mac.i8    st %A{{[0-9]+}}, %V{{[0-9]+}}, %S1, %SP0
+// CHECK-ASM:     mac.i8    st %A{{[0-9]+}}, %V{{[0-9]+}}, %S1
 // CHECK-ASM-DAG: st_l_v    %S2, 0x0, %V{{[0-9]+}}

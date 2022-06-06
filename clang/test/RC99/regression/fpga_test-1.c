@@ -33,5 +33,5 @@ void main(tensor a)
 
     int5 storeCoord = { 0, 1, 2, 3, 4 };
     for (int i = 0; i < 8; ++i)
-        i32_st_tnsr_i_v_b(storeCoord, 1, vlm_data[i], 1, 0);
+        v_i32_st_tnsr(storeCoord, 1, vlm_data[i], 0, 1, 0);
 }

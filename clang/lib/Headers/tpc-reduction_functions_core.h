@@ -1,13 +1,14 @@
-//===--- tpc-reduction_functions_core.h------------------------*- TPC-C -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
-
+/*****************************************************************************
+* Copyright (C) 2020 HabanaLabs, Ltd.
+* All Rights Reserved.
+*
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+* Proprietary and confidential.
+*
+* Authors:
+* Keren Luzon <kluzon@habana.ai>
+******************************************************************************
+*/
 #if __TPC_DROP_VERSION >= VERSION2DEC(35, 0, 0) && defined(INCLUDE_TPC_REDUCTION_CORE_H)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -18,11 +19,11 @@
     #define FUNC_ID_REDUCTION_32    42
     #define FUNC_ID_REDUCTION_16    29
     #define FUNC_ID_REDUCTION_8     30
-#elif defined(__gaudi__)
+#elif (defined(__gaudi__) || defined(__gaudib__))
 #define FUNC_ID_REDUCTION_32 282
 #define FUNC_ID_REDUCTION_16 140
 #define FUNC_ID_REDUCTION_8 141
-#else
+#else /* goya2/gaudi2/doron1 */
     #define FUNC_ID_REDUCTION_32    287
     #define FUNC_ID_REDUCTION_16    140
     #define FUNC_ID_REDUCTION_8     141
@@ -36,8 +37,8 @@
 #define shuffle_map_32bit_lookup                                                    \
     float64  c0  = 0;                                                               \
     float128 c12 = {0};                                                             \
-    c0  = v_f32_lookup_1c(V_LANE_ID_32, FUNC_ID_REDUCTION_32, 0, c0, 1, 0);         \
-    c12 = v_f32_lookup_2c(V_LANE_ID_32, FUNC_ID_REDUCTION_32, 0, c12, 1, 0);        \
+    c0  = v_f32_lookup_1c(read_lane_id_4b_b(), FUNC_ID_REDUCTION_32, 0, c0, 1, 0);         \
+    c12 = v_f32_lookup_2c(read_lane_id_4b_b(), FUNC_ID_REDUCTION_32, 0, c12, 1, 0);        \
     const uchar256 lut1 = (uchar256)c0;                                             \
     const uchar256 lut2 = (uchar256)c12.v1;                                         \
     const uchar256 lut3 = (uchar256)c12.v2;
@@ -45,8 +46,8 @@
 #define shuffle_map_16bit_lookup                                                    \
     float128 c01 = {0};                                                             \
     float128 c23 = {0};                                                             \
-    c01 = v_f32_lookup_2c(V_LANE_ID_32, FUNC_ID_REDUCTION_16, 0, c01, 1, 0);        \
-    c23 = v_f32_lookup_2c(V_LANE_ID_32 + 64, FUNC_ID_REDUCTION_16, 0, c23, 1, 0);   \
+    c01 = v_f32_lookup_2c(read_lane_id_4b_b(), FUNC_ID_REDUCTION_16, 0, c01, 1, 0);        \
+    c23 = v_f32_lookup_2c(read_lane_id_4b_b() + 64, FUNC_ID_REDUCTION_16, 0, c23, 1, 0);   \
     const uchar256 lut1 = (uchar256)c01.v1;                                         \
     const uchar256 lut2 = (uchar256)c01.v2;                                         \
     const uchar256 lut3 = (uchar256)c23.v1;                                         \
@@ -56,9 +57,9 @@
     float64  c0  = 0;                                                               \
     float128 c12 = {0};                                                             \
     float128 c34 = {0};                                                             \
-    c0  = v_f32_lookup_1c(V_LANE_ID_32, FUNC_ID_REDUCTION_8, 0, c0, 1, 0);          \
-    c12 = v_f32_lookup_2c(V_LANE_ID_32, FUNC_ID_REDUCTION_8, 0, c12, 1, 0);         \
-    c34 = v_f32_lookup_2c(V_LANE_ID_32 + 64, FUNC_ID_REDUCTION_8, 0, c34, 1, 0);    \
+    c0  = v_f32_lookup_1c(read_lane_id_4b_b(), FUNC_ID_REDUCTION_8, 0, c0, 1, 0);          \
+    c12 = v_f32_lookup_2c(read_lane_id_4b_b(), FUNC_ID_REDUCTION_8, 0, c12, 1, 0);         \
+    c34 = v_f32_lookup_2c(read_lane_id_4b_b() + 64, FUNC_ID_REDUCTION_8, 0, c34, 1, 0);    \
     const uchar256 lut1 = (uchar256)c0;                                             \
     const uchar256 lut2 = (uchar256)c12.v1;                                         \
     const uchar256 lut3 = (uchar256)c12.v2;                                         \
@@ -98,11 +99,11 @@
 #define REDUCE_U8                   8 // u8
 
 #if REDUCE_DT == REDUCE_F32 || REDUCE_DT == REDUCE_I32 || REDUCE_DT == REDUCE_U32
-    #define INIT_INDEX              V_LANE_ID_32
+    #define INIT_INDEX              read_lane_id_4b_b()
 #elif REDUCE_DT == REDUCE_BF16 || REDUCE_DT == REDUCE_F16 || REDUCE_DT == REDUCE_I16 || REDUCE_DT == REDUCE_U16
-    #define INIT_INDEX              V_LANE_ID_16
+    #define INIT_INDEX              read_lane_id_2b_b()
 #elif REDUCE_DT == REDUCE_I8 || REDUCE_DT == REDUCE_U8
-    #define INIT_INDEX              V_LANE_ID_8
+    #define INIT_INDEX              read_lane_id_1b_b()
 #endif
 
 #if REDUCE_DT == REDUCE_F32

@@ -1,8 +1,10 @@
-//===- TPCLoopData.h ------------------------------------------------------===//
+//===------------------------------LoopData--------------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//                     The LLVM Compiler Infrastructure:
+//
+//              2019 - This header is a property of Habana labs
+//
 //
 //===----------------------------------------------------------------------===//
 //                                 LoopData
@@ -13,17 +15,60 @@
 #define LLVM_TPCLOOPDATA_CPP_H
 #include "TPCTargetMachine.h"
 #include "SCEVParser.h"
+
+#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/CodeGen/Register.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 
+namespace llvm {
+class MDNode;
+class MachineInstr;
+class MachineLoop;
+
+/// Check if loop meta data node has "llvm.loop.taken" sub node.
+bool hasLoopTakenMD(const MDNode &LoopMD);
+
+/// Remove "llvm.loop.taken" meta data sub node from LOOPEND instruction if any.
+void removeLoopTakenMD(MachineInstr &LoopEndMI);
+
+/// Return meta data node for machine loop if exists.
+const MDNode *getMachineLoopMDNode(MachineInstr &LoopEndMI);
+
+/// Shortcut to find meta data sub node by name for loop metas.
+const MDNode* findOptionMDForLoopMD(const MDNode& LoopMD, StringRef Name);
+
+/// Returns unroll count preference from meta data.
+Optional<unsigned> getUnrollCountFromMetadata(const MDNode *LoopMD);
+
+/// Helper struct to organize result of HW loop counter search.
+///
+/// \details HW loop counter is a physical register defined by LOOP instruction.
+struct HWLoopCounterInfo {
+  MachineInstr *LoopInstr;
+  unsigned CounterReg;
+};
+
+/// Get counter register for HW loop.
+///
+/// \details According to TPC Programming Reference Guide the top most parent
+///     loop uses S32 register. Inner loops use S33, S34 and S35 registers
+///     corresponding to their nesting level.
+Register getCounterRegister(const MachineLoop &ML);
+
+/// Get information about hardware loop counter if applicable.
+Optional<HWLoopCounterInfo> getLoopCounterInfo(const MachineLoop &ML);
+
+} // namespace llvm
 
 class LoopData {
 public:

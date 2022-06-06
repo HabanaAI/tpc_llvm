@@ -31,7 +31,7 @@ public:
                          std::unique_ptr<MCStreamer> Streamer)
       : AsmPrinter(TM, std::move(Streamer)) {}
 
-  void EmitInstruction(const MachineInstr *MI) override;
+  void emitInstruction(const MachineInstr *MI) override;
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                        const char *ExtraCode, raw_ostream &OS) override;
   bool isBlockOnlyReachableByFallthrough(

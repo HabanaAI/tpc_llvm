@@ -7,4 +7,4 @@ void main(int src, int dest) {
   *dptr = convert_short128_to_int128(src_val, 0);
 }
 
-// CHECK-IR: sext <128 x i16> {{.*}} to <128 x i32>
+// CHECK-IR: call <128 x i32> @llvm.tpc.convert.v128i32.v128i16.i1(<128 x i16> {{.*}}, i8 7, i32 512, <128 x i32> undef, i1 true, i1 false)

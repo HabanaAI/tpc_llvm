@@ -15,209 +15,193 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Target/TPCMetadataSection.h"
 
-
-const int VersionLength = 4;
+#include <cstring>
 
 using namespace llvm;
 
-cl::opt<bool> llvm::TPCElfMemcpy(
-    "tpc-elf-spec-bin", cl::init(false), cl::Hidden,
-    cl::desc("Serialize TPC Metadata in binary format"));
+static constexpr unsigned TPCMetadataSectionSize = 262;
+static constexpr unsigned TPCLastMarch = 6; // Doron1
 
-template<typename T>
-static inline void FromUint8Array(const uint8_t *Array, size_t Length, T &Data) {
-  std::size_t SizeType = sizeof(T);
-  Data &= 0 ;
-  for (std::size_t i = 0; i < (SizeType < Length ? SizeType : Length); ++i) {
-    Data |= (*Array << 8 * (i));
-    ++Array;
-  }
+template <typename FieldT>
+static TPCMetadataFieldInfo
+makeScalarFI(const char *FieldName, const unsigned ElementSize,
+             const unsigned MinValue, const unsigned MaxValue,
+             const uint8_t StartWithVersion, const unsigned Offset,
+             FieldT TPCMetadataSection::*Field) {
+  return TPCMetadataFieldInfo{
+      FieldName,
+      ElementSize,
+      1,
+      MinValue,
+      MaxValue,
+      StartWithVersion,
+      Offset,
+      [Field](const TPCMetadataSection &MD) -> std::uint64_t {
+        return MD.*Field;
+      },
+      [Field](TPCMetadataSection &MD, std::uint64_t Val) {
+        MD.*Field = static_cast<FieldT>(Val);
+      },
+      ElementSize,
+      false};
 }
 
-static inline void ToUint8Array(long Number, int length, uint8_t *&ptr) {
-  for (std::size_t i = 0; i < length; ++i) {
-    uint8_t val = (Number >> 8 * i & 0xFF);
-    *ptr = val;
-    ++ptr;
-  }
+static TPCMetadataFieldInfo makePlaceholderFI(const char *FieldName,
+                                              const unsigned Offset,
+                                              const unsigned BinSize,
+                                              const uint8_t StartWithVersion) {
+  return TPCMetadataFieldInfo{
+      FieldName,
+      1,
+      1,
+      0,
+      0,
+      StartWithVersion,
+      Offset,
+      [](const TPCMetadataSection &MD) -> std::uint64_t { return 0; },
+      [](TPCMetadataSection &MD, std::uint64_t Val) {},
+      BinSize,
+      true};
 }
+
+static std::uint64_t convertTensorMaskToU64(const bool Mask[],
+                                            const unsigned Count) {
+  std::uint64_t Val = 0;
+  for (unsigned I = 0; I < Count; ++I) {
+    if (Mask[I])
+      Val |= 1LU << I;
+  }
+  return Val;
+}
+
+static void convertU64ToTensorMask(const std::uint64_t Value, bool *Mask,
+                                   const unsigned Count) {
+  for (unsigned I = 0; I < Count; ++I)
+    Mask[I] = (Value >> I) & 1;
+}
+
+namespace llvm {
+
+const std::array<TPCMetadataFieldInfo, 16> TPCMetadataFieldsInfo = {
+    makeScalarFI("version", 4, 0, TPCMetadataVersion, 3, 0,
+                 &TPCMetadataSection::version),
+    makeScalarFI("specialFunctionUsed", 1, 0, 1, 3, 4,
+                 &TPCMetadataSection::specialFunctionUsed),
+    makeScalarFI("printfUsed", 1, 0, 1, 3, 5, &TPCMetadataSection::printfUsed),
+    makeScalarFI("lockUnLock", 1, 0, 1, 3, 6, &TPCMetadataSection::lockUnLock),
+    makeScalarFI("mmioUsed", 1, 0, 1, 6, 7, &TPCMetadataSection::mmioUsed),
+    makeScalarFI(TPCMarchName, 2, 1, TPCLastMarch, 5, 8,
+                 &TPCMetadataSection::march),
+    // Padding the TPCMarch with more than 2 bytes to align to elf_api
+    makePlaceholderFI("TPCBubble", 10, 2, 8),
+    makeScalarFI("paramsNum", 1, 0, std::numeric_limits<uint8_t>::max(), 8, 12,
+                 &TPCMetadataSection::paramsNum),
+    makeScalarFI("printfTensorID", 1, 0, TPCNumTensors, 9, 13,
+                 &TPCMetadataSection::printfTensorID),
+    makeScalarFI("numberOfThreads", 1, 1, 4, 10, 14,
+                 &TPCMetadataSection::numberOfThreads),
+    makeScalarFI("directMMIOAccess", 1, 0, 1, 11, 15,
+                 &TPCMetadataSection::directMMIOAccess),
+    makeScalarFI("dnorm", 1, 0, 1, 12, 16, &TPCMetadataSection::dnorm),
+    makePlaceholderFI("reserveMidArea", 17, TPCReservedSize1, 3),
+    TPCMetadataFieldInfo{
+        TPCScalarLdName, 1, TPCNumTensors, 0, 1, 3, 26,
+        [](const TPCMetadataSection &MD) {
+          return convertTensorMaskToU64(MD.scalarLd, TPCNumTensors);
+        },
+        [](TPCMetadataSection &MD, std::uint64_t Value) {
+          convertU64ToTensorMask(Value, MD.scalarLd, TPCNumTensors);
+        },
+        2, false},
+    TPCMetadataFieldInfo{
+        TPCRMWStoreName, 1, TPCNumTensors, 0, 1, 4, 28,
+        [](const TPCMetadataSection &MD) {
+          return convertTensorMaskToU64(MD.rmwStore, TPCNumTensors);
+        },
+        [](TPCMetadataSection &MD, std::uint64_t Value) {
+          convertU64ToTensorMask(Value, MD.rmwStore, TPCNumTensors);
+        },
+        2, false},
+    makePlaceholderFI("reserveEndArea", 30, TPCReservedSize, 3),
+};
+} // namespace llvm
+
+#ifndef NDEBUG
+static void sanityCheckFieldsInfoLayout() {
+  unsigned TotalHeaderSize = 0;
+  for (unsigned I = 0; I < TPCMetadataFieldsInfo.size(); ++I) {
+    assert(TotalHeaderSize == TPCMetadataFieldsInfo[I].offset);
+    TotalHeaderSize += TPCMetadataFieldsInfo[I].BinSizeBytes;
+  }
+  assert(TotalHeaderSize == TPCMetadataSectionSize);
+}
+#endif
+
+static std::uint64_t fromUint8Array(const uint8_t *Array, const unsigned NumBytes) {
+  assert(NumBytes <= 8);
+  std::uint64_t Result = 0;
+  for (unsigned I = 0; I < NumBytes; ++I)
+    Result |= (*(Array++)) << (8 * I);
+  return Result;
+}
+
+static void toUint8Array(const std::uint64_t Number, const int Length,
+                         uint8_t *const Ptr) {
+  assert(Length <= 8);
+  for (int I = 0; I < Length; ++I)
+    *(Ptr + I) = static_cast<uint8_t>((Number >> (8 * I)) & 0xFF);
+}
+
+namespace llvm {
+const std::unordered_map<unsigned, const char *> TPCMetadataTypeDirectives = {
+    {1, "DB"}, {2, "DW"}, {4, "DD"}, {8, "DQ"}, {10, "DT"}, {16, "DH"},
+};
+} // namespace llvm
 
 std::vector<uint8_t>
-llvm::bianrySerializeTPCProgramHeader(const llvm::TPCMetadataSection &Header) {
+llvm::binarySerializeTPCProgramHeader(const llvm::TPCMetadataSection &Header) {
   assert(Header.version <= TPCMetadataVersion);
-  int val = 0;
+
+#ifndef NDEBUG
+  sanityCheckFieldsInfoLayout();
+#endif
+
   std::vector<uint8_t> Data(TPCMetadataSectionSize, 0);
-  uint8_t *bufTemp = Data.data();
-  ToUint8Array(Header.version, TPCMetadataFieldsInfo[0].elementSize, bufTemp);
-  if (Header.version >= 3) {
-    ToUint8Array(Header.specialFunctionUsed,
-                TPCMetadataFieldsInfo[1].elementSize, bufTemp);
-    ToUint8Array(Header.printfUsed, TPCMetadataFieldsInfo[2].elementSize,
-                bufTemp);
-    ToUint8Array(Header.lockUnLock, TPCMetadataFieldsInfo[3].elementSize,
-                bufTemp);
-
-    if (Header.version >= 6)
-      ToUint8Array(Header.mmioUsed, TPCMetadataFieldsInfo[8].elementSize,
-                  bufTemp);
-    else
-      ToUint8Array(0, TPCMetadataFieldsInfo[8].elementSize, bufTemp);
-
-    if (Header.version >= 5)
-      ToUint8Array(Header.march, TPCMetadataFieldsInfo[6].elementSize, bufTemp);
-    else
-      ToUint8Array(0, TPCMetadataFieldsInfo[6].elementSize, bufTemp);
-
-    ToUint8Array(0, 2, bufTemp);
-    if (Header.version >= 8) {
-      ToUint8Array(Header.paramsNum, TPCMetadataFieldsInfo[9].elementSize,
-                   bufTemp);
-    } else
-      ToUint8Array(0, TPCMetadataFieldsInfo[9].elementSize,
-                   bufTemp);
-
-    if (Header.version >= 9) {
-      ToUint8Array(Header.printfTensorID, TPCMetadataFieldsInfo[10].elementSize,
-                   bufTemp);
-    } else
-      ToUint8Array(0, TPCMetadataFieldsInfo[10].elementSize,
-                   bufTemp);
-
-    ToUint8Array(0, sizeof(Header.reservedTemp), bufTemp);
-
-    for (unsigned i = 0; i < TPCNumTensors; ++i) {
-      val += ((int)Header.scalarLd[i] << i);
-    }
-    ToUint8Array(val, 2, bufTemp);
-  }
-  if (Header.version >= 4) {
-    val = 0;
-    for (unsigned i = 0; i < TPCNumTensors; ++i) {
-      val += Header.rmwStore[i] << i;
-    }
-    ToUint8Array(val, 2, bufTemp);
-  }
-  // Write reserved
-  ToUint8Array(0, sizeof(Header.reserved), bufTemp);
-  return Data;
-}
-
-TPCMetadataSection llvm::stringDeserializeTPCProgramHeader(
-    const llvm::StringRef& String) {
-
-  TPCMetadataSection Header;
-  int CurrentPos = 0;
-
-  // Parse version
-  String.substr(CurrentPos, VersionLength).getAsInteger(10, Header.version);
-  CurrentPos += VersionLength;
-
-  for(const TPCMetadataFieldInfo *Cur = &TPCMetadataFieldsInfo[1];
-      Cur != std::end(TPCMetadataFieldsInfo); ++Cur) {
-    if (Cur->startWithVersion > Header.version)
+  for (const TPCMetadataFieldInfo &FI : TPCMetadataFieldsInfo) {
+    if (FI.IsPlaceholder || Header.version < FI.startWithVersion)
       continue;
 
-    if(!Cur->isArray()) {
-       StringRef StringValue = String.substr(Cur->offset, Cur->elementSize);
-      if (StringRef(Cur->fieldName).compare_lower(TPCSpecialFunctionUsedName) == 0)
-        StringValue.getAsInteger(10,  Header.specialFunctionUsed);
-      else if (StringRef(Cur->fieldName).compare_lower(TPCPrintfUsedName) == 0)
-        StringValue.getAsInteger(10,  Header.printfUsed);
-      else if (StringRef(Cur->fieldName).compare_lower(TPCLockUnLockName) == 0)
-        StringValue.getAsInteger(10,  Header.lockUnLock);
-      else if (StringRef(Cur->fieldName).compare_lower(TPCMarchName) == 0)
-        StringValue.getAsInteger(10,  Header.march);
-      else if (StringRef(Cur->fieldName).compare_lower(TPCMMIOName) == 0)
-        StringValue.getAsInteger(10, Header.mmioUsed);
-      else
-        llvm_unreachable(TPCUnhandledMetadataField);
-
-    } else {
-      if (StringRef(Cur->fieldName).compare_lower(TPCScalarLdName) == 0) {
-        for (unsigned i = 0; i < Cur->length; ++i) {
-          StringRef StringValue = String.substr(Cur->offset+i, Cur->elementSize);
-          StringValue.getAsInteger(10, Header.scalarLd[i]);
-        }
-      } else if (StringRef(Cur->fieldName).compare_lower(TPCRMWStoreName) == 0) {
-        for (unsigned i = 0; i < Cur->length; ++i) {
-          StringRef StringValue = String.substr(Cur->offset+i, Cur->elementSize);
-          StringValue.getAsInteger(10, Header.rmwStore[i]);
-          CurrentPos += Cur->elementSize;
-        }
-      } else
-        llvm_unreachable(TPCUnhandledMetadataField);
-    }
+    toUint8Array(FI.GetValueFun(Header), FI.BinSizeBytes,
+                 Data.data() + FI.offset);
   }
-
-  return Header;
+  return Data;
 }
-
 
 TPCMetadataSection llvm::binaryDeserializeTPCProgramHeader(
     const std::vector<uint8_t> &Data) {
   assert(Data.size() == TPCMetadataSectionSize);
 
-  const uint8_t *CurPos = Data.data();
-  unsigned RestLength = TPCMetadataSectionSize;
+#ifndef NDEBUG
+  sanityCheckFieldsInfoLayout();
+#endif
 
   TPCMetadataSection Header;
+  for (const TPCMetadataFieldInfo &FI : TPCMetadataFieldsInfo) {
+    if (FI.IsPlaceholder)
+      continue;
 
-  if (Header.version >= 5) {
-    FromUint8Array(CurPos, RestLength, Header.version);
-    CurPos += sizeof(Header.version);
-    RestLength -= sizeof(Header.version);
-
-    FromUint8Array(CurPos, RestLength, Header.specialFunctionUsed);
-    CurPos += sizeof(Header.specialFunctionUsed);
-    RestLength -= sizeof(Header.specialFunctionUsed);
-
-    FromUint8Array(CurPos, RestLength, Header.printfUsed);
-    CurPos += sizeof(Header.printfUsed);
-    RestLength -= sizeof(Header.printfUsed);
-
-    FromUint8Array(CurPos, RestLength, Header.lockUnLock);
-    CurPos += sizeof(Header.lockUnLock);
-    RestLength -= sizeof(Header.lockUnLock);
-
-    FromUint8Array(CurPos, RestLength, Header.mmioUsed);
-    CurPos += sizeof(Header.mmioUsed);
-    RestLength -= sizeof(Header.mmioUsed);
-
-    FromUint8Array(CurPos, RestLength, Header.march);
-    CurPos += sizeof(Header.march);
-    RestLength -= sizeof(Header.march);
-
-    CurPos += 2;
-    RestLength -= 2;
-
-    FromUint8Array(CurPos, RestLength, Header.paramsNum);
-    CurPos += sizeof(Header.paramsNum);
-    RestLength -= sizeof(Header.paramsNum);
-
-    FromUint8Array(CurPos, RestLength, Header.printfTensorID);
-    CurPos += sizeof(Header.printfTensorID);
-    RestLength -= sizeof(Header.printfTensorID);
-
-    CurPos += sizeof(Header.reservedTemp);
-    RestLength -= sizeof(Header.reservedTemp);
-
-    unsigned short temp = 0;
-    FromUint8Array(CurPos, RestLength, temp);
-    CurPos += 2; // The size of the scalarLd in the tpc_metadata(elfapi) struct is 2
-    RestLength -= 2;
-    for (unsigned i = 0; i < TPCNumTensors; ++i) {
-      Header.scalarLd[i] = (temp >> i) & 0x1;
-    }
-    temp = 0;
-    FromUint8Array(CurPos, RestLength, temp);
-    CurPos += 2; // The size of the scalarLd in the tpc_metadata(elfapi) struct is 2
-    RestLength -= 2;
-    for (unsigned i = 0; i < TPCNumTensors; ++i) {
-      Header.rmwStore[i] = temp >> i & 0x1;
-    }
+    FI.SetValueFun(Header,
+                   fromUint8Array(Data.data() + FI.offset, FI.BinSizeBytes));
   }
-
   return Header;
+}
+
+const TPCMetadataFieldInfo *
+llvm::getTPCMetadataFieldInfo(const StringRef FieldName) {
+  for (const TPCMetadataFieldInfo &I : TPCMetadataFieldsInfo)
+    if (FieldName.compare_lower(I.fieldName) == 0)
+      return &I;
+  return nullptr;
 }
 
 bool llvm::setTpcMetadataValue(int64_t  Value,
@@ -228,33 +212,14 @@ bool llvm::setTpcMetadataValue(int64_t  Value,
   if (FieldInfo.isArray()) {
     ErrorMessage = "Do not use this method for work with array field.";
     return false;
-  } else if (FieldInfo.minValue > Value || FieldInfo.maxValie < Value) {
+  } else if (FieldInfo.minValue > Value || FieldInfo.maxValue < Value) {
     ErrorMessage = formatv("Incorrect value."
                            " Expected value in range [{0}, {1}].",
-                           FieldInfo.minValue, FieldInfo.maxValie);
+                           FieldInfo.minValue, FieldInfo.maxValue);
     return false;
   }
 
-  StringRef FieldName(FieldInfo.fieldName);
-  if (FieldName.equals(TPCVersionName))
-    Result.version = Value;
-  else if (FieldName.equals(TPCSpecialFunctionUsedName))
-    Result.specialFunctionUsed = Value;
-  else if (FieldName.equals(TPCPrintfUsedName))
-    Result.printfUsed = Value;
-  else if (FieldName.equals(TPCLockUnLockName))
-    Result.lockUnLock = Value;
-  else if (FieldName.equals(TPCMarchName))
-    Result.march = Value;
-  else if (FieldName.equals(TPCMMIOName))
-    Result.mmioUsed = Value;
-  else if (FieldName.equals(TPCParamsNumName))
-    Result.paramsNum = Value;
-  else if (FieldName.equals(TPCPrintfTensorIDName))
-    Result.printfTensorID = Value;
-  else
-    llvm_unreachable("An unhandled case occurred");
-
+  FieldInfo.SetValueFun(Result, Value);
   return true;
 }
 
@@ -266,10 +231,10 @@ bool llvm::setTpcMetadataArrayValue(int64_t Value,
   if (!FieldInfo.isArray()) {
     ErrorMessage = "Do not use this method for work with scalar field.";
     return false;
-  } else if (Value < FieldInfo.minValue || Value > FieldInfo.maxValie) {
+  } else if (Value < FieldInfo.minValue || Value > FieldInfo.maxValue) {
     ErrorMessage = formatv("Incorrect value."
                            " Expected value in range [{0}, {1}].",
-                           FieldInfo.minValue, FieldInfo.maxValie);
+                           FieldInfo.minValue, FieldInfo.maxValue);
     return false;
   }
 
@@ -300,50 +265,34 @@ bool llvm::setTpcMetadataArrayValue(const StringRef &Value,
     ErrorMessage = "Do not use this method for work with scalar field.";
     return false;
   }
-
-  auto ToDigitsVector = [](const StringRef &Value) {
-    std::vector<unsigned> Digits;
-    for (char C : Value) {
-      assert(std::isdigit(C));
-      Digits.push_back(C - '0');
-    }
-
-    return Digits;
-  };
-
-  StringRef FieldName(FieldInfo.fieldName);
-
-  std::vector<unsigned> Digits = ToDigitsVector(Value);
-  if (Digits.size() != FieldInfo.length) {
+  if (Value.size() != FieldInfo.length) {
     ErrorMessage = formatv("Invalid vector length."
                            " Expected vector with length equals {0}.",
                            FieldInfo.length);
     return false;
   }
 
-  if (FieldName.equals(TPCScalarLdName)) {
-    for(std::size_t i = 0; i < Digits.size(); ++i) {
-      if (FieldInfo.minValue > Digits[i] || FieldInfo.maxValie < Digits[i]) {
-        ErrorMessage = formatv("Incorrect value."
-                               " Expected value in range [{0}, {1}].",
-                               FieldInfo.minValue, FieldInfo.maxValie);
-        return false;
-      }
+  const StringRef FieldName(FieldInfo.fieldName);
 
-      Result.scalarLd[i] = Digits[i];
-    }
-  } else if (FieldName.equals(TPCRMWStoreName)) {
-    for(std::size_t i = 0; i < Digits.size(); ++i) {
-      if (FieldInfo.minValue > Digits[i] || FieldInfo.maxValie < Digits[i]) {
-        ErrorMessage = formatv("Incorrect value."
-                               " Expected value in range [{0}, {1}].",
-                               FieldInfo.minValue, FieldInfo.maxValie);
-        return false;
-      }
-
-      Result.rmwStore[i] = Digits[i];
-    }
+  bool *TensorMask = nullptr;
+  if (FieldName.equals(TPCScalarLdName))
+    TensorMask = Result.scalarLd;
+  else if (FieldName.equals(TPCRMWStoreName))
+    TensorMask = Result.rmwStore;
+  else {
+    ErrorMessage = formatv("Unexpected array field {0}.", FieldName);
+    return false;
   }
 
+  for (unsigned I = 0; I < FieldInfo.length; ++I) {
+    if (Value[I] == '0')
+      TensorMask[I] = false;
+    else if (Value[I] == '1')
+      TensorMask[I] = true;
+    else {
+      ErrorMessage = "Incorrect value. Expected string of 0 and 1 chars.";
+      return false;
+    }
+  }
   return true;
 }

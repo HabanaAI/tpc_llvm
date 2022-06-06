@@ -1,8 +1,7 @@
 //===--- SemaRC99.cpp - Semantic Analysis for Declarations ----------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,6 +17,8 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/TargetBuiltins.h"
+#include "clang/Basic/TargetInfo.h"
+#include "clang/Basic/TargetOptions.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Parse/Parser.h"
@@ -35,6 +36,7 @@ using namespace sema;
 using llvm::TPCII::OpType;
 
 
+/*
 static int getOptypeValue(QualType Ty) {
   BuiltinType::Kind kind;
   if (auto BT = Ty->getAs<BuiltinType>()) {
@@ -68,6 +70,7 @@ static int getOptypeValue(QualType Ty) {
     llvm_unreachable("Unexpected type");
   }
 }
+*/
 
 static bool isPrintFWithValue(unsigned BI) {
   switch (BI) {
@@ -238,8 +241,7 @@ static AlignmentStatus containsShortValue(QualType Ty) {
         return OneShort;
       return Num;
     }
-  } else if (Ty->isArrayType()) {
-    const auto *AT = cast<ConstantArrayType>(Ty);
+  } else if (const auto *AT = dyn_cast<ConstantArrayType>(Ty)) {
     QualType ET = AT->getElementType();
     switch (containsShortValue(ET)) {
     case NoShort: return NoShort;
@@ -267,7 +269,6 @@ static bool isIndexType(QualType Ty) {
   }
   return false;
 }
-
 
 namespace {
 
@@ -445,6 +446,68 @@ class RC99Scanner : public RecursiveASTVisitor<RC99Scanner> {
     return true;
   }
 
+  bool getMaddSwitchValue(unsigned BuiltinId, CallExpr *E, unsigned &Val) {
+    unsigned SwArgNo;
+    switch (BuiltinId) {
+      case TPC::BIv_f32_madd_b:
+      case TPC::BIv_f32_madd_vb:
+      case TPC::BIv_bf16_madd_b:
+      case TPC::BIv_bf16_madd_vb:
+      case TPC::BIv_f16_madd_b:
+      case TPC::BIv_f16_madd_vb:
+      case TPC::BIv_i8_madd_b:
+      case TPC::BIv_i8_madd_vb:
+      case TPC::BIv_u8_madd_b:
+      case TPC::BIv_u8_madd_vb:
+      case TPC::BIv_i16_madd_b:
+      case TPC::BIv_i16_madd_vb:
+      case TPC::BIv_u16_madd_b:
+      case TPC::BIv_u16_madd_vb:
+      case TPC::BIv_bf16_madd_acc32_b:
+      case TPC::BIv_bf16_madd_acc32_vb:
+      case TPC::BIv_f16_madd_acc32_b:
+      case TPC::BIv_f16_madd_acc32_vb:
+      case TPC::BIv_i8_madd_acc16_b:
+      case TPC::BIv_i8_madd_acc16_vb:
+      case TPC::BIv_u8_madd_acc16_b:
+      case TPC::BIv_u8_madd_acc16_vb:
+      case TPC::BIv_u8_madd_acc32_b:
+      case TPC::BIv_u8_madd_acc32_vb:
+      case TPC::BIv_u16_madd_acc32_b:
+      case TPC::BIv_u16_madd_acc32_vb:
+      {
+        SwArgNo = 3;
+        break;
+      }
+      case TPC::BIv_i8_madd_zp_vb:
+      case TPC::BIv_i8_madd_zp_b:
+      case TPC::BIv_u8_madd_zp_vb:
+      case TPC::BIv_u8_madd_zp_b:
+      case TPC::BIv_i8_madd_zp_acc16_vb:
+      case TPC::BIv_i8_madd_zp_acc16_b:
+      case TPC::BIv_u8_madd_zp_acc16_vb:
+      case TPC::BIv_u8_madd_zp_acc16_b:
+      case TPC::BIv_u8_madd_zp_acc32_vb:
+      case TPC::BIv_u8_madd_zp_acc32_b:
+      {
+        SwArgNo = 4;
+        break;
+      }
+      default:
+        return false;
+    }
+    ASTContext &Ctx = SemaRef.getASTContext();
+    auto *D = cast<FunctionDecl>(E->getCallee()->getReferencedDeclOfCallee());
+    const Expr *SwArg = E->getArg(SwArgNo);
+    Expr::EvalResult ResVal;
+    if (!SwArg->EvaluateAsRValue(ResVal, Ctx)) {
+      SemaRef.Diag(SwArg->getBeginLoc(), diag::err_constant_integer_arg_type)
+          << D->getDeclName() << SwArg->getSourceRange();
+      return false;
+    }
+    Val = ResVal.Val.getInt().getLimitedValue();
+    return true;
+  }
 
   bool getMacSwitchValue(unsigned BuiltinId, CallExpr *E, unsigned &Val) {
     unsigned SwArgNo;
@@ -455,11 +518,19 @@ class RC99Scanner : public RecursiveASTVisitor<RC99Scanner> {
     case TPC::BIs_i16_mac:
     case TPC::BIs_u16_mac:
     case TPC::BIs_bf16_mac:
+    case TPC::BIs_f16_mac:
+    case TPC::BIs_i8_mac_acc16:
+    case TPC::BIs_u8_mac_acc16:
     case TPC::BIs_bf16_mac_acc32:
+    case TPC::BIs_f16_mac_acc32:
+    case TPC::BIs_u8_mac_acc32:
+    case TPC::BIs_u16_mac_acc32:
     case TPC::BIv_f32_mac_b:
     case TPC::BIv_f32_mac_vb:
     case TPC::BIv_bf16_mac_b:
     case TPC::BIv_bf16_mac_vb:
+    case TPC::BIv_f16_mac_b:
+    case TPC::BIv_f16_mac_vb:
     case TPC::BIv_i8_mac_b:
     case TPC::BIv_i8_mac_vb:
     case TPC::BIv_u8_mac_b:
@@ -470,8 +541,60 @@ class RC99Scanner : public RecursiveASTVisitor<RC99Scanner> {
     case TPC::BIv_u16_mac_vb:
     case TPC::BIv_bf16_mac_acc32_b:
     case TPC::BIv_bf16_mac_acc32_vb:
+    case TPC::BIv_f16_mac_acc32_b:
+    case TPC::BIv_f16_mac_acc32_vb:
+    case TPC::BIv_i8_mac_acc16_b:
+    case TPC::BIv_i8_mac_acc16_vb:
+    case TPC::BIv_u8_mac_acc16_b:
+    case TPC::BIv_u8_mac_acc16_vb:
+    case TPC::BIv_u8_mac_acc32_b:
+    case TPC::BIv_u8_mac_acc32_vb:
+    case TPC::BIv_u16_mac_acc32_b:
+    case TPC::BIv_u16_mac_acc32_vb:
     {
       SwArgNo = 3;
+      break;
+    }
+    case TPC::BIv_i8_mac_zp_vb:
+    case TPC::BIv_i8_mac_zp_b:
+    case TPC::BIv_u8_mac_zp_vb:
+    case TPC::BIv_u8_mac_zp_b:
+    case TPC::BIv_i8_mac_zp_acc16_vb:
+    case TPC::BIv_i8_mac_zp_acc16_b:
+    case TPC::BIv_u8_mac_zp_acc16_vb:
+    case TPC::BIv_u8_mac_zp_acc16_b:
+    case TPC::BIv_u8_mac_zp_acc32_vb:
+    case TPC::BIv_u8_mac_zp_acc32_b:
+    {
+      SwArgNo = 4;
+      break;
+    }
+    case TPC::BIv_i8_mac_x2_vb:
+    case TPC::BIv_i8_mac_x2_b:
+    case TPC::BIv_u8_mac_x2_vb:
+    case TPC::BIv_u8_mac_x2_b:
+    case TPC::BIv_i8_mac_x2_acc16_vb:
+    case TPC::BIv_i8_mac_x2_acc16_b:
+    case TPC::BIv_u8_mac_x2_acc16_vb:
+    case TPC::BIv_u8_mac_x2_acc16_b:
+    case TPC::BIv_u8_mac_x2_acc32_vb:
+    case TPC::BIv_u8_mac_x2_acc32_b:
+    {
+      SwArgNo = 5;
+      break;
+    }
+    case TPC::BIv_i8_mac_x2_zp_vb:
+    case TPC::BIv_i8_mac_x2_zp_b:
+    case TPC::BIv_u8_mac_x2_zp_vb:
+    case TPC::BIv_u8_mac_x2_zp_b:
+    case TPC::BIv_i8_mac_x2_zp_acc16_vb:
+    case TPC::BIv_i8_mac_x2_zp_acc16_b:
+    case TPC::BIv_u8_mac_x2_zp_acc16_vb:
+    case TPC::BIv_u8_mac_x2_zp_acc16_b:
+    case TPC::BIv_u8_mac_x2_zp_acc32_vb:
+    case TPC::BIv_u8_mac_x2_zp_acc32_b:
+    {
+      SwArgNo = 6;
       break;
     }
 
@@ -604,6 +727,8 @@ class RC99Scanner : public RecursiveASTVisitor<RC99Scanner> {
     case TPC::BIs_u8_mul:
     case TPC::BIs_bf16_mul:
     case TPC::BIs_bf16_mul_acc32:
+    case TPC::BIs_f16_mul:
+    case TPC::BIs_f16_mul_acc32:
     case TPC::BIi_i32_mul:
     {
       ASTContext &Ctx = SemaRef.getASTContext();
@@ -637,12 +762,47 @@ class RC99Scanner : public RecursiveASTVisitor<RC99Scanner> {
     unsigned SwValue;
     if (getMacSwitchValue(BuiltinId, E, SwValue))
       processMacSwitches(SwValue, BuiltinId, E);
+    if (getMaddSwitchValue(BuiltinId, E, SwValue))
+      processMaddSwitches(SwValue, BuiltinId, E);
 
     unsigned MaskOp;
     if (isInstrWithMask(BuiltinId, E, MaskOp)) {
       assert(MaskOp < E->getNumArgs());
       assert(E->getArg(MaskOp)->getType()->isIntegerType());
+/* Temporarily, until constant arguments will be repared.
+      if (TOptions.CPU != "greco" && TOptions.CPU != "gaudi2") {
+        // Mask must be constant on old architectures.
+        Expr *Mask = E->getArg(MaskOp);
+        SourceLocation Loc;
+        llvm::APSInt MaskValue;
+        if (!Mask->isIntegerConstantExpr(MaskValue, getContext(), &Loc)) {
+          auto *FD = cast<FunctionDecl>(E->getCallee()->getReferencedDeclOfCallee());
+          SemaRef.Diag(Loc, diag::err_constant_integer_arg_type)
+              << FD->getDeclName() << Mask->getSourceRange();
+        }
+      }
+*/
     }
+  }
+
+  bool isTypeSupportedInDivRem(QualType Ty) {
+    assert(Ty->isBuiltinType() || Ty->isVectorType());
+    bool IsVector = Ty->isVectorType();
+    QualType ScalarTy;
+    if (IsVector)
+      ScalarTy = Ty->getAs<VectorType>()->getElementType().getCanonicalType();
+    else
+      ScalarTy = Ty.getCanonicalType();
+    if (ScalarTy == getContext().FloatTy ||
+        ScalarTy == getContext().IntTy ||
+        ScalarTy == getContext().UnsignedIntTy)
+      return true;
+    if (IsVector)
+      return ScalarTy == getContext().ShortTy ||
+             ScalarTy == getContext().UnsignedShortTy ||
+             ScalarTy == getContext().CharTy ||
+             ScalarTy == getContext().UnsignedCharTy;
+    return false;
   }
 
 public:
@@ -653,12 +813,6 @@ public:
 
   bool VisitVarDecl(VarDecl *VD) {
     QualType Ty = VD->getType();
-
-    // No variable array support.
-    if (Ty->isVariableArrayType()) {
-      SemaRef.Diag(VD->getLocation(), diag::err_variable_array);
-      return false;
-    }
 
     // Prohibit global variables that points to a data in global
     // addressspace - we cannot lower them in -O0 mode.
@@ -802,7 +956,7 @@ public:
       if (!checkInt5Access(ASE, IndexVal))
         return true;
       if (R.getOldAllowInt5Access()) {
-        if (R.getOldInt5Dim() != IndexVal) {
+        if (R.getOldInt5Dim() != (unsigned)IndexVal) {
           SemaRef.Diag(ASE->getBeginLoc(), diag::err_different_int5_dims)
             << ASE->getSourceRange();
           return true;
@@ -813,118 +967,7 @@ public:
       NeedCheckInt5 = true;
     }
 
-    if (!TraverseStmt(E->getLHS()))
-      return false;
-
-    if (!TraverseStmt(E->getRHS()))
-      return false;
-    return true;
-  }
-
-  bool TraverseBinAdd(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinAdd(E);
-
-    if (!WalkUpFromBinAdd(E))
-      return false;
-
-    return TraverseBinOperatorDescendants(E);
-  }
-
-  bool VisitBinAdd(BinaryOperator *E) {
-    // Catch operations on global pointer, like 'ptr + 3'. TPC does not have
-    // instructions to carry out such computations.
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    // Catch operation on boolX operands.
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinSub(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinMul(BinaryOperator *E) {
-    if (checkBool256Operands(E)) {
-      checkMulValidity(E);
-    }
-    return true;
-  }
-
-
-  bool TraverseCompoundOperatorDescendants(CompoundAssignOperator *E) {
-    assert(SemaRef.getLangOpts().LongIRF);
-
-    Int5CheckResetter R(*this);
-
-    if (auto *ASE = getLHSAccessToInt5(E->getLHS())) {
-      int IndexVal;
-      if (!checkInt5Access(ASE, IndexVal))
-        return true;
-      Int5Dim = IndexVal;
-      AllowInt5Access = true;
-      NeedCheckInt5 = true;
-    }
-
-    if (!TraverseStmt(E->getLHS()))
-      return false;
-
-    if (!TraverseStmt(E->getRHS()))
-      return false;
-    return true;
-  }
-
-  bool TraverseBinAddAssign(CompoundAssignOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinAddAssign(E);
-
-    if (!WalkUpFromBinAddAssign(E))
-      return false;
-
-    return TraverseCompoundOperatorDescendants(E);
-  }
-
-  bool TraverseBinSubAssign(CompoundAssignOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinSubAssign(E);
-
-    if (!WalkUpFromBinSubAssign(E))
-      return false;
-
-    return TraverseCompoundOperatorDescendants(E);
-  }
-
-  bool TraverseBinMulAssign(CompoundAssignOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinMulAssign(E);
-
-    if (!WalkUpFromBinMulAssign(E))
-      return false;
-
-    return TraverseCompoundOperatorDescendants(E);
-  }
-
-  bool VisitBinAddAssign(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinSubAssign(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinMulAssign(BinaryOperator *E) {
-    if (checkBool256Operands(E)) {
-      checkMulValidity(E);
-    }
-    return true;
+    return TraverseStmt(E->getLHS()) && TraverseStmt(E->getRHS());
   }
 
   bool TraverseBinCompareOperatorDescendants(BinaryOperator *E) {
@@ -941,342 +984,216 @@ public:
       NeedCheckInt5 = true;
     }
 
-    if (!TraverseStmt(E->getLHS()))
-      return false;
-    if (!TraverseStmt(E->getRHS()))
-      return false;
-
-    return true;
+    return TraverseStmt(E->getLHS()) && TraverseStmt(E->getRHS());
   }
 
-  bool TraverseBinEQ(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinEQ(E);
+  bool TraverseCompoundAssignOperator(CompoundAssignOperator *CAO) {
+    if (SemaRef.getLangOpts().LongIRF) {
+      if (!WalkUpFromBinaryOperator(CAO))
+        return false;
 
-    if (!WalkUpFromBinEQ(E))
-      return false;
+      Int5CheckResetter R(*this);
 
-    return TraverseBinCompareOperatorDescendants(E);
-  }
-
-  bool TraverseBinNE(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinNE(E);
-
-    if (!WalkUpFromBinNE(E))
-      return false;
-
-    return TraverseBinCompareOperatorDescendants(E);
-  }
-
-  bool TraverseBinLT(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinLT(E);
-
-    if (!WalkUpFromBinLT(E))
-      return false;
-
-    return TraverseBinCompareOperatorDescendants(E);
-  }
-
-  bool TraverseBinLE(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinLE(E);
-
-    if (!WalkUpFromBinLE(E))
-      return false;
-
-    return TraverseBinCompareOperatorDescendants(E);
-  }
-
-  bool TraverseBinGT(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinGT(E);
-
-    if (!WalkUpFromBinGT(E))
-      return false;
-
-    return TraverseBinCompareOperatorDescendants(E);
-  }
-
-  bool TraverseBinGE(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinGE(E);
-
-    if (!WalkUpFromBinGE(E))
-      return false;
-
-    return TraverseBinCompareOperatorDescendants(E);
-  }
-
-  bool TraverseBinCmp(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinCmp(E);
-
-    if (!WalkUpFromBinCmp(E))
-      return false;
-
-    return TraverseBinCompareOperatorDescendants(E);
-  }
-
-  bool VisitBinEQ(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    return true;
-  }
-
-  bool VisitBinNE(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    return true;
-  }
-
-  bool VisitBinLT(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinLE(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinGT(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinGE(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool VisitBinCmp(BinaryOperator *E) {
-    checkNotGlobalPtr(E->getLHS(), E->getExprLoc()) &&
-      checkNotGlobalPtr(E->getRHS(), E->getExprLoc());
-    checkBool256Operands(E);
-    return true;
-  }
-
-  bool TraverseBinAssign(BinaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseBinAssign(E);
-
-    Int5CheckResetter R(*this);
-
-    if (!WalkUpFromBinAssign(E))
-      return false;
-
-    if (auto *ASE = getLHSAccessToInt5(E->getLHS())) {
-      int IndexVal;
-      if (!checkInt5Access(ASE, IndexVal))
-        return true;
-      Int5Dim = IndexVal;
-      AllowInt5Access = true;
-      NeedCheckInt5 = true;
+      if (auto *ASE = getLHSAccessToInt5(CAO->getLHS())) {
+        int IndexVal;
+        if (!checkInt5Access(ASE, IndexVal))
+          return true;
+        Int5Dim = IndexVal;
+        AllowInt5Access = true;
+        NeedCheckInt5 = true;
+      }
+      return TraverseStmt(CAO->getLHS()) && TraverseStmt(CAO->getRHS());
     }
-
-    if (!TraverseStmt(E->getLHS()))
-      return false;
-
-    if (!TraverseStmt(E->getRHS()))
-      return false;
-    return true;
+    return BaseType::TraverseCompoundAssignOperator(CAO);
   }
 
-  bool VisitBinAssign(BinaryOperator *E) {
-    Expr *LHS = E->getLHS()->IgnoreParenCasts();
-    Expr *RHS = E->getRHS();
+  bool TraverseBinaryOperator(BinaryOperator *BO) {
+    switch (BO->getOpcode()) {
+    default:
+      break;
+    case BinaryOperator::Opcode::BO_Assign:
+      if (SemaRef.getLangOpts().LongIRF) {
+        Int5CheckResetter R(*this);
 
-    // Check for global ptr assign.
-    Expr *RHSPeeled = RHS->IgnoreParenCasts();
-    bool CheckForGPtr = true;
+        if (!WalkUpFromBinaryOperator(BO))
+          return false;
 
-    // Do not report error for code like:
-    //
-    //   ptr = (__global int *) a_gen_addr_i(c0, out);
-    //
-    if (auto Call = dyn_cast<CallExpr>(RHSPeeled))
-      if (auto RefExpr = dyn_cast<DeclRefExpr>(Call->getCallee()->IgnoreImpCasts()))
-        if (auto Func = dyn_cast<FunctionDecl>(RefExpr->getDecl()))
-          if (Func->getBuiltinID())
-            CheckForGPtr = false;
+        if (auto *ASE = getLHSAccessToInt5(BO->getLHS())) {
+          int IndexVal;
+          if (!checkInt5Access(ASE, IndexVal))
+            return true;
+          Int5Dim = IndexVal;
+          AllowInt5Access = true;
+          NeedCheckInt5 = true;
+        }
 
-    // Do not report error for code like:
-    //
-    //   ptr = (__global int *)12;
-    //
-    // Error for this code will be issued when processing cast. However report
-    // error for constructs like:
-    //
-    //   ptr = (__global int *)0;
-    //
-    // now, because the cast is valid in this case.
-    //
-    if (auto Cast = dyn_cast<CastExpr>(RHS->IgnoreParens())) {
-      if (Cast->getCastKind() != CastKind::CK_NullToPointer &&
-          Cast->getCastKind() != CastKind::CK_LValueToRValue)
-        CheckForGPtr = false;
+        return TraverseStmt(BO->getLHS()) && TraverseStmt(BO->getRHS());
+      }
+      break;
+    case BinaryOperator::Opcode::BO_Add:
+    case BinaryOperator::Opcode::BO_Mul:
+      if (!SemaRef.getLangOpts().LongIRF)
+        return BaseType::TraverseBinaryOperator(BO);
+      if (!WalkUpFromBinaryOperator(BO))
+        return false;
+      return TraverseBinCompareOperatorDescendants(BO);
+    case BinaryOperator::Opcode::BO_EQ:
+    case BinaryOperator::Opcode::BO_NE:
+    case BinaryOperator::Opcode::BO_LT:
+    case BinaryOperator::Opcode::BO_LE:
+    case BinaryOperator::Opcode::BO_GT:
+    case BinaryOperator::Opcode::BO_GE:
+    case BinaryOperator::Opcode::BO_Cmp:
+      if (SemaRef.getLangOpts().LongIRF) {
+        if (!WalkUpFromBinaryOperator(BO))
+          return false;
+        return TraverseBinOperatorDescendants(BO);
+      }
+      break;
     }
-    if (CheckForGPtr)
-      checkNotGlobalPtr(LHS, E->getExprLoc()) &&
-      checkNotGlobalPtr(RHS, E->getExprLoc());
-
-    return true;
+    return BaseType::TraverseBinaryOperator(BO);
   }
 
-  bool VisitBinShl(BinaryOperator *BinOp) {
-    if (SemaRef.CheckNotIndexType(BinOp->getLHS(), BinOp->getExprLoc()))
-      SemaRef.CheckNotIndexType(BinOp->getRHS(), BinOp->getExprLoc());
-    checkBool256Operands(BinOp);
-    return true;
-  }
+  bool VisitBinaryOperator(BinaryOperator *BO) {
+    switch (BO->getOpcode()) {
+    default:
+      break;
+    case BinaryOperator::Opcode::BO_Assign: {
+      Expr *LHS = BO->getLHS()->IgnoreParenCasts();
+      Expr *RHS = BO->getRHS();
 
-  bool VisitBinShr(BinaryOperator *BinOp) {
-    if (SemaRef.CheckNotIndexType(BinOp->getLHS(), BinOp->getExprLoc()))
-      SemaRef.CheckNotIndexType(BinOp->getRHS(), BinOp->getExprLoc());
-    checkBool256Operands(BinOp);
-    return true;
-  }
+      // Check for global ptr assign.
+      Expr *RHSPeeled = RHS->IgnoreParenCasts();
+      bool CheckForGPtr = true;
 
-  bool VisitBinShlAssign(BinaryOperator *BinOp) {
-    if (SemaRef.CheckNotIndexType(BinOp->getLHS(), BinOp->getExprLoc()))
-      SemaRef.CheckNotIndexType(BinOp->getRHS(), BinOp->getExprLoc());
-    checkBool256Operands(BinOp);
-    return true;
-  }
+      // Do not report error for code like:
+      //
+      //   ptr = (__global int *) a_gen_addr_i(c0, out);
+      //
+      if (auto Call = dyn_cast<CallExpr>(RHSPeeled))
+        if (auto RefExpr = dyn_cast<DeclRefExpr>(Call->getCallee()->IgnoreImpCasts()))
+          if (auto Func = dyn_cast<FunctionDecl>(RefExpr->getDecl()))
+            if (Func->getBuiltinID())
+              CheckForGPtr = false;
 
-  bool VisitBinShrAssign(BinaryOperator *BinOp) {
-    if (SemaRef.CheckNotIndexType(BinOp->getLHS(), BinOp->getExprLoc()))
-      SemaRef.CheckNotIndexType(BinOp->getRHS(), BinOp->getExprLoc());
-    checkBool256Operands(BinOp);
-    return true;
-  }
-
-  bool VisitBinDiv(BinaryOperator *BinOp) {
-    if (!checkBool256Operands(BinOp))
-      return true;
-
-    const Expr *LHS = BinOp->getLHS();
-    const Expr *RHS = BinOp->getRHS();
-    ASTContext &Ctx = SemaRef.getASTContext();
-
-    if (LHS->isCXX98IntegralConstantExpr(Ctx) &&
-        RHS->isCXX98IntegralConstantExpr(Ctx))
-      return true;
-
-    Expr::EvalResult ResVal;
-    if (BinOp->EvaluateAsRValue(ResVal, Ctx))
-      return true;
-
-    Expr::EvalResult RHSVal;
-    if (RHS->EvaluateAsRValue(RHSVal, Ctx))
-      return true;
-
-    SemaRef.Diag(BinOp->getExprLoc(), diag::err_division);
-    return true;
-  }
-
-  bool VisitBinRem(BinaryOperator *BO) {
-    if (!checkBool256Operands(BO))
-      return true;
-
-    const Expr *LHS = BO->getLHS();
-    const Expr *RHS = BO->getRHS();
-    ASTContext &Ctx = SemaRef.getASTContext();
-
-    if (LHS->isCXX98IntegralConstantExpr(Ctx) &&
-        RHS->isCXX98IntegralConstantExpr(Ctx))
-      return true;
-
-    Expr::EvalResult ResVal;
-    if (BO->EvaluateAsRValue(ResVal, Ctx))
-      return true;
-
-    Expr::EvalResult RHSVal;
-    if (RHS->EvaluateAsRValue(RHSVal, Ctx)) {
-      if (RHSVal.Val.isInt() && RHSVal.Val.getInt().isPowerOf2())
-        return true;
+      // Do not report error for code like:
+      //
+      //   ptr = (__global int *)12;
+      //
+      // Error for this code will be issued when processing cast. However report
+      // error for constructs like:
+      //
+      //   ptr = (__global int *)0;
+      //
+      // now, because the cast is valid in this case.
+      //
+      if (auto Cast = dyn_cast<CastExpr>(RHS->IgnoreParens())) {
+        if (Cast->getCastKind() != CastKind::CK_NullToPointer &&
+            Cast->getCastKind() != CastKind::CK_LValueToRValue)
+          CheckForGPtr = false;
+      }
+      if (CheckForGPtr)
+        checkNotGlobalPtr(LHS, BO->getExprLoc()) &&
+        checkNotGlobalPtr(RHS, BO->getExprLoc());
+      break;
     }
+    case BinaryOperator::Opcode::BO_Add:
+    case BinaryOperator::Opcode::BO_Sub:
+      // Catch operations on global pointer, like 'ptr + 3'. TPC does not have
+      // instructions to carry out such computations.
+      checkNotGlobalPtr(BO->getLHS(), BO->getExprLoc()) &&
+        checkNotGlobalPtr(BO->getRHS(), BO->getExprLoc());
+      // Catch operation on boolX operands.
+      checkBool256Operands(BO);
+      break;
+    case BinaryOperator::Opcode::BO_Mul:
+    case BinaryOperator::Opcode::BO_MulAssign:
+      if (checkBool256Operands(BO))
+        checkMulValidity(BO);
+      break;
+    case BinaryOperator::Opcode::BO_AddAssign:
+    case BinaryOperator::Opcode::BO_SubAssign:
+      checkNotGlobalPtr(BO->getLHS(), BO->getExprLoc());
+      checkBool256Operands(BO);
+      break;
+    case BinaryOperator::Opcode::BO_LT:
+    case BinaryOperator::Opcode::BO_LE:
+    case BinaryOperator::Opcode::BO_GT:
+    case BinaryOperator::Opcode::BO_GE:
+    case BinaryOperator::Opcode::BO_Cmp:
+      checkBool256Operands(BO);
+      LLVM_FALLTHROUGH;
+    case BinaryOperator::Opcode::BO_EQ:
+    case BinaryOperator::Opcode::BO_NE:
+      checkNotGlobalPtr(BO->getLHS(), BO->getExprLoc()) &&
+        checkNotGlobalPtr(BO->getRHS(), BO->getExprLoc());
+      break;
+    case BinaryOperator::Opcode::BO_Shl:
+    case BinaryOperator::Opcode::BO_Shr:
+    case BinaryOperator::Opcode::BO_ShlAssign:
+    case BinaryOperator::Opcode::BO_ShrAssign:
+      if (SemaRef.CheckNotIndexType(BO->getLHS(), BO->getExprLoc()))
+        SemaRef.CheckNotIndexType(BO->getRHS(), BO->getExprLoc());
+      checkBool256Operands(BO);
+      break;
+    case BinaryOperator::Opcode::BO_Div:
+    case BinaryOperator::Opcode::BO_Rem: {
+      if (checkBool256Operands(BO)) {
+        const Expr *LHS = BO->getLHS();
+        const Expr *RHS = BO->getRHS();
+        ASTContext &Ctx = SemaRef.getASTContext();
 
-    SemaRef.Diag(BO->getExprLoc(), diag::err_remainder);
-    return true;
-  }
+        if (LHS->isCXX98IntegralConstantExpr(Ctx) &&
+            RHS->isCXX98IntegralConstantExpr(Ctx))
+          break;
 
-  bool VisitBinDivAssign(BinaryOperator *BinOp) {
-    if (!checkBool256Operands(BinOp))
-      return true;
+        Expr::EvalResult ResVal;
+        if (BO->EvaluateAsRValue(ResVal, Ctx))
+          break;
 
-    // If RHS is a power of 2 and the result is integer, the division can be
-    // replaced with shift.
-    const Expr *RHS = BinOp->getRHS();
-    ASTContext &Ctx = SemaRef.getASTContext();
-    Expr::EvalResult RHSVal;
-    if (RHS->EvaluateAsRValue(RHSVal, Ctx)) {
-      if (RHSVal.Val.isInt() && RHSVal.Val.getInt().isPowerOf2())
-        return true;
+        Expr::EvalResult RHSVal;
+        if (RHS->EvaluateAsRValue(RHSVal, Ctx))
+          break;
+
+        if (!isTypeSupportedInDivRem(BO->getType()))
+          SemaRef.Diag(BO->getExprLoc(), diag::err_divrem);
+      }
+      break;
     }
-
-    SemaRef.Diag(BinOp->getExprLoc(), diag::err_division);
-    return true;
-  }
-
-  bool VisitBinRemAssign(BinaryOperator *BO) {
-    if (!checkBool256Operands(BO))
-      return true;
-
-    // If RHS is a power of 2 and the result is integer, the remainder can be
-    // replaced with and.
-    const Expr *RHS = BO->getRHS();
-    ASTContext &Ctx = SemaRef.getASTContext();
-    Expr::EvalResult RHSVal;
-    if (RHS->EvaluateAsRValue(RHSVal, Ctx)) {
-      if (RHSVal.Val.isInt() && RHSVal.Val.getInt().isPowerOf2())
-        return true;
+    case BinaryOperator::Opcode::BO_DivAssign:
+    case BinaryOperator::Opcode::BO_RemAssign:
+      if (checkBool256Operands(BO)) {
+        if (!isTypeSupportedInDivRem(BO->getType()))
+          SemaRef.Diag(BO->getExprLoc(), diag::err_divrem);
+      }
+      break;
+    case BinaryOperator::Opcode::BO_LAnd:
+    case BinaryOperator::Opcode::BO_LOr:
+      if (SemaRef.CheckNotIndexType(BO->getLHS(), BO->getExprLoc()) &&
+          SemaRef.CheckNotIndexType(BO->getRHS(), BO->getExprLoc())) {
+        checkBool256Operands(BO);
+      }
+      break;
     }
-
-    SemaRef.Diag(BO->getExprLoc(), diag::err_remainder);
-    return true;
-  }
-
-  bool VisitBinLAnd(BinaryOperator *BinOp) {
-    if (SemaRef.CheckNotIndexType(BinOp->getLHS(), BinOp->getExprLoc()))
-      SemaRef.CheckNotIndexType(BinOp->getRHS(), BinOp->getExprLoc());
-    checkBool256Operands(BinOp);
-    return true;
-  }
-
-  bool VisitBinLOr(BinaryOperator *BinOp) {
-    if (SemaRef.CheckNotIndexType(BinOp->getLHS(), BinOp->getExprLoc()))
-      SemaRef.CheckNotIndexType(BinOp->getRHS(), BinOp->getExprLoc());
-    checkBool256Operands(BinOp);
-    return true;
+    return BaseType::VisitBinaryOperator(BO);
   }
 
   bool VisitCallExpr(CallExpr *E) {
-    Decl *D = E->getCallee()->getReferencedDeclOfCallee();
-    if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
-      unsigned BuiltinId = FD->getBuiltinID();
-      if (BuiltinId != 0) {
-        checkIntrinsicArguments(BuiltinId, E);
+    if (Decl *D = E->getCallee()->getReferencedDeclOfCallee())
+      if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+        unsigned BuiltinId = FD->getBuiltinID();
+        if (BuiltinId != 0) {
+          checkIntrinsicArguments(BuiltinId, E);
 
-        // Check printf. We need to bypass index checking.
-        if (isPrintFWithValue(BuiltinId)) {
-          Expr *Val = E->getArg(1)->IgnoreParenCasts();
-          if (auto ASE = dyn_cast<ArraySubscriptExpr>(Val)) {
-            SubscrInPrintF.insert(ASE);
+          // Check printf. We need to bypass index checking.
+          if (isPrintFWithValue(BuiltinId)) {
+            Expr *Val = E->getArg(1)->IgnoreParenCasts();
+            if (auto ASE = dyn_cast<ArraySubscriptExpr>(Val)) {
+              SubscrInPrintF.insert(ASE);
+            }
           }
         }
       }
-    }
     return true;
   }
 
@@ -1315,7 +1232,7 @@ public:
         // certain contexts.
         if (SemaRef.getLangOpts().LongIRF) {
           if (AllowInt5Access) {
-            if (NeedCheckInt5 && Int5Dim != IndexVal) {
+            if (NeedCheckInt5 && Int5Dim != (unsigned)IndexVal) {
               SemaRef.Diag(ASE->getBeginLoc(), diag::err_different_int5_dims)
                 << ASE->getSourceRange();
               return true;
@@ -1328,16 +1245,6 @@ public:
         }
       }
     }
-    return true;
-  }
-
-  bool VisitUnaryPlus(UnaryOperator *UO) {
-    checkBool256Operands(UO);
-    return true;
-  }
-
-  bool VisitUnaryMinus(UnaryOperator *UO) {
-    checkBool256Operands(UO);
     return true;
   }
 
@@ -1359,97 +1266,45 @@ public:
     return true;
   }
 
-  bool TraverseUnaryPostInc(UnaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseUnaryPostInc(E);
-
-    if (!WalkUpFromUnaryPostInc(E))
-      return false;
-
-    return TraverseUnaryOperatorDescendants(E);
+  bool TraverseUnaryOperator(UnaryOperator *UO) {
+    if (SemaRef.getLangOpts().LongIRF) {
+      if (!WalkUpFromUnaryOperator(UO))
+        return false;
+      return TraverseUnaryOperatorDescendants(UO);
+    }
+    return BaseType::TraverseUnaryOperator(UO);
   }
 
-  bool TraverseUnaryPostDec(UnaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseUnaryPostDec(E);
-
-    if (!WalkUpFromUnaryPostDec(E))
-      return false;
-
-    return TraverseUnaryOperatorDescendants(E);
-  }
-
-  bool TraverseUnaryPreInc(UnaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseUnaryPreInc(E);
-
-    if (!WalkUpFromUnaryPreInc(E))
-      return false;
-
-    return TraverseUnaryOperatorDescendants(E);
-  }
-
-  bool TraverseUnaryPreDec(UnaryOperator *E) {
-    if (!SemaRef.getLangOpts().LongIRF)
-      return BaseType::TraverseUnaryPreDec(E);
-
-    if (!WalkUpFromUnaryPreDec(E))
-      return false;
-
-    return TraverseUnaryOperatorDescendants(E);
-  }
-
-  bool VisitUnaryPostInc(UnaryOperator *UO) {
-    checkBool256Operands(UO);
-    return true;
-  }
-
-  bool VisitUnaryPostDec(UnaryOperator *UO) {
-    checkBool256Operands(UO);
-    checkNotGlobalPtr(UO->getSubExpr(), UO->getExprLoc());
-    return true;
-  }
-
-  bool VisitUnaryPreInc(UnaryOperator *UO) {
-    checkBool256Operands(UO);
-    checkNotGlobalPtr(UO->getSubExpr(), UO->getExprLoc());
-    return true;
-  }
-
-  bool VisitUnaryPreDec(UnaryOperator *UO) {
-    checkBool256Operands(UO);
-    checkNotGlobalPtr(UO->getSubExpr(), UO->getExprLoc());
-    return true;
-  }
-
-  bool VisitUnaryLNot(UnaryOperator *UO) {
-    checkNotGlobalPtr(UO->getSubExpr(), UO->getExprLoc());
-    checkBool256Operands(UO);
-    return true;
+  bool VisitUnaryOperator(UnaryOperator *UO) {
+    switch (UO->getOpcode()) {
+    default:
+      break;
+    case UnaryOperator::Opcode::UO_PostInc:
+      if (TOptions.CPU != "goya2" && TOptions.CPU != "greco" &&
+          TOptions.CPU != "gaudi2" && TOptions.CPU != "doron1")
+        checkNotGlobalPtr(UO->getSubExpr(), UO->getExprLoc());
+      checkBool256Operands(UO);
+      break;
+    case UnaryOperator::Opcode::UO_PreInc:
+    case UnaryOperator::Opcode::UO_PreDec:
+    case UnaryOperator::Opcode::UO_PostDec:
+    case UnaryOperator::Opcode::UO_Minus:
+    case UnaryOperator::Opcode::UO_Plus:
+    case UnaryOperator::Opcode::UO_LNot:
+      checkNotGlobalPtr(UO->getSubExpr(), UO->getExprLoc());
+      checkBool256Operands(UO);
+      break;
+    }
+    return BaseType::VisitUnaryOperator(UO);
   }
 };
 
 
 class RC99TranslationUnitScanner : public RecursiveASTVisitor<RC99TranslationUnitScanner> {
   Sema &SemaRef;
-  std::map<const FunctionDecl*, const CallExpr*> Defined;
 public:
   RC99TranslationUnitScanner(Sema &S) : SemaRef(S) {
     assert(S.getLangOpts().RC99);
-  }
-
-  bool VisitCallExpr(CallExpr *E) {
-    Decl *D = E->getCallee()->getReferencedDeclOfCallee();
-    if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
-      if (FD->getBuiltinID() == 0 && !FD->isDefined() &&
-          FD->getDeclName().isIdentifier() &&
-          FD->getDeclName().getAsString() != "__initialize") {
-        SemaRef.Diag(E->getBeginLoc(), diag::err_undefined_function);
-        return false;
-      }
-      Defined[FD] = E;
-    }
-    return true;
   }
 
   bool VisitRecordDecl(RecordDecl *RD) {
@@ -1500,22 +1355,24 @@ bool Sema::checkBeforeCodegen(Decl *D) {
   // so load them now.
   Context.loadTpcTypes();
 
-  if (auto *FD = dyn_cast<FunctionDecl>(D)) {
-    // If this function is not main function, mark it as always_inline. Do not
-    // mark support functions, like "__fdiv". They will be marked in backend, by
-    // pass NodePreLegalizer.
-    if ((FD->getStorageClass() != SC_Extern) &&
-        !(FD->getDeclContext()->isTranslationUnit() &&
-        FD->getName() == LangOpts.MainFunction) &&
-        !FD->getName().startswith("__")) {
+  if (!getLangOpts().CompileForLibrary) {
+    if (auto *FD = dyn_cast<FunctionDecl>(D)) {
+      if (FD->getDeclContext()->isTranslationUnit() &&
+          FD->getName() == LangOpts.MainFunction) {
+        FD->addAttr(OpenCLKernelAttr::CreateImplicit(Context));
+      } else {
+        if ((FD->getStorageClass() != SC_Extern) &&
+            FD->isThisDeclarationADefinition() &&
+            !FD->getName().startswith("__")) {
+          FD->addAttr(AlwaysInlineAttr::CreateImplicit(Context));
+          FD->setInlineSpecified(true);
+        }
+      }
+    } else if (auto FTD = dyn_cast<FunctionTemplateDecl>(D)) {
+      FunctionDecl *FD = FTD->getTemplatedDecl();
       FD->addAttr(AlwaysInlineAttr::CreateImplicit(Context));
       FD->setInlineSpecified(true);
     }
-  }
-  else if (auto FTD = dyn_cast<FunctionTemplateDecl>(D)) {
-    FunctionDecl *FD = FTD->getTemplatedDecl();
-    FD->addAttr(AlwaysInlineAttr::CreateImplicit(Context));
-    FD->setInlineSpecified(true);
   }
 
   RC99Scanner Scanner(*this);
@@ -1527,49 +1384,50 @@ bool Sema::checkBeforeCodegen(Decl *D) {
 bool Sema::isPrintfEnabled(FunctionDecl *FDecl) {
   DeclarationName MemberName = FDecl->getDeclName();
   IdentifierInfo *Member = MemberName.getAsIdentifierInfo();
-  if (Member->getName().startswith("printf_"))
-    return TpcPrintfPragmaIsOn;
+  if (Member->getName().startswith("printf_")) {
+    return TpcPrintfPragmaIsOn || LangOpts.UsePrintf;
+  }
   return true;
 }
 
 void Sema::checkTranslationUnin() {
   // Check if main function is present.
-  IdentifierInfo *II = PP.getIdentifierInfo(getLangOpts().MainFunction);
-  DeclarationName DN(II);
-  DeclarationNameInfo DNI(DN, SourceLocation());
-  LookupResult R(*this, DNI, LookupOrdinaryName);
-  LookupName(R, TUScope);
-  if (R.getResultKind() != LookupResult::Found) {
-    Diag(SourceLocation(), diag::err_main_not_found);
-    return;
-  }
-  if (!isa<FunctionDecl>(R.getFoundDecl())) {
-    Diag(SourceLocation(), diag::err_main_not_found);
-    return;
-  }
+  FunctionDecl *MainFunc = nullptr;
+  if (!getLangOpts().CompileForLibrary) {
+    IdentifierInfo *II = PP.getIdentifierInfo(getLangOpts().MainFunction);
+    DeclarationName DN(II);
+    DeclarationNameInfo DNI(DN, SourceLocation());
+    LookupResult R(*this, DNI, LookupOrdinaryName);
+    LookupName(R, TUScope);
+    if (R.getResultKind() != LookupResult::Found ||
+        !isa<FunctionDecl>(R.getFoundDecl())) {
+      Diag(SourceLocation(), diag::err_main_not_found);
+      return;
+    }
+    MainFunc = cast<FunctionDecl>(R.getFoundDecl());
 
-  // Check if main function has correct prototype.
-  FunctionDecl *MainFunc = dyn_cast<FunctionDecl>(R.getFoundDecl());
-  QualType T = MainFunc->getType();
-  assert(T->isFunctionType() && "function decl is not of function type");
-  auto *FT = T->castAs<FunctionType>();
-  if (!Context.hasSameType(FT->getReturnType(), Context.VoidTy))
-    Diag(MainFunc->getTypeSpecStartLoc(), diag::warn_tpc_not_void_function);
-  if (MainFunc->isInlineSpecified())
-    Diag(MainFunc->getBeginLoc(), diag::err_inline_entry_function)
+    // Check if main function has correct prototype.
+    QualType T = MainFunc->getType();
+    assert(T->isFunctionType() && "function decl is not of function type");
+    auto *FT = T->castAs<FunctionType>();
+    if (!Context.hasSameType(FT->getReturnType(), Context.VoidTy))
+      Diag(MainFunc->getTypeSpecStartLoc(), diag::warn_tpc_not_void_function);
+    if (MainFunc->isInlineSpecified())
+      Diag(MainFunc->getBeginLoc(), diag::err_inline_entry_function)
         << FixItHint::CreateRemoval(MainFunc->getBeginLoc());
 
-  if (!isa<FunctionNoProtoType>(FT)) {
-    auto *FTP = cast<const FunctionProtoType>(FT);
-    unsigned nparams = FTP->getNumParams();
-    assert(MainFunc->getNumParams() == nparams);
-    for (unsigned i = 0; i < nparams; ++i) {
-      QualType AT = FTP->getParamType(i);
-      if (!AT->isBuiltinType()) {
-        Diag(MainFunc->getParamDecl(i)->getLocation(),
-             diag::err_main_type_of_arg_wrong)
+    if (!isa<FunctionNoProtoType>(FT)) {
+      auto *FTP = cast<const FunctionProtoType>(FT);
+      unsigned nparams = FTP->getNumParams();
+      assert(MainFunc->getNumParams() == nparams);
+      for (unsigned i = 0; i < nparams; ++i) {
+        QualType AT = FTP->getParamType(i);
+        if (!AT->isBuiltinType()) {
+          Diag(MainFunc->getParamDecl(i)->getLocation(),
+               diag::err_main_type_of_arg_wrong)
             << MainFunc->getParamDecl(i)->getNameAsString();
-        MainFunc->setInvalidDecl(true);
+          MainFunc->setInvalidDecl(true);
+        }
       }
     }
   }
@@ -1591,20 +1449,21 @@ void Sema::checkTranslationUnin() {
   if (!Scanner.TraverseDecl(Context.getTranslationUnitDecl()))
     return;
 
-  // create __initialize function definition 
-  SmallVector<Stmt*, 32> InitStmts;
+  // create __initialize function definition.
+  if (MainFunc) {
+    SmallVector<Stmt*, 32> InitStmts;
 
-  auto FnBody = CompoundStmt::Create(Context, InitStmts, MainFunc->getBeginLoc(), MainFunc->getBeginLoc());
-  IdentifierInfo *III = PP.getIdentifierInfo("__initialize");
-  DeclarationName DN1(III);
-  DeclarationNameInfo DNII(DN1, SourceLocation());
-  LookupResult RI(*this, DNII, LookupOrdinaryName);
-  LookupName(RI, TUScope);
-  assert(RI.getResultKind() == LookupResult::Found);
-  FunctionDecl *FDI = cast<FunctionDecl>(RI.getFoundDecl());
-  FDI->setBody(FnBody);
-
-  Consumer.HandleTopLevelDecl(DeclGroupRef(FDI));
+    auto FnBody = CompoundStmt::Create(Context, InitStmts, MainFunc->getBeginLoc(), MainFunc->getBeginLoc());
+    IdentifierInfo *III = PP.getIdentifierInfo("__initialize");
+    DeclarationName DN1(III);
+    DeclarationNameInfo DNII(DN1, SourceLocation());
+    LookupResult RI(*this, DNII, LookupOrdinaryName);
+    LookupName(RI, TUScope);
+    assert(RI.getResultKind() == LookupResult::Found);
+    FunctionDecl *FDI = cast<FunctionDecl>(RI.getFoundDecl());
+    FDI->setBody(FnBody);
+    Consumer.HandleTopLevelDecl(DeclGroupRef(FDI));
+  }
 }
 
 VarDecl *Sema::ActOnTensorDeclarator(VarDecl *TensorDecl, unsigned TensorNumber,
@@ -1659,12 +1518,12 @@ DeclStmt *Sema::ProcessExtraArgs(ParmVarDecl *VD, VarDecl *Ptr) {
   QualType Ty = Ptr->getType();
   DeclRefExpr *Idx = DeclRefExpr::Create(getASTContext(), NestedNameSpecifierLoc(), SourceLocation(),
     Ptr, false, SourceLocation(), Ty, VK_LValue);
-  ExprResult Res = ImplicitCastExpr::Create(getASTContext(), Ty, CK_LValueToRValue, Idx, nullptr, VK_RValue);
+  ExprResult Res = ImplicitCastExpr::Create(getASTContext(), Ty, CK_LValueToRValue, Idx, nullptr, VK_RValue, FPOptionsOverride());
   QualType Type = VD->getType();
   if (!(Type == Context.UnsignedIntTy ||
     Type == Context.IntTy)) {
     Type = Context.getAddrSpaceQualType(Type, LangAS::rc99_global);
-    Res = ImplicitCastExpr::Create(getASTContext(), Context.getPointerType(Type), CK_BitCast, Res.get(), nullptr, VK_RValue);
+    Res = ImplicitCastExpr::Create(getASTContext(), Context.getPointerType(Type), CK_BitCast, Res.get(), nullptr, VK_RValue, FPOptionsOverride());
   }
   Res = CreateBuiltinUnaryOp(SourceLocation(), UO_Deref, Res.get());
   AddInitializerToDecl(NewVD, Res.get(), false);
@@ -1971,7 +1830,7 @@ static const llvm::fltSemantics &getSemanticsFromType(ASTContext &Context, QualT
   else if (Ty == Context.HalfTy)
     FSema = &llvm::APFloat::IEEEhalf();
   else if (Ty == Context.BFloat16Ty)
-    FSema = &llvm::APFloat::BFloat16();
+    FSema = &llvm::APFloat::BFloat();
   else if (Ty == Context.Float8_143Ty)
     FSema = &llvm::APFloat::Float8_143();
   else if (Ty == Context.Float8_152Ty)
@@ -2000,16 +1859,16 @@ Expr *Sema::buildDefaultArgument(const FunctionProtoType *FT,
 
   int NParams = FT->getNumParams();
   QualType ParamTy = FT->getParamType(ParamNo);
-  if (ParamNo == NParams - 1 && ParamTy->isBooleanType()) {
+  if (ParamNo == (unsigned)(NParams - 1) && ParamTy->isBooleanType()) {
     // The last argument, polarity.
     return new(Context) CXXBoolLiteralExpr(false, Context.BoolTy, SourceLocation());
-  } else if (ParamNo == NParams - 2 && ParamTy->isBooleanType()) {
+  } else if (ParamNo == (unsigned)(NParams - 2) && ParamTy->isBooleanType()) {
     // The last but one argument, predicate.
     return new(Context) CXXBoolLiteralExpr(true, Context.BoolTy, SourceLocation());
-  } else if (ParamNo == NParams -3 && ParamTy->isBooleanType()) {
+  } else if (ParamNo == (unsigned)(NParams - 3) && ParamTy->isBooleanType()) {
     // Income.
     return new(Context) CXXBoolLiteralExpr(false, Context.BoolTy, SourceLocation());
-  } else if (ParamNo == NParams - 3 && ParamTy == FT->getReturnType()) {
+  } else if (ParamNo == (unsigned)(NParams - 3) && ParamTy == FT->getReturnType()) {
     QualType ArgTy = FT->getReturnType();
     // The last but two argument, income.
     if (ArgTy->isStructureType()) {
@@ -2030,7 +1889,7 @@ Expr *Sema::buildDefaultArgument(const FunctionProtoType *FT,
         llvm::APInt Val(getIntWidthFromType(Context, EltTy), 0);
         Zero = IntegerLiteral::Create(Context, Val, EltTy, SourceLocation());
       }
-      return ImplicitCastExpr::Create(Context, ArgTy, CastKind::CK_VectorSplat, Zero, nullptr, VK_RValue);
+      return ImplicitCastExpr::Create(Context, ArgTy, CastKind::CK_VectorSplat, Zero, nullptr, VK_RValue, FPOptionsOverride());
     } else if (ArgTy->isFloatingType()) {
       llvm::APFloat Val(getSemanticsFromType(Context, ArgTy));
       return FloatingLiteral::Create(Context, Val, true, ArgTy, SourceLocation());

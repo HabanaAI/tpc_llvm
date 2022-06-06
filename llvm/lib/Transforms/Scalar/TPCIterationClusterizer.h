@@ -1,13 +1,15 @@
-//===-TPCIterationClusterizer.h : Clusteriztion for TPC Innermost Loops --====//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
+// === TPCIterationClusterizer.h : Clusteriztion for TPC Innermost Loops === //
 //
 //
-//===----------------------------------------------------------------------===//
+//                     The LLVM Compiler Infrastructure:
+//
+//                2021 - This pass is a property of Habana labs
+//
+// Author : Vinay V. Vasista
+// Email  : vvasista@habana.ai
+//
+// ========================================================================= //
+
 
 #ifndef LLVM_TRANSFORM_SCALAR_TPC_ITER_CLUSTERIZER_H
 #define LLVM_TRANSFORM_SCALAR_TPC_ITER_CLUSTERIZER_H

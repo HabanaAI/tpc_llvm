@@ -1,7 +1,5 @@
 // RUN: %clang_cc1 -S -triple tpc-none-none -std=rc99 -mllvm -tpc-unbranch=1 -mllvm -tpc-unbranch-cnf=1 -O1 %s -o - | FileCheck %s
 
-// XFAIL: *
-
 /*
 With new changes unbranch already do not hide issie.
 
@@ -27,31 +25,31 @@ void test_runner(int to_do, tensor out_tnsr)
     if (to_do == to_run_test)
     {
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 1, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 1, 0, 1, 0);
 
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 2, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 2, 0, 1, 0);
 
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 3, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 3, 0, 1, 0);
 
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 4, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 4, 0, 1, 0);
 
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 5, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 5, 0, 1, 0);
 
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 6, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 6, 0, 1, 0);
 #if 1
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 7, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 7, 0, 1, 0);
 
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 8, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 8, 0, 1, 0);
 
         out_index[0] += 1;
-        s_i32_st_g (a_gen_addr_i(out_index, out_tnsr), 9, 0, 1, 0);
+        s_i32_st_g (gen_addr(out_index, out_tnsr, 0, 0, 1, 0), 9, 0, 1, 0);
 #endif
     }
 }

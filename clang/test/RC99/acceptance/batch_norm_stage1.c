@@ -18,14 +18,14 @@ void main(tensor ifm , tensor mean_tensor, tensor var_tensor)
         {
             addr[2] = w;
             float64 tmp = 0;
-            tmp = v_f32_ld_tnsr_i_b(addr,ifm,tmp,1,0);
+            tmp = v_f32_ld_tnsr_b(addr, ifm, 0, tmp, 1, 0);
             mean += tmp;
             var += tmp * tmp;
         }
     }
     int5 storeCoord = 0;
-    f32_st_tnsr_i_v_b(storeCoord, mean_tensor, mean, 1,0);
-    f32_st_tnsr_i_v_b(storeCoord, var_tensor, var, 1,0);
+    v_f32_st_tnsr(storeCoord, mean_tensor, mean, 0, 1, 0);
+    v_f32_st_tnsr(storeCoord, var_tensor, var, 0, 1, 0);
 }
 
 // CHECK:main

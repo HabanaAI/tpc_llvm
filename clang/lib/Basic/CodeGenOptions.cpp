@@ -17,7 +17,7 @@ CodeGenOptions::CodeGenOptions() {
 #include "clang/Basic/CodeGenOptions.def"
 
   RelocationModel = llvm::Reloc::PIC_;
-  memcpy(CoverageVersion, "402*", 4);
+  memcpy(CoverageVersion, "408*", 4);
 #ifdef LLVM_TPC_COMPILER
   // see PRM 1.3.10. Memory regions
   ScalarLocalMemory = 1024;

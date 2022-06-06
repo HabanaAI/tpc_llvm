@@ -1,9 +1,5 @@
 //===-- TPCTargetTransformInfo.h - TPC specific TTI -------------*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file contains declaration of a TargetTransformInfo object specific to
@@ -70,7 +66,11 @@ public:
   const InstToSlot &getInstToSlotMap() const { return InstToSlotMap; }
   const CompoundInstToIntrinsMap &getCiiMap() const { return CIIMap; }
 
+  bool shouldExpandReduction(const IntrinsicInst *II) const { return false; }
+
   int getInstructionLatency(const Instruction *I);
+  int getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
+                            TTI::TargetCostKind CostKind);
   int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
                             ArrayRef<Value *> Args, FastMathFlags FMF,
                             unsigned VF = 1);
@@ -84,10 +84,13 @@ public:
     return -1;
   }
 
+  int getShuffleCost(TTI::ShuffleKind Kind, VectorType *Tp, int Index,
+                     VectorType *SubTp);
+
   static bool getTypeMatrix(const Instruction *I, Type::TypeID Ty[]) {
     Ty[0] = I->getType()->getTypeID();
-    if (I->getType()->getTypeID() == Type::VectorTyID) {
-      Ty[1] = I->getType()->getVectorElementType()->getTypeID();
+    if (I->getType()->getTypeID() == Type::FixedVectorTyID) {
+      Ty[1] = cast<VectorType>(I->getType())->getElementType()->getTypeID();
     }
     return true;
   }
@@ -99,7 +102,7 @@ public:
       const Instruction *I,
       TPCLatencyEvaluation::InstructionForLatencyDetermination &SrcIld) const;
   bool extractAndPopulate(
-      const Intrinsic::ID ID, Type *RetTy, ArrayRef<Value *> Args,
+      const Intrinsic::ID ID, Type *RetTy, ArrayRef<const Value *> Args,
       TPCLatencyEvaluation::InstructionForLatencyDetermination &inst) const;
   bool extractAndPopulate(
       const IntrinsicInfo,

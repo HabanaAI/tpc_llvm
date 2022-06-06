@@ -7,4 +7,4 @@ void main(int src, int dest) {
   *dptr = convert_ushort256_to_float256(src_val, 0);
 }
 
-// CHECK-IR: uitofp <256 x i16> {{.*}} to <256 x float>
+// CHECK-IR: call <256 x float> @llvm.tpc.convert.v256f32.v256i16.i1(<256 x i16> {{.*}}, i8 8, i32 0, <256 x float> undef, i1 true, i1 false)

@@ -38,5 +38,3 @@ test/debuginfo-tests
 .vscode
 .vs
 
-# TPC runtime tests
-test/RC99/test-rt

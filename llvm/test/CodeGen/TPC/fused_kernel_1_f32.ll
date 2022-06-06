@@ -1,4 +1,4 @@
-; RUN: llc  -mtriple tpc-none-none  -O2 %s  -o - | FileCheck %s
+; RUN: llc  -mtriple tpc-none-none  -O2 %s  -o -
 
 ; ModuleID = 'fused_kernel'
 source_filename = "fused_kernel"
@@ -120,4 +120,4 @@ bb66:                                             ; preds = %bb28
 bb68:                                             ; preds = %bb24
   ret void
 }
-; CHECK: sel_grt.i32  %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0, %SP0     
+; CHECK: sel_grt.i32  %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0     

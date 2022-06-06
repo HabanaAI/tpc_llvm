@@ -8,7 +8,7 @@ void main(int x) {
 }
 
 
-// CHECK: define void @main(i32 %x) {{.*}} {
+// CHECK: define dso_local void @main(i32 %x) {{.*}} {
 // CHECK:   store [4 x i32] [i32 120, i32 121, i32 122, i32 123], [4 x i32] addrspace(1)* null
 
 

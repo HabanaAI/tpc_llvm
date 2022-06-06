@@ -1,10 +1,10 @@
 // ===== CoordUpdateSimplify.cpp : TPC IR Coord update simplification ===== //
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// =====--------------------------------------------------------------------//
+//                     The LLVM Compiler Infrastructure:
+//
+//              2020 - This pass is a property of Habana labs
+//
 // This pass transforms the Coord update style originally of the form :
 //
 // From :
@@ -58,6 +58,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsTPC.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -636,7 +637,7 @@ Instruction *CoordUpdateSimplify::createAddMaskInst(Instruction *I) {
   IRBuilder<> Builder(HeaderBlock);
   LLVMContext &C = HeaderBlock->getContext();
   Type *Int32Ty = Type::getInt32Ty(C);
-  Type *Int5x32Ty = VectorType::get(Int32Ty, 5);
+  Type *Int5x32Ty = FixedVectorType::get(Int32Ty, 5);
 
   Constant *IRFLocation =
       ConstantInt::get(Int32Ty, (1LL << Dim->getZExtValue()));

@@ -1,4 +1,5 @@
     // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN3P %s
+    // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN3P %s
 
 void main(int dest, int src1, int vpredp, _Bool pred) {
   volatile bfloat128 __local *dest_ptr = (bfloat128 __local *)dest;

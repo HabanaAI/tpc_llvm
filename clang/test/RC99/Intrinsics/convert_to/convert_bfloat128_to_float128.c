@@ -7,4 +7,4 @@ void main(int src, int dest) {
   *dptr = convert_bfloat128_to_float128(src_val, 0);
 }
 
-// CHECK-IR: fpext <128 x bfloat> {{.*}} to <128 x float>
+// CHECK-IR: call <128 x float> @llvm.tpc.convert.v128f32.v128bf16.i1({{.*}}, i8 1, i32 0, <128 x float> undef, i1 true, i1 false)

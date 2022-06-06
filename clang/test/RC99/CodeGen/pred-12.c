@@ -2,8 +2,8 @@
 
 void main(int dest, int src1, int src2) {
   int val = 0;
-  val = s_i32_add_s_s_b(src1, src2, val, e_no_saturation, 0, 1);
+  val = s_i32_add(src1, src2, SW_NO_SAT, val, 0, 1);
   *(int __local *)dest = val;
 }
 
-// CHECK: add.i32 {{.*}}, %SP0
+// CHECK: add.i32 {{.*}}

@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/BasicBlock.h"
@@ -31,6 +32,7 @@
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 #include <list>
 using namespace llvm;
 
@@ -141,7 +143,10 @@ bool LoopTaken::runOnFunction(Function &F) {
   }
   bool Ret = false;
   SmallPriorityWorklist<Loop *, 4> Worklist;
-  internal::appendLoopsToWorklist(reverse(LI), Worklist);
+  // Need to see if reverse(LI) is required, for now commented to resolve
+  // conflict for llvm merge12
+  // appendLoopsToWorklist(reverse(LI), Worklist);
+  appendLoopsToWorklist(LI, Worklist);
   while (!Worklist.empty()) {
     Loop *L = Worklist.pop_back_val();
     InsertP = &L->getLoopPreheader()->back();

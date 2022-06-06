@@ -1,19 +1,33 @@
-//===--- tpc-special.h-----------------------------------------*- TPC-C-*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
+/*****************************************************************************
+* Copyright (C) 2020 HabanaLabs, Ltd.
+* All Rights Reserved.
+*
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+* Proprietary and confidential.
+*
+* Authors:
+* Alexander Semenov <asemenov@unipro.ru>
+* Dmytrey Salnikov <dmytro.salnikov@p-product.com>
+* Keren Luzon <kluzon@habana.ai>
+******************************************************************************
+*/
 #if defined(INCLUDE_TPC_SPECIAL_H) && !defined(TPC_SPECIAL_H_INCLUDED)
 #define TPC_SPECIAL_H_INCLUDED
+
+#define __bool_true_false_are_defined 1
+#ifndef __cplusplus
+#   define bool        _Bool
+#   define true        1
+#   define false        0
+#else /* __cplusplus */
+#   define _Bool        bool
+#endif /* __cplusplus */
 
 // These are definitions previously defined in 'tpc-defs.h'. They are not part
 // of compiler support library, just only definitions that are wanted to be
 // available without inclusion of any header file.
 
+#ifndef TPC_KERNEL_PATH
 typedef enum _e_round_mode {
   e_round_half_ne = 0,
   e_round_zero = 1,
@@ -22,6 +36,44 @@ typedef enum _e_round_mode {
   e_round_stochastic = 4,
   e_round_half_az = 6
 } e_round_mode;
+
+typedef enum _e_negation { e_no_negation = 0, e_with_negation = 1 } e_negation;
+
+typedef enum _e_aso_access_type {
+  e_aso_prefetch = 0,
+  e_aso_commit = 1
+} e_aso_access_type;
+
+typedef enum _e_return_bits {
+  e_return_lower_32 = 0,
+  e_return_upper_32 = 1
+} e_return_bits;
+
+typedef enum _e_group_source { e_group_0 = 0, e_group_1 = 1 } e_group_source;
+
+typedef enum _e_element_stride {
+  e_every_second_element = 0,
+  e_every_forth_element = 1
+} e_element_stride;
+
+typedef enum _e_group_half {
+  e_lower_half_group = 0,
+  e_higher_half_group = 1
+} e_group_half;
+
+typedef enum _e_abc_int_norm_sel {
+  e_normalize_ab = 0,
+  e_normalize_c = 1
+} e_abc_int_norm_sel;
+
+typedef enum _e_access_type {
+  e_access_slm = 0,
+  e_access_mmio = 1
+} e_access_type;
+
+typedef enum _e_saturation { e_no_saturation = 0, e_saturate = 1 } e_saturation;
+
+#endif /* TPC_KERNEL_PATH */
 
 typedef enum _e_compare_value {
   e_compare_bit_0 = 0,
@@ -45,30 +97,10 @@ typedef enum _e_mov_flavor {
   e_standard_mov = 8
 } e_mov_flavor;
 
-typedef enum _e_saturation {
-  e_no_saturation = 0,
-  e_saturate = 1
-} e_saturation;
-
-typedef enum _e_negation {
-  e_no_negation = 0,
-  e_with_negation = 1
-} e_negation;
-
 typedef enum _e_aso_op {
   e_aso_increment = 0,
   e_aso_decrement = 1
 } e_aso_op;
-
-typedef enum _e_aso_access_type {
-  e_aso_prefetch = 0,
-  e_aso_commit = 1
-}  e_aso_access_type;
-
-typedef enum _e_return_bits {
-  e_return_lower_32 = 0,
-  e_return_upper_32 = 1
-} e_return_bits;
 
 typedef enum _e_count_type {
   e_count_zeros = 0,
@@ -79,21 +111,6 @@ typedef enum _e_mul_behavior {
   e_mul_default = 0,
   e_doube_and_round = 1
 } e_mul_behavior;
-
-typedef enum _e_group_source {
-  e_group_0 = 0,
-  e_group_1 = 1
-} e_group_source;
-
-typedef enum _e_element_stride {
-  e_every_second_element = 0,
-  e_every_forth_element = 1
-} e_element_stride;
-
-typedef enum _e_group_half {
-  e_lower_half_group = 0,
-  e_higher_half_group = 1
-} e_group_half;
 
 #ifdef __goya__
 typedef enum _e_lookup_data_type {
@@ -106,7 +123,7 @@ typedef enum _e_lookup_data_type {
   e_lookup_int8_2 = 6,
   e_lookup_int8_3 = 7
 } e_lookup_data_type;
-#elif defined(__gaudi__)
+#elif defined(__gaudi__) || defined(__gaudib__) || defined(__greco__) || defined(__gaudi2__) || defined(__doron1__) 
 typedef enum _e_lookup_data_type {
   e_lookup_fp32 = 0,
   e_lookup_bv16 = 1
@@ -152,7 +169,7 @@ typedef enum _e_function_id
     e_fp16_pow2             = 53,
     e_i8_tanh               = 54
 } e_function_id;
-#elif defined(__gaudi__)
+#elif defined(__gaudi__) || defined(__gaudib__) || defined(__greco__) || defined(__gaudi2__) || defined(__doron1__)
 typedef enum _e_function_id {
   e_fp32_tanh = 0,
   e_fp32_rsqrt = 1,
@@ -259,11 +276,6 @@ typedef enum _e_function_id {
 #error "Undefined processor"
 #endif
 
-typedef enum _e_abc_int_norm_sel {
-  e_normalize_ab = 0,
-  e_normalize_c = 1
-} e_abc_int_norm_sel;
-
 typedef enum _e_func_variant {
   e_func_variant_default = 0,
   e_func_variant_tanh = 1,
@@ -295,12 +307,7 @@ typedef enum _e_prefetch_level {
   e_prefetch_l3 = 3,
 } e_prefetch_level;
 
-typedef enum _e_access_type {
-  e_access_slm = 0,
-  e_access_mmio = 1
-} e_access_type;
-
-#if defined(__gaudi__)
+#if defined(__gaudi__) || defined(__gaudib__) || defined(__greco__) || defined(__gaudi2__) || defined(__doron1__)
 typedef enum _e_calc_fp_special {
   e_fp_recip = 0,
   e_fp_rsqrt = 1,
@@ -354,7 +361,35 @@ typedef enum _e_tnsr_dt_location {
 #define PP_mediate(...) printf_2(__VA_ARGS__)
 #define printf(...) PP_mediate(PP_ARG(__VA_ARGS__))
 
-#if defined(__gaudi__)
+#if defined(__gaudi2__) || defined(__doron1__)
+#define printf_2(x, y)                  \
+  _Generic((y),                         \
+    half           : printf_h(x,y),     \
+    _BFloat16      : printf_bf(x,y),    \
+    float          : printf_f(x, y),    \
+    int            : printf_i(x, y),    \
+    unsigned       : printf_ui(x, y),   \
+    short          : printf_s(x, y),    \
+    unsigned short : printf_us(x, y),   \
+    char           : printf_c(x, y),    \
+    unsigned char  : printf_uc(x, y),   \
+    _Float8_143    : printf_f8(x,y),    \
+    _Float8_152    : printf_h8(x,y),    \
+    default        : printf_st(x))
+#elif  defined(__gaudib__) || defined(__greco__)
+#define printf_2(x, y)                  \
+  _Generic((y),                         \
+    half           : printf_h(x,y),     \
+    _BFloat16      : printf_bf(x,y),    \
+    float          : printf_f(x, y),    \
+    int            : printf_i(x, y),    \
+    unsigned       : printf_ui(x, y),   \
+    short          : printf_s(x, y),    \
+    unsigned short : printf_us(x, y),   \
+    char           : printf_c(x, y),    \
+    unsigned char  : printf_uc(x, y),   \
+    default        : printf_st(x))
+#elif defined(__gaudi__)
 #define printf_2(x, y)                  \
   _Generic((y),                         \
     _BFloat16      : printf_bf(x,y),    \
@@ -383,8 +418,10 @@ typedef enum _e_tnsr_dt_location {
 
 //////////////////////////////////////////
 // Tensor/program query functions
-#if defined(__gaudi__) || defined(__goya__)
+#if defined(__gaudi__) || defined(__gaudib__) || defined(__goya__)
 #define c_tensors_base                      0x400U
+#elif defined(__greco__) || defined(__gaudi2__) || defined(__doron1__)
+#define c_tensors_base                      0x0U
 #endif
 
 #define c_tensor_addr_pad_offset            0x8U
@@ -394,177 +431,19 @@ typedef enum _e_tnsr_dt_location {
 #ifdef __goya__
 #define c_tensor_desc_size                  0x4cU
 #define c_tensor_size_stride_element_size   0xcU
-#define c_semaphore_addr                    0x808
-#elif defined(__gaudi__)
+#elif defined(__gaudi__) || defined(__gaudib__)
 #define c_tensor_desc_size                  0x38U
 #define c_tensor_size_stride_element_size   0x8U
-#define c_semaphore_addr                    0x908
+#elif defined(__greco__)
+#define c_tensor_desc_size 0x38U
+#define c_tensor_size_stride_element_size 0x8U
+#elif defined(__gaudi2__) || defined(__doron1__)
+#define c_tensor_desc_size 0x50U
+#define c_tensor_size_stride_element_size 0x8U
+#define c_tensor_addr_pref_stride_offset 0x038U
 #else
 #error "Undefined processor"
 #endif
-
-inline unsigned int get_dim_size_offset_internal(int a, unsigned int dim) {
-  unsigned int address = c_tensors_base +
-    a* c_tensor_desc_size +
-    c_tensor_size_stride_arr_offset +
-    dim * c_tensor_size_stride_element_size;
-  return address;
-}
-
-inline unsigned int get_tensor_pad_offset_internal(int a) {
-  unsigned int address = c_tensors_base +
-    a * c_tensor_desc_size +
-    c_tensor_addr_pad_offset;
-  return address;
-}
-
-inline unsigned int get_dim_size(int a, unsigned int dim) {
-  unsigned int address = get_dim_size_offset_internal(a, dim);
-  unsigned int result = 0;
-  result = s_u32_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline unsigned int get_dim_stride(int a, unsigned int dim) {
-  unsigned int address = get_dim_size_offset_internal(a, dim) + c_dim_stride_offset;
-  unsigned int result = 0;
-  result = s_u32_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline void set_dim_size(int a, unsigned int dim, unsigned int val) {
-  unsigned int address = get_dim_size_offset_internal(a, dim);
-  u32_st_l_s_s_b(address, val, e_access_mmio, 1, 0);
-}
-
-inline void set_dim_stride(int a, unsigned int dim, unsigned int val) {
-  unsigned int address = get_dim_size_offset_internal(a, dim) + c_dim_stride_offset;
-  u32_st_l_s_s_b(address, val, e_access_mmio, 1, 0);
-}
-
-inline unsigned int get_pad_value_uint(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  unsigned int result = 0;
-  result = s_u32_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline int get_pad_value_int(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  int result = 0;
-  result = s_i32_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline float get_pad_value_float(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  float result = 0;
-  result = s_f32_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-#if defined(__gaudi__)
-inline float get_pad_value_bf16(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  float result = 0;
-  result = s_bf16_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-#endif
-
-
-inline short get_pad_value_short(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  short result = 0;
-  result = s_i16_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline unsigned short get_pad_value_ushort(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  unsigned short result = 0;
-  result = s_u16_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline char get_pad_value_char(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  char result = 0;
-  result = s_i8_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline unsigned char get_pad_value_uchar(int a) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  unsigned char result = 0;
-  result = s_u8_ld_l_s_b(address, result, e_access_mmio, 1, 0);
-  return result;
-}
-
-inline void set_pad_value_int(int a, int val) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  i32_st_l_s_s_b(address, val, e_access_mmio, 1, 0);
-}
-
-inline void set_pad_value_uint(int a, unsigned int val) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  u32_st_l_s_s(address, val, e_access_mmio);
-}
-
-inline void set_pad_value_float(int a, float val) {
-  unsigned int address = get_tensor_pad_offset_internal(a);
-  f32_st_l_s_s_b(address, val, e_access_mmio, 1, 0);
-}
-
-#if defined(__gaudi__)
-inline void set_pad_value_bf16(int a, bf16 val) {
-	unsigned new_pad_value = (unsigned) val;
-	new_pad_value = new_pad_value & 0x0000FFFF;
-	new_pad_value = (new_pad_value << 16) | new_pad_value;
-	set_pad_value_uint(a, new_pad_value);
-}
-#endif
-
-inline void set_pad_value_short(int a, short val) {
-	unsigned new_pad_value = (unsigned) val;
-	new_pad_value = new_pad_value & 0x0000FFFF;
-	new_pad_value = (new_pad_value << 16) | new_pad_value;
-	set_pad_value_uint(a, new_pad_value);
-}
-
-inline void set_pad_value_char(int a, char val) {
-	unsigned new_pad_value = (unsigned) val;
-	new_pad_value = new_pad_value & 0x000000FF;
-	new_pad_value = (new_pad_value << 8) | new_pad_value;
-	new_pad_value = (new_pad_value << 16) | new_pad_value;
-	set_pad_value_uint(a, new_pad_value);
-}
-
-
-inline void set_pad_value_uchar(int a, unsigned char val) {
-	unsigned new_pad_value = (unsigned) val;
-	new_pad_value = new_pad_value & 0x000000FF;
-	new_pad_value = (new_pad_value << 8) | new_pad_value;
-	new_pad_value = (new_pad_value << 16) | new_pad_value;
-	set_pad_value_uint(a, new_pad_value);
-}
-
-inline void set_pad_value_ushort(int a, unsigned short val) {
-	unsigned new_pad_value = (unsigned) val;
-	new_pad_value = new_pad_value & 0x0000FFFF;
-	new_pad_value = (new_pad_value << 16) | new_pad_value;
-	set_pad_value_uint(a, new_pad_value);
-}
-
-inline int get_semaphore_value() {
-  int result = s_i32_ld_l_s(c_semaphore_addr, e_access_mmio);
-  return result;
-}
-
-inline void set_semaphore_value(int val) {
-  i32_st_l_s_s(c_semaphore_addr, val,  e_access_mmio);
-}
-
 
 // Implementation of special functions are guarded by separate block. If a user
 // defines 'TPC_SPECIAL_FUNCS_INCLUDED', he can use definitions of corresponding
@@ -574,37 +453,36 @@ inline void set_semaphore_value(int val) {
 
 ////////////////////////////////// COMMON FP32 MACROS ////////////////////////////////////
 
-#define false  0
-#define true   1
-
-#if defined(__gaudi__)
-    #define v_f32_lookup_c0_v   v_f32_lookup_1c_v
-    #define v_f32_lookup_c1c2_v   v_f32_lookup_2c_v
+#if defined(__gaudi__) || defined(__gaudib__) || defined(__greco__) || defined(__gaudi2__) || defined(__doron1__)
+    #define v_f32_lookup_c0(a, f, t, i, p, o)   v_f32_lookup_1c(a, f, t, i, p, o)
+    #define v_f32_lookup_c1c2(a, f, t, i, p, o)   v_f32_lookup_2c(a, f, t, i, p, o)
 #endif
 
 // LOOKUP_AND_MAC and CALC_REDUCED_VALUE are defined as macros due to their use
 // of FUNC_ID and COEFF_TAB_SHIFT - constant integer values that needs to be
 // known during compilation.
 // LOOKUP_AND_MAC VPU ops = 4
-#define LOOKUP_AND_MAC(INTERVALS, VALUE, RESULT)                                            \
-{                                                                                           \
-    float64 C0 = v_f32_lookup_c0_v(INTERVALS, e_lookup_fp32, FUNC_ID);                      \
-    float64_pair_t C1C2;                                                                    \
-    C1C2 = v_f32_lookup_c1c2_v(INTERVALS, e_lookup_fp32, FUNC_ID);                          \
-                                                                                            \
-    RESULT = C1C2.v1;                                                                       \
-    RESULT = v_f32_mac_v_v(C1C2.v2, VALUE, RESULT, false);                                  \
-    C0 = v_f32_mac_v_v(RESULT, VALUE, C0, false);                                           \
-    RESULT = C0;                                                                            \
-}
+
+#define LOOKUP_AND_MAC(INTERVALS, VALUE, RESULT)                               \
+  {                                                                            \
+    float64 C0 = v_f32_lookup_c0(INTERVALS, FUNC_ID, SW_BV32, 0, 1, 0);        \
+    float64_pair_t C1C2;                                                       \
+    C1C2 = v_f32_lookup_c1c2(INTERVALS, FUNC_ID, SW_BV32,                      \
+                             (float64_pair_t){0}, 1, 0);                       \
+                                                                               \
+    RESULT = C1C2.v1;                                                          \
+    RESULT = v_f32_mac_b(C1C2.v2, VALUE, RESULT, (false) << 1, 1, 0);          \
+    C0 = v_f32_mac_b(RESULT, VALUE, C0, (false) << 1, 1, 0);                   \
+    RESULT = C0;                                                               \
+  }
 
 // CALC_REDUCED_VALUE VPU ops = LOOKUP_AND_MAC VPU ops + 2 = 6
 #define CALC_REDUCED_VALUE(INPUT_VAL, FUNC_VARIANT, RESULT)                                 \
 {                                                                                           \
     uint64_float64_pair_t all_coeffs_tab;                                                   \
-    all_coeffs_tab = v_f32_get_lut_entry_and_interval_start_v(INPUT_VAL,                    \
-                                                              COEFF_TAB_SHIFT,              \
-                                                              FUNC_VARIANT);                \
+    all_coeffs_tab = v_f32_get_lut_entry_and_interval_start_b(INPUT_VAL, \
+                                                              COEFF_TAB_SHIFT, (\
+                                                              FUNC_VARIANT) << 13, (uint64_float64_pair_t){0}, 1, 0);                \
     uint64 intervals = all_coeffs_tab.v1;                                                   \
     float64 value = INPUT_VAL - all_coeffs_tab.v2;                                          \
     LOOKUP_AND_MAC(intervals, value, RESULT)                                                \
@@ -633,41 +511,39 @@ float64 v_exp_fast_f32(float64 input)
     const float log2_e =  1.44269502;
 
     float64 result = 0.5;
-    result = v_f32_mac_v_s(input, log2_e, result, false);
+    result = v_f32_mac_b(input, log2_e, result, (false) << 1, 1, 0);
 
-    int64 floor = v_convert_f32_to_i32_v(result, e_round_half_ne);
-    result = v_convert_i32_to_f32_v(floor, e_round_half_ne);
+    int64 floor = v_convert_f32_to_i32_b(result, SW_RHNE, 0, 1, 0);
+    result = v_convert_i32_to_f32_b(floor, SW_RHNE, 0, 1, 0);
 
     float64 x_reduced = input;
-    x_reduced = v_f32_mac_v_v(result, ln_2_1, x_reduced, true);
-    x_reduced = v_f32_mac_v_v(result, ln_2_2, x_reduced, true);
+    x_reduced = v_f32_mac_b(result, ln_2_1, x_reduced, (true) << 1, 1, 0);
+    x_reduced = v_f32_mac_b(result, ln_2_2, x_reduced, (true) << 1, 1, 0);
     x_reduced *= log2_e;
 
-    bool256 x_red_geq_0 = bv_f32_cmp_geq_v_s(x_reduced, 0.0f);
+    bool256 x_red_geq_0 = from_bool64(v_f32_cmp_geq_b(x_reduced, 0.0f, 0, to_bool64((bool256){0}), 1, 0));
     int64 exponent = 0;
-    exponent = v_f32_extract_exp_v_vb(x_reduced, exponent, false, x_red_geq_0, 0);
-    exponent = v_i32_min_v_s_vb(-exponent, 24, exponent, x_red_geq_0, 0);
+    exponent = v_f32_extract_exp_vb(x_reduced, false, exponent, to_bool64(x_red_geq_0), 0);
+    exponent = v_i32_min_vb(-exponent, 24, 0, exponent, to_bool64(x_red_geq_0), 0);
 
     int64 pos_significand = 0;
-    pos_significand = v_i32_and_v_s_vb(*((int64*)&x_reduced), SIGNIFICAND_MASK,
-          pos_significand, x_red_geq_0, 0);
-    pos_significand = v_i32_or_v_s_vb(pos_significand, 1 << 23, pos_significand, x_red_geq_0, 0);
-    pos_significand = v_i32_shr_v_v_vb(pos_significand, exponent, pos_significand, x_red_geq_0, 0);
-    pos_significand = v_i32_or_v_s_vb(pos_significand, UNIT_VAL, pos_significand, x_red_geq_0, 0);
+    pos_significand = v_i32_and_vb(*((int64*)&x_reduced), SIGNIFICAND_MASK, 0, pos_significand, to_bool64(x_red_geq_0), 0);
+    pos_significand = v_i32_or_vb(pos_significand, 1 << 23, 0, pos_significand, to_bool64(x_red_geq_0), 0);
+    pos_significand = v_i32_shr_vb(pos_significand, exponent, 0, pos_significand, to_bool64(x_red_geq_0), 0);
+    pos_significand = v_i32_or_vb(pos_significand, UNIT_VAL, 0, pos_significand, to_bool64(x_red_geq_0), 0);
     result = *((float64*)&pos_significand);
 
-    result = v_f32_add_v_s_vb(x_reduced, 2.0f, result, x_red_geq_0, 1);
+    result = v_f32_add_vb(x_reduced, 2.0f, 0, result, to_bool64(x_red_geq_0), 1);
     int64 neg_significand = 0;
-    neg_significand = v_i32_and_v_s_vb(*((int64*)&result), SIGNIFICAND_MASK, neg_significand,
-                                             x_red_geq_0, 1);
+    neg_significand = v_i32_and_vb(*((int64*)&result), SIGNIFICAND_MASK, 0, neg_significand, to_bool64(x_red_geq_0), 1);
     uint64 neg_add = 0;
-    neg_add = v_i32_u32_sel_eq_v_s_v_v_vb(neg_significand, 0, 0, 1, neg_add, x_red_geq_0, 1);
+    neg_add = v_u32_sel_eq_i32_vb(neg_significand, 0, 0, 1, 0, neg_add, to_bool64(x_red_geq_0), 1);
 
     CALC_REDUCED_VALUE(result, e_func_variant_default, result)
 
-    exponent = v_f32_extract_exp_v(result, true);
+    exponent = v_f32_extract_exp_b(result, true, 0, 1, 0);
     exponent += floor - neg_add;
-    result = v_f32_form_fp_num_i8_v_v_v((char256) exponent, result, result, SW_EXP_IS_NUM);
+    result = v_f32_form_fp_num_ie_b((char256) exponent, result, result, SW_EXP_IS_NUM, 0, 1, 0);
 
     return result;
 #undef COEFF_TAB_SHIFT
@@ -686,9 +562,9 @@ float64 v_exp_f32(float64 input)
     const int64 exp_upper = EXP_UPPER;
     const int64 plus_inf  = PLUS_INF_FP32;
 
-    result = v_f32_f32_sel_leq_v_v_v_v(input, *((float64*)&exp_lower), 0.0f, result);
-    result = v_f32_f32_sel_geq_v_v_v_v(input, *((float64*)&exp_upper), *((float64*)&plus_inf), result);
-    result = v_u32_f32_sel_grt_v_v_v_v(*((uint64*)&input) & NAN_FP32, PLUS_INF_FP32, input, result);
+    result = v_f32_sel_leq_f32_b(input, *((float64*)&exp_lower), 0.0f, result, 0, 0, 1, 0);
+    result = v_f32_sel_geq_f32_b(input, *((float64*)&exp_upper), *((float64*)&plus_inf), result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_u32_b(*((uint64*)&input) & NAN_FP32, PLUS_INF_FP32, input, result, 0, 0, 1, 0);
 // ====================================
     return result;
 }
@@ -701,14 +577,14 @@ float64 v_reciprocal_fast_f32(float64 input)
     const int FUNC_ID = e_fp32_rcp;
 
     const char zero_exp = 0;
-    float64 result = v_f32_form_fp_num_i8_s_v_v(zero_exp, input, input, SW_ADD_BIAS | SW_FORCE_SIGN0 | SW_EXP_IS_NUM);
+    float64 result = v_f32_form_fp_num_ie_b(zero_exp, input, input, SW_ADD_BIAS | SW_FORCE_SIGN0 | SW_EXP_IS_NUM, 0, 1, 0);
     CALC_REDUCED_VALUE(result, e_func_variant_default, result)
 
     int64 res_exp = (*((int64*)&result) & EXPONENT_MASK) - (*((int64*)&input) & EXPONENT_MASK);
-    result = v_f32_form_fp_num_v_v_v(*((float64*)&res_exp), input, result, SW_ADD_BIAS);
+    result = v_f32_form_fp_num_b(*((float64*)&res_exp), input, result, SW_ADD_BIAS, 0, 1, 0);
 
-    float64 signed_zero = v_f32_f32_sel_less_v_v_v_v(input, 0.0f, -0.0f, 0.0f);
-    result = v_i32_f32_sel_leq_v_v_v_v(res_exp, M_UNIT_EXP, signed_zero, result);
+    float64 signed_zero = v_f32_sel_less_f32_b(input, 0.0f, -0.0f, 0.0f, 0, 0, 1, 0);
+    result = v_f32_sel_leq_i32_b(res_exp, M_UNIT_EXP, signed_zero, result, 0, 0, 1, 0);
 
     return result;
 #undef COEFF_TAB_SHIFT
@@ -720,8 +596,8 @@ float64 v_reciprocal_f32(float64 input)
 
 // ====================================
 //  Processing special values: denorm, +-0. +-inf, nan
-    float64 abs_x = v_f32_abs_v(input);
-    float64 abs_result = v_f32_abs_v(result);
+    float64 abs_x = v_f32_abs_b(input, 0, 0, 1, 0);
+    float64 abs_result = v_f32_abs_b(result, 0, 0, 1, 0);
     const uint64 flt_min = FLT_MIN;
     const float64 flt_min_fp32 = *((float64*)&flt_min);
     const uint64 flt_max = FLT_MAX;
@@ -731,11 +607,11 @@ float64 v_reciprocal_f32(float64 input)
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    abs_result = v_f32_f32_sel_less_v_v_v_v(abs_x, flt_min_fp32, plus_inf_fp32, abs_result);
-    abs_result = v_f32_f32_sel_grt_v_v_v_v(abs_x, flt_max_fp32, 0.0f, abs_result);
+    abs_result = v_f32_sel_less_f32_b(abs_x, flt_min_fp32, plus_inf_fp32, abs_result, 0, 0, 1, 0);
+    abs_result = v_f32_sel_grt_f32_b(abs_x, flt_max_fp32, 0.0f, abs_result, 0, 0, 1, 0);
 
-    abs_result = v_u32_f32_sel_grt_v_s_v_v(*((uint64*)&abs_x), PLUS_INF_FP32, nan_fp32, abs_result);
-    result = v_f32_form_fp_num_v_v_v(abs_result, input, abs_result, 0x0);
+    abs_result = v_f32_sel_grt_u32_b(*((uint64*)&abs_x), PLUS_INF_FP32, nan_fp32, abs_result, 0, 0, 1, 0);
+    result = v_f32_form_fp_num_b(abs_result, input, abs_result, 0x0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -745,10 +621,10 @@ float64 v_reciprocal_f32(float64 input)
 // BASE_SQRT_FUNC VPU Ops = CALC_REDUCED_VALUE + 3 = 6+3=9
 #define BASE_SQRT_FUNC(INPUT_VAL, EXPONENT, RESULT)                                             \
 {                                                                                               \
-    EXPONENT = v_f32_extract_exp_v(INPUT_VAL, false);                                           \
-    RESULT = v_f32_form_fp_num_i8_v_v_v((char256) (EXPONENT&1), INPUT_VAL, INPUT_VAL, SW_EXP_IS_NUM|SW_ADD_BIAS);    \
+    EXPONENT = v_f32_extract_exp_b(INPUT_VAL, false, 0, 1, 0);                                           \
+    RESULT = v_f32_form_fp_num_ie_b((char256) (EXPONENT&1), INPUT_VAL, INPUT_VAL, SW_EXP_IS_NUM|SW_ADD_BIAS, 0, 1, 0);    \
     CALC_REDUCED_VALUE(RESULT, e_func_variant_sqrt_rsqrt, RESULT)                               \
-    EXPONENT -= v_i32_i32_sel_less_v_v_v_v(EXPONENT, 0, EXPONENT&1, 0);                         \
+    EXPONENT -= v_i32_sel_less_i32_b(EXPONENT, 0, EXPONENT&1, 0, 0, 0, 1, 0);                         \
 }
 
 
@@ -764,7 +640,7 @@ float64 v_sqrt_fast_f32(float64 input)
 
     exponent = *((int64*)&result) + ((exponent >> 1) << 23);
     result = *((float64*)&exponent);
-    result = v_f32_f32_sel_eq_v_v_v_v(input, 0.0f, 0.0f, result);
+    result = v_f32_sel_eq_f32_b(input, 0.0f, 0.0f, result, 0, 0, 1, 0);
     return result;
 #undef COEFF_TAB_SHIFT
 }
@@ -780,9 +656,9 @@ float64 v_sqrt_f32(float64 input)
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    result = v_u32_f32_sel_eq_v_s_v_v(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result);
-    result = v_u32_f32_sel_grt_v_s_v_v(*((uint64*)&input), PLUS_INF_FP32, nan_fp32, result);
-    result = v_f32_f32_sel_eq_v_v_v_v(input, -0.0f, -0.0f, result);
+    result = v_f32_sel_eq_u32_b(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_u32_b(*((uint64*)&input), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_f32_b(input, -0.0f, -0.0f, result, 0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -818,11 +694,11 @@ float64 v_rsqrt_f32(float64 input)
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    result = v_f32_f32_sel_eq_v_s_v_v(input, 0.0f, plus_inf_fp32, result);
-    //result = v_f32_f32_sel_less_v_s_v_v(input, 0.0f, nan_fp32, result);
-    result = v_u32_f32_sel_eq_v_s_v_v(*((uint64*)&input), PLUS_INF_FP32, 0.0f, result);
-    result = v_u32_f32_sel_grt_v_s_v_v(*((uint64*)&input), PLUS_INF_FP32, nan_fp32, result);
-    result = v_f32_f32_sel_eq_v_v_v_v(input, -0.0f, minus_inf_fp32, result);
+    result = v_f32_sel_eq_f32_b(input, 0.0f, plus_inf_fp32, result, 0, 0, 1, 0);
+    //result = v_f32_sel_less_f32_b(input, 0.0f, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_u32_b(*((uint64*)&input), PLUS_INF_FP32, 0.0f, result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_u32_b(*((uint64*)&input), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_f32_b(input, -0.0f, minus_inf_fp32, result, 0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -834,27 +710,26 @@ float64 v_rsqrt_f32(float64 input)
 float64 log_f32(float64 input)
 {//  log32_Gaudi
     const float ln_2 = 0.69314718056;      // 0x3f317218
-    int64 exponent = v_f32_extract_exp_v(input, false);
-    float64 fl_exponent = v_convert_i32_to_f32_v(exponent, e_round_half_ne) ;
+    int64 exponent = v_f32_extract_exp_b(input, false, 0, 1, 0);
+    float64 fl_exponent = v_convert_i32_to_f32_b(exponent, SW_RHNE, 0, 1, 0) ;
     const char zero_exp = 0;
-    float64 result = v_f32_form_fp_num_i8_s_v_v(zero_exp, input, input, SW_EXP_IS_NUM|SW_ADD_BIAS);
-    bool256 zero_exp_pred = bv_i32_cmp_eq_v_s(exponent, 0);
+    float64 result = v_f32_form_fp_num_ie_b(zero_exp, input, input, SW_EXP_IS_NUM|SW_ADD_BIAS, 0, 1, 0);
+    bool256 zero_exp_pred = from_bool64(v_i32_cmp_eq_b(exponent, 0, 0, to_bool64((bool256){0}), 1, 0));
     float64 tmp_result = result;
 
     const int COEFF_TAB_SHIFT = 16;             // 23 - (m = 7)
     const int FUNC_ID = e_fp32_log2;
 
     uint64_float64_pair_t all_coeffs_tab;
-    all_coeffs_tab = v_f32_get_lut_entry_and_interval_start_v(result, COEFF_TAB_SHIFT,
-                                                              e_func_variant_default);
+    all_coeffs_tab = v_f32_get_lut_entry_and_interval_start_b(result, COEFF_TAB_SHIFT, (e_func_variant_default) << 13, (uint64_float64_pair_t){0}, 1, 0);
 
     uint64 intervals = all_coeffs_tab.v1;
-    intervals = v_u32_add_v_s_vb(intervals, 128, intervals, e_no_saturation, zero_exp_pred, 1);
+    intervals = v_u32_add_vb(intervals, 128, 0, intervals, to_bool64(zero_exp_pred), 1);
     float64 value = result - all_coeffs_tab.v2;
     LOOKUP_AND_MAC(intervals, value, result)
 
     float64 res_minus_one = tmp_result - 1.0f;
-    result = v_f32_mul_v_v_vb(res_minus_one, result, result, zero_exp_pred, 0);
+    result = v_f32_mul_vb(res_minus_one, result, 0, result, to_bool64(zero_exp_pred), 0);
 
     result += fl_exponent;
     result *= ln_2;
@@ -868,10 +743,10 @@ float64 log_f32(float64 input)
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    result = v_f32_f32_sel_less_v_s_v_v(input, 0.0f, nan_fp32, result);
-    result = v_f32_f32_sel_eq_v_s_v_v(input, 0.0f, minus_inf_fp32, result);
-    result = v_u32_f32_sel_eq_v_s_v_v(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result);
-    result = v_i32_f32_sel_grt_v_s_v_v(*((int64*)&input), PLUS_INF_FP32, nan_fp32, result);
+    result = v_f32_sel_less_f32_b(input, 0.0f, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_f32_b(input, 0.0f, minus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_u32_b(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_i32_b(*((int64*)&input), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -884,7 +759,7 @@ float64 v_log_fast_f32(float64 input)
     const float log2_e_m_1 = 0.44269504088896340735992; // log2(e) - 1.0
     const float ln_2 = 0.69314718056;                   // ln(2)        (0x3f317218)
     const float one_sqrt_2 = 0.70710677;                // 1/sqrt(2)    (0x3f3504f3)
-    const int poly_tab_size = 9;
+#define poly_tab_size 9
     const float coeffs[poly_tab_size] = {
         7.0376836292E-2,
         -1.1514610310E-1,
@@ -896,22 +771,22 @@ float64 v_log_fast_f32(float64 input)
         -2.4999993993E-1,
         3.3333331174E-1};
 
-    int64 exponent = v_f32_extract_exp_v(input, false) + 1;
+    int64 exponent = v_f32_extract_exp_b(input, false, 0, 1, 0) + 1;
     const char exp_126 = 126;
-    float64 fraction = v_f32_form_fp_num_i8_s_v_v(exp_126, input, input, SW_EXP_IS_NUM);
-    float64 fl_exponent = v_convert_i32_to_f32_v(exponent, e_round_half_ne) ;
+    float64 fraction = v_f32_form_fp_num_ie_b(exp_126, input, input, SW_EXP_IS_NUM, 0, 1, 0);
+    float64 fl_exponent = v_convert_i32_to_f32_b(exponent, SW_RHNE, 0, 1, 0) ;
 
     float64 diff = fraction - one_sqrt_2;
-    int64 diff_sign = v_i32_shr_v_s((*(int64 *) &diff), 31);
+    int64 diff_sign = v_i32_shr_b((*(int64 *) &diff), 31, 0, 0, 1, 0);
     exponent -= diff_sign;
-    fl_exponent = v_convert_i32_to_f32_v(exponent, e_round_half_ne) ;
-    float64 fl_diff_sign = v_convert_i32_to_f32_v(diff_sign, e_round_half_ne) ;
+    fl_exponent = v_convert_i32_to_f32_b(exponent, SW_RHNE, 0, 1, 0);
+    float64 fl_diff_sign = v_convert_i32_to_f32_b(diff_sign, SW_RHNE, 0, 1, 0);
     fraction += fl_diff_sign * fraction - 1.0f;
 
     float64 x_sqr = fraction * fraction;
     float64 poly = coeffs[0];
     for (int i = 1; i < poly_tab_size; i++)
-        poly = v_f32_mac_v_v(poly, fraction, coeffs[i], false);
+        poly = v_f32_mac_b(poly, fraction, coeffs[i], (false) << 1, 1, 0);
 
     float64 tailor = fraction * (x_sqr * poly);
     tailor -= 0.5 * x_sqr;
@@ -925,6 +800,7 @@ float64 v_log_fast_f32(float64 input)
     result *= ln_2;
 
     return result;
+#undef poly_tab_size
 }
 
 float64 v_log_f32(float64 input)
@@ -939,10 +815,10 @@ float64 v_log_f32(float64 input)
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    result = v_f32_f32_sel_less_v_s_v_v(input, 0.0f, nan_fp32, result);
-    result = v_f32_f32_sel_eq_v_s_v_v(input, 0.0f, minus_inf_fp32, result);
-    result = v_u32_f32_sel_eq_v_s_v_v(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result);
-    result = v_i32_f32_sel_grt_v_s_v_v(*((int64*)&input), PLUS_INF_FP32, nan_fp32, result);
+    result = v_f32_sel_less_f32_b(input, 0.0f, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_f32_b(input, 0.0f, minus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_u32_b(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_i32_b(*((int64*)&input), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -958,52 +834,65 @@ float64 v_log_f32(float64 input)
 
 ////////////////////////////////// COMMON SIN_COS_F32 //////////////////////////////////////
 // 23 + 4 = 27
-#define SIN_COS_CALC(SIN_X_COND)                                                                    \
-    const float four_by_pi = 1.27323949;    /* 4/pi = 0x3fa2f983 */                                 \
-    const float pi4_1 = 7.85156250e-01;        /* pi/4 = 0x3f490000 */                              \
-    const float pi4_2 = 2.41875648498e-4;    /* 0x397da000 */                                       \
-    const float pi4_3 = 3.7748949774e-8;    /* 0x3fa2f983*/                                         \
-                                                                                                    \
-    float64 abs_x = v_f32_abs_v(input);                                                             \
-    float64 fl_pi4_shift = abs_x * four_by_pi;                                                      \
-    int64 pi4_shift = v_convert_f32_to_i32_v(fl_pi4_shift, e_round_down);                           \
-    pi4_shift += pi4_shift & 1;             /* Shift x in [-pi/4, +pi/4] */                         \
-    fl_pi4_shift = v_convert_i32_to_f32_v(pi4_shift, e_round_half_ne);                              \
-    float64 reduced_x = abs_x;                                                                      \
-    reduced_x = v_f32_mac_v_s(fl_pi4_shift, pi4_1, reduced_x, true);                                \
-    reduced_x = v_f32_mac_v_s(fl_pi4_shift, pi4_2, reduced_x, true);                                \
-    reduced_x = v_f32_mac_v_s(fl_pi4_shift, pi4_3, reduced_x, true);                                \
-    float64 abs_reduced_x = v_f32_abs_v(reduced_x);                                                 \
-                                                                                                    \
-    int64 pi2_shift = (pi4_shift >> 1) & 3;        /* remove shift by 2*pi: x in [0, 2*pi) */       \
-    float64 fl_sign_shift = v_convert_i32_to_f32_v(pi2_shift & 2, e_round_half_ne);                 \
-    sign_res -= fl_sign_shift * sign_res;        /* x>pi? -> shift by pi: cos(pi-x) = -cos(x) */    \
-    pi2_shift -= pi2_shift & 2;                    /* remove shift by pi -> pi2_shift in [0, 1] */  \
-                                                                                                    \
-    /*const int COEFF_TAB_SHIFT = 17;             23 - (m = 6) */                                   \
-    const int FUNC_ID = e_fp32_sin_cos;                                                             \
-                                                                                                    \
-    bool256 sin_x = bv_i32_cmp_eq_v_s(pi2_shift, SIN_X_COND);                                       \
-    uint64_float64_pair_t all_coeffs_tab;                                                           \
-    all_coeffs_tab = v_f32_get_lut_entry_and_interval_start_v(abs_reduced_x, 17 /*COEFF_TAB_SHIFT*/,\
-                                                              e_func_variant_sin_cos);              \
-    uint64 intervals = all_coeffs_tab.v1;                                                           \
-    intervals = v_u32_add_v_s_vb(intervals, 64, intervals, e_no_saturation, sin_x, 1);              \
-    float64 value = abs_reduced_x - all_coeffs_tab.v2;                                              \
-    float64 result;                                                                                 \
-    LOOKUP_AND_MAC(intervals, value, result)                                                        \
-                                                                                                    \
-    result = v_f32_mul_v_v_vb(abs_reduced_x, result, result, sin_x, 0);
+#define SIN_COS_CALC(SIN_X_COND)                                               \
+  const float four_by_pi = 1.27323949;  /* 4/pi = 0x3fa2f983 */                \
+  const float pi4_1 = 7.85156250e-01;   /* pi/4 = 0x3f490000 */                \
+  const float pi4_2 = 2.41875648498e-4; /* 0x397da000 */                       \
+  const float pi4_3 = 3.7748949774e-8;  /* 0x3fa2f983*/                        \
+                                                                               \
+  float64 abs_x = v_f32_abs_b(input, 0, 0, 1, 0);                              \
+  float64 fl_pi4_shift = abs_x * four_by_pi;                                   \
+  int64 pi4_shift =                                                            \
+      v_convert_f32_to_i32_b(fl_pi4_shift, SW_RD, 0, 1, 0);     \
+  pi4_shift += pi4_shift & 1; /* Shift x in [-pi/4, +pi/4] */                  \
+  fl_pi4_shift =                                                               \
+      v_convert_i32_to_f32_b(pi4_shift, SW_RHNE, 0, 1, 0);                     \
+  float64 reduced_x = abs_x;                                                   \
+  reduced_x = v_f32_mac_b(fl_pi4_shift, pi4_1, reduced_x, (true) << 1, 1, 0);  \
+  reduced_x = v_f32_mac_b(fl_pi4_shift, pi4_2, reduced_x, (true) << 1, 1, 0);  \
+  reduced_x = v_f32_mac_b(fl_pi4_shift, pi4_3, reduced_x, (true) << 1, 1, 0);  \
+  float64 abs_reduced_x = v_f32_abs_b(reduced_x, 0, 0, 1, 0);                  \
+                                                                               \
+  int64 pi2_shift =                                                            \
+      (pi4_shift >> 1) & 3; /* remove shift by 2*pi: x in [0, 2*pi) */         \
+  float64 fl_sign_shift =                                                      \
+      v_convert_i32_to_f32_b(pi2_shift & 2, SW_RHNE, 0, 1, 0);                 \
+  sign_res -= fl_sign_shift *                                                  \
+              sign_res;       /* x>pi? -> shift by pi: cos(pi-x) = -cos(x) */  \
+  pi2_shift -= pi2_shift & 2; /* remove shift by pi -> pi2_shift in [0, 1] */  \
+                                                                               \
+  const int COEFF_TAB_SHIFT = 17; /* 23 - (m = 6) */                           \
+  const int FUNC_ID = e_fp32_sin_cos;                                          \
+                                                                               \
+  bool256 sin_x = from_bool64(v_i32_cmp_eq_b(pi2_shift, SIN_X_COND, 0,         \
+                                             to_bool64((bool256){0}), 1, 0));  \
+  uint64_float64_pair_t all_coeffs_tab;                                        \
+  all_coeffs_tab = v_f32_get_lut_entry_and_interval_start_b(                   \
+      abs_reduced_x, COEFF_TAB_SHIFT, (e_func_variant_sin_cos) << 13,          \
+      (uint64_float64_pair_t){0}, 1, 0);                                       \
+  uint64 intervals = all_coeffs_tab.v1;                                        \
+  intervals = v_u32_add_vb(intervals, 64, 0, intervals,          \
+                           to_bool64(sin_x), 1);                               \
+  float64 value = abs_reduced_x - all_coeffs_tab.v2;                           \
+  float64 result;                                                              \
+  LOOKUP_AND_MAC(intervals, value, result)                                     \
+                                                                               \
+  result = v_f32_mul_vb(abs_reduced_x, result, 0, result, to_bool64(sin_x), 0);
 
-#define PROCESS_SIN_COS_SPECIAL_VALUES                                                              \
-    const uint64 nan_int = NAN_FP32;                                                                \
-    const float64 nan_fp32 = *((float64*)&nan_int);                                                 \
-    const float sin_max_arg = s_convert_i32_to_f32_s(0xffffff, e_round_half_ne),                    \
-                sin_accuracy_limit = s_convert_i32_to_f32_s(0x2000, e_round_half_ne);               \
-                                                                                                    \
-    result = v_f32_f32_sel_grt_v_s_v_v(abs_x, sin_accuracy_limit, 0.0f, result);                    \
-    result = v_f32_f32_sel_grt_v_s_v_v(abs_x, sin_max_arg, nan_fp32, result);                       \
-    result = v_u32_f32_sel_geq_v_s_v_v(*((uint64*)&abs_x), PLUS_INF_FP32, nan_fp32, result);
+#define PROCESS_SIN_COS_SPECIAL_VALUES                                         \
+  const uint64 nan_int = NAN_FP32;                                             \
+  const float64 nan_fp32 = *((float64 *)&nan_int);                             \
+  const float sin_max_arg = s_convert_i32_to_f32(                              \
+                  0xffffff, SW_RHNE, 0, 1, 0),                                 \
+              sin_accuracy_limit = s_convert_i32_to_f32(                       \
+                  0x2000, SW_RHNE, 0, 1, 0);                                   \
+                                                                               \
+  result = v_f32_sel_grt_f32_b(abs_x, sin_accuracy_limit, 0.0f, result, 0, 0,  \
+                               1, 0);                                          \
+  result =                                                                     \
+      v_f32_sel_grt_f32_b(abs_x, sin_max_arg, nan_fp32, result, 0, 0, 1, 0);   \
+  result = v_f32_sel_geq_u32_b(*((uint64 *)&abs_x), PLUS_INF_FP32, nan_fp32,   \
+                               result, 0, 0, 1, 0);
 
 //   Special sin/cos values:
 // x = -inf -> return nan
@@ -1020,15 +909,15 @@ float64 v_cos_fast_f32(float64 input)
     float64 sign_res = 1.0f;
     SIN_COS_CALC(1)
 
-    sign_res = v_f32_f32_sel_grt_v_s_v_v_vb(reduced_x, 0.0f, -sign_res, sign_res, sign_res, sin_x, 0);
-    result = v_f32_f32_sel_less_v_s_v_v(sign_res, 0.0f, -result, result);
+    sign_res = v_f32_sel_grt_f32_vb(reduced_x, 0.0f, -sign_res, sign_res, 0, sign_res, to_bool64(sin_x), 0);
+    result = v_f32_sel_less_f32_b(sign_res, 0.0f, -result, result, 0, 0, 1, 0);
 
     return result;
 }
 
 float64 v_cos_f32(float64 input)
 {
-    float64 abs_x = v_f32_abs_v(input);
+    float64 abs_x = v_f32_abs_b(input, 0, 0, 1, 0);
     float64 result = v_cos_fast_f32(input);
 // ====================================
 //  Processing special values: +-inf, nan, sin/cos limits
@@ -1042,17 +931,17 @@ float64 v_cos_f32(float64 input)
 //////////////////////////////////////// SIN_F32 /////////////////////////////////////////////////
 float64 v_sin_fast_f32(float64 input)
 {
-    float64 sign_res = v_f32_f32_sel_grt_v_s_v_v(input, 0.0f, 1.0f, -1.0f);
+    float64 sign_res = v_f32_sel_grt_f32_b(input, 0.0f, 1.0f, -1.0f, 0, 0, 1, 0);
     SIN_COS_CALC(0)
 
-    sign_res = v_f32_f32_sel_less_v_s_v_v_vb(reduced_x, 0.0f, -sign_res, sign_res, sign_res, sin_x, 0);
-    result = v_f32_f32_sel_less_v_s_v_v(sign_res, 0.0f, -result, result);
+    sign_res = v_f32_sel_less_f32_vb(reduced_x, 0.0f, -sign_res, sign_res, 0, sign_res, to_bool64(sin_x), 0);
+    result = v_f32_sel_less_f32_b(sign_res, 0.0f, -result, result, 0, 0, 1, 0);
     return result;
 }
 
 float64 v_sin_f32(float64 input)
 {
-    float64 abs_x = v_f32_abs_v(input);
+    float64 abs_x = v_f32_abs_b(input, 0, 0, 1, 0);
     float64 result = v_sin_fast_f32(input);
 // ====================================
 //  Processing special values: +-inf, nan, sin/cos limits
@@ -1084,25 +973,24 @@ float64 v_div_f32(float64 input_x, float64 input_y)
     const uint64 plus_inf = PLUS_INF_FP32;
     const float64 plus_inf_fp32 = *((float64*)&plus_inf);
 
-    float64 abs_x = v_f32_abs_v(input_x);                                                           // 15
-    float64 abs_y = v_f32_abs_v(input_y);                                                           // 16
+    float64 abs_x = v_f32_abs_b(input_x, 0, 0, 1, 0);                                                           // 15
+    float64 abs_y = v_f32_abs_b(input_y, 0, 0, 1, 0);                                                           // 16
 
 // x == nan?
-    result = v_f32_f32_sel_grt_v_v_v_v(abs_x, plus_inf_fp32, nan_fp32, result);                     // 17
+    result = v_f32_sel_grt_f32_b(abs_x, plus_inf_fp32, nan_fp32, result, 0, 0, 1, 0);                     // 17
 
 // sign_x ^ sign_y; (sign_x ^ sign_y) | plus_inf
     int64 sign_res = (((*((int64*)&input_x)) >> 31 ) ^ ((*((int64*)&input_y)) >> 31 )) << 31;       // 18, 19, 20, 21
     const float64 sign_res_fp32 = *((float64*)&sign_res);
 
 //x ==    +-inf?
-    float64 inf_x_y = v_f32_or_v_v(sign_res_fp32 ,plus_inf_fp32);                                   // 22
-    bool256 inf_x = bv_f32_cmp_eq_v_v(abs_x, plus_inf_fp32);                                        // 23
-    result = v_f32_f32_sel_eq_v_v_v_v_vb(abs_y, plus_inf_fp32, nan_fp32, inf_x_y, result, inf_x, 0);// 24
+    float64 inf_x_y = v_f32_or_b(sign_res_fp32 , plus_inf_fp32, 0, 0, 1, 0);                                   // 22
+    bool256 inf_x = from_bool64(v_f32_cmp_eq_b(abs_x, plus_inf_fp32, 0, to_bool64((bool256){0}), 1, 0));                                        // 23
+    result = v_f32_sel_eq_f32_vb(abs_y, plus_inf_fp32, nan_fp32, inf_x_y, 0, result, to_bool64(inf_x), 0);// 24
 
 //x == +-0?
-    bool256 zero_x = bv_f32_cmp_less_v_v(abs_x, flt_min_fp32);                                      // 25
-    result = v_f32_f32_sel_less_v_v_v_v_vb(abs_y, flt_min_fp32, nan_fp32, sign_res_fp32,
-                                                                                 result, zero_x, 0);// 26
+    bool256 zero_x = from_bool64(v_f32_cmp_less_b(abs_x, flt_min_fp32, 0, to_bool64((bool256){0}), 1, 0));                                      // 25
+    result = v_f32_sel_less_f32_vb(abs_y, flt_min_fp32, nan_fp32, sign_res_fp32, 0, result, to_bool64(zero_x), 0);// 26
 // ====================================
 
     return result;
@@ -1115,8 +1003,8 @@ float s_div_fast_f32(float x, float y, float rc)
     float q = x * rc;
 
     // Lines below should be called if x isn't +INF or -INF. For simlicity corresponding cheking is missed
-    x = s_f32_mac_s_s(y, q, x, e_with_negation);
-    q = s_f32_mac_s_s(x, rc, q, e_no_negation);
+    x = s_f32_mac(y, q, x, SW_NEG, 1, 0);
+    q = s_f32_mac(x, rc, q, SW_NO_NEG, 1, 0);
 
     return q;
 }
@@ -1128,26 +1016,26 @@ float64 v_tanh_fast_abs_in_f32(float64 input, float64 abs_x)
 #define COEFF_TAB_SHIFT   17 // 23 - (m = 6);
     const int FUNC_ID = e_fp32_tanh;
 
-    int64 exponent = v_f32_extract_exp_v(input, false);                                             // 1
-    bool256 neg_exp = bv_i32_cmp_less_v_s(exponent, 0);                                             // 2
+    int64 exponent = v_f32_extract_exp_b(input, false, 0, 1, 0);                                             // 1
+    bool256 neg_exp = from_bool64(v_i32_cmp_less_b(exponent, 0, 0, to_bool64((bool256){0}), 1, 0));                                             // 2
 
     float64 result;
     CALC_REDUCED_VALUE(abs_x, e_func_variant_tanh, result)                                          // 3, 4, 5
                                                                                                     // 6, 7, 8
-    result = v_f32_mul_v_v_vb(result, abs_x, result, neg_exp, 0);                                   // 9
+    result = v_f32_mul_vb(result, abs_x, 0, result, to_bool64(neg_exp), 0);                                   // 9
 
-    bool256 greq_8 = bv_f32_cmp_geq_v_s(abs_x, 8.0f);                                               // 10
-    result = v_f32_f32_sel_less_v_s_v_v_vb(abs_x, 9.0f, 0.999999881f, result, result, greq_8, 0);   // 11
-    result = v_f32_f32_sel_geq_v_s_v_v(abs_x, 9.0f, 1.0f, result);                                  // 12
+    bool256 greq_8 = from_bool64(v_f32_cmp_geq_b(abs_x, 8.0f, 0, to_bool64((bool256){0}), 1, 0));                                               // 10
+    result = v_f32_sel_less_f32_vb(abs_x, 9.0f, 0.999999881f, result, 0, result, to_bool64(greq_8), 0);   // 11
+    result = v_f32_sel_geq_f32_b(abs_x, 9.0f, 1.0f, result, 0, 0, 1, 0);                                  // 12
 
-    result = v_f32_form_fp_num_v_v_v(result, input, result, 0x0);                                   // 13
+    result = v_f32_form_fp_num_b(result, input, result, 0x0, 0, 1, 0);                                   // 13
     return result;
 #undef COEFF_TAB_SHIFT
 }
 
 float64 v_tanh_fast_f32(float64 input)
 {
-    float64 abs_x = v_f32_abs_v(input);                                                             // 1
+    float64 abs_x = v_f32_abs_b(input, 0, 0, 1, 0);                                                             // 1
     float64 result = v_tanh_fast_abs_in_f32(input, abs_x);                                            // 14
 
     return result;
@@ -1155,14 +1043,14 @@ float64 v_tanh_fast_f32(float64 input)
 
 float64 v_tanh_f32(float64 input)
 {
-    float64 abs_x = v_f32_abs_v(input);                                                             // 1
+    float64 abs_x = v_f32_abs_b(input, 0, 0, 1, 0);                                                             // 1
     float64 result = v_tanh_fast_abs_in_f32(input, abs_x);                                            // 15
 // ====================================
 //  Processing special values: nan
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    result = v_u32_f32_sel_grt_v_v_v_v(*((uint64*)&abs_x), PLUS_INF_FP32, nan_fp32, result);        // 16
+    result = v_f32_sel_grt_u32_b(*((uint64*)&abs_x), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);        // 16
 // ====================================
 
     return result;
@@ -1179,41 +1067,39 @@ float64 v_pow2_fast_f32(float64 input)
     const float log2_2 =  1.0f;
 
     float64 result = 0.5f;
-    result = v_f32_mac_v_s(input, log2_2, result, false);
+    result = v_f32_mac_b(input, log2_2, result, (false) << 1, 1, 0);
 
-    int64 floor = v_convert_f32_to_i32_v(result, e_round_down);
-    result = v_convert_i32_to_f32_v(floor, e_round_half_ne);
+    int64 floor = v_convert_f32_to_i32_b(result, SW_RD, 0, 1, 0);
+    result = v_convert_i32_to_f32_b(floor, SW_RHNE, 0, 1, 0);
 
     float64 x_reduced = input;
-    x_reduced = v_f32_mac_v_v(result, log2_2, x_reduced, true);
-    x_reduced = v_f32_mac_v_v(result, log2_1, x_reduced, true);
+    x_reduced = v_f32_mac_b(result, log2_2, x_reduced, (true) << 1, 1, 0);
+    x_reduced = v_f32_mac_b(result, log2_1, x_reduced, (true) << 1, 1, 0);
     x_reduced *= log2_2;
 
-    bool256 x_red_geq_0 = bv_f32_cmp_geq_v_s(x_reduced, 0.0f);
+    bool256 x_red_geq_0 = from_bool64(v_f32_cmp_geq_b(x_reduced, 0.0f, 0, to_bool64((bool256){0}), 1, 0));
     int64 exponent = 0;
-    exponent = v_f32_extract_exp_v_vb(x_reduced, exponent, false, x_red_geq_0, 0);
-    exponent = v_i32_min_v_s_vb(-exponent, 24, exponent, x_red_geq_0, 0);
+    exponent = v_f32_extract_exp_vb(x_reduced, false, exponent, to_bool64(x_red_geq_0), 0);
+    exponent = v_i32_min_vb(-exponent, 24, 0, exponent, to_bool64(x_red_geq_0), 0);
 
     int64 pos_significand = 0;
-    pos_significand = v_i32_and_v_s_vb(*((int64*)&x_reduced), SIGNIFICAND_MASK,
-          pos_significand, x_red_geq_0, 0);
-    pos_significand = v_i32_or_v_s_vb(pos_significand, 1 << 23, pos_significand, x_red_geq_0, 0);
-    pos_significand = v_i32_shr_v_v_vb(pos_significand, exponent, pos_significand, x_red_geq_0, 0);
-    pos_significand = v_i32_or_v_s_vb(pos_significand, UNIT_VAL, pos_significand, x_red_geq_0, 0);
+    pos_significand = v_i32_and_vb(*((int64*)&x_reduced), SIGNIFICAND_MASK, 0, pos_significand, to_bool64(x_red_geq_0), 0);
+    pos_significand = v_i32_or_vb(pos_significand, 1 << 23, 0, pos_significand, to_bool64(x_red_geq_0), 0);
+    pos_significand = v_i32_shr_vb(pos_significand, exponent, 0, pos_significand, to_bool64(x_red_geq_0), 0);
+    pos_significand = v_i32_or_vb(pos_significand, UNIT_VAL, 0, pos_significand, to_bool64(x_red_geq_0), 0);
     result = *((float64*)&pos_significand);
 
-    result = v_f32_add_v_s_vb(x_reduced, 2.0f, result, x_red_geq_0, 1);
+    result = v_f32_add_vb(x_reduced, 2.0f, 0, result, to_bool64(x_red_geq_0), 1);
     int64 neg_significand = 0;
-    neg_significand = v_i32_and_v_s_vb(*((int64*)&result), SIGNIFICAND_MASK, neg_significand,
-                                             x_red_geq_0, 1);
+    neg_significand = v_i32_and_vb(*((int64*)&result), SIGNIFICAND_MASK, 0, neg_significand, to_bool64(x_red_geq_0), 1);
     uint64 neg_add = 0;
-    neg_add = v_i32_u32_sel_eq_v_s_v_v_vb(neg_significand, 0, 0, 1, neg_add, x_red_geq_0, 1);
+    neg_add = v_u32_sel_eq_i32_vb(neg_significand, 0, 0, 1, 0, neg_add, to_bool64(x_red_geq_0), 1);
 
     CALC_REDUCED_VALUE(result, e_func_variant_default, result)
 
-    exponent = v_f32_extract_exp_v(result, true);
+    exponent = v_f32_extract_exp_b(result, true, 0, 1, 0);
     exponent += floor - neg_add;
-    result = v_f32_form_fp_num_i8_v_v_v((char256) exponent, result, result, SW_EXP_IS_NUM);         // 27
+    result = v_f32_form_fp_num_ie_b((char256) exponent, result, result, SW_EXP_IS_NUM, 0, 1, 0);         // 27
     return result;
 #undef COEFF_TAB_SHIFT
 }
@@ -1232,13 +1118,13 @@ float64 v_pow2_f32(float64 input)
     const float64 pow2_lower = -126.0f;
     const float64 pow2_upper = 128.0f;
 
-    result = v_f32_f32_sel_less_v_v_v_v(input, pow2_lower, 0.0f, result);
-    result = v_f32_f32_sel_geq_v_v_v_v(input, pow2_upper, plus_inf_fp32, result);
+    result = v_f32_sel_less_f32_b(input, pow2_lower, 0.0f, result, 0, 0, 1, 0);
+    result = v_f32_sel_geq_f32_b(input, pow2_upper, plus_inf_fp32, result, 0, 0, 1, 0);
 
-    result = v_f32_f32_sel_less_v_v_v_v(input, -flt_max_fp32, 0.0f, result);
-    result = v_f32_f32_sel_geq_v_v_v_v(input, flt_max_fp32, plus_inf_fp32, result);
+    result = v_f32_sel_less_f32_b(input, -flt_max_fp32, 0.0f, result, 0, 0, 1, 0);
+    result = v_f32_sel_geq_f32_b(input, flt_max_fp32, plus_inf_fp32, result, 0, 0, 1, 0);
 
-    result = v_u32_f32_sel_grt_v_v_v_v(*((uint64*)&input) & NAN_FP32, PLUS_INF_FP32, input, result);
+    result = v_f32_sel_grt_u32_b(*((uint64*)&input) & NAN_FP32, PLUS_INF_FP32, input, result, 0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -1250,7 +1136,7 @@ float64 v_log2_fast_f32(float64 input)
     //  log32_cephes: log(1+x) = x - 0.5 x**2 + x**3 P(x)
     const float log2_e_m_1 = 0.44269504088896340735992; // log2(e) - 1.0
     const float one_sqrt_2 = 0.70710677;         // 1/sqrt(2)    (0x3f3504f3)
-    const int poly_tab_size = 9;
+#define poly_tab_size 9
     const float coeffs[poly_tab_size] = {
         7.0376836292E-2,
         -1.1514610310E-1,
@@ -1262,22 +1148,22 @@ float64 v_log2_fast_f32(float64 input)
         -2.4999993993E-1,
         3.3333331174E-1};
 
-    int64 exponent = v_f32_extract_exp_v(input, false) + 1;
+    int64 exponent = v_f32_extract_exp_b(input, false, 0, 1, 0) + 1;
     const char exp_126 = 126;
-    float64 fraction = v_f32_form_fp_num_i8_s_v_v(exp_126, input, input, SW_EXP_IS_NUM);            // 2
-    float64 fl_exponent = v_convert_i32_to_f32_v(exponent, e_round_half_ne) ;                       // 3
+    float64 fraction = v_f32_form_fp_num_ie_b(exp_126, input, input, SW_EXP_IS_NUM, 0, 1, 0);            // 2
+    float64 fl_exponent = v_convert_i32_to_f32_b(exponent, SW_RHNE, 0, 1, 0) ;                       // 3
 
     float64 diff = fraction - one_sqrt_2;
-    int64 diff_sign = v_i32_shr_v_s((*(int64 *) &diff), 31);
+    int64 diff_sign = v_i32_shr_b((*(int64 *) &diff), 31, 0, 0, 1, 0);
     exponent -= diff_sign;
-    fl_exponent = v_convert_i32_to_f32_v(exponent, e_round_half_ne) ;
-    float64 fl_diff_sign = v_convert_i32_to_f32_v(diff_sign, e_round_half_ne) ;
+    fl_exponent = v_convert_i32_to_f32_b(exponent, SW_RHNE, 0, 1, 0) ;
+    float64 fl_diff_sign = v_convert_i32_to_f32_b(diff_sign, SW_RHNE, 0, 1, 0) ;
     fraction += fl_diff_sign * fraction - 1.0f;
 
     float64 x_sqr = fraction * fraction;
     float64 poly = coeffs[0];
     for (int i = 1; i < poly_tab_size; i++)
-        poly = v_f32_mac_v_v(poly, fraction, coeffs[i], false);
+        poly = v_f32_mac_b(poly, fraction, coeffs[i], (false) << 1, 1, 0);
 
     float64 tailor = fraction * (x_sqr * poly);
     tailor -= 0.5 * x_sqr;
@@ -1290,6 +1176,7 @@ float64 v_log2_fast_f32(float64 input)
     result += fl_exponent;
 
     return result;
+#undef poly_tab_size
 }
 
 float64 v_log2_f32(float64 input)
@@ -1304,10 +1191,10 @@ float64 v_log2_f32(float64 input)
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    result = v_f32_f32_sel_less_v_s_v_v(input, 0.0f, nan_fp32, result);
-    result = v_f32_f32_sel_eq_v_s_v_v(input, 0.0f, minus_inf_fp32, result);
-    result = v_u32_f32_sel_eq_v_s_v_v(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result);
-    result = v_i32_f32_sel_grt_v_s_v_v(*((int64*)&input), PLUS_INF_FP32, nan_fp32, result);
+    result = v_f32_sel_less_f32_b(input, 0.0f, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_f32_b(input, 0.0f, minus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_u32_b(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_i32_b(*((int64*)&input), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -1316,50 +1203,50 @@ float64 v_log2_f32(float64 input)
 //////////////////////////////////////// POW_F32 //////////////////////////////////////////////////
 float64 v_pow_fast_f32(float64 base, float64 exp)
 {
-    int64 exp_floor = v_convert_f32_to_i32_v(exp, e_round_down);
-    float64 exp_floor_fl = v_convert_i32_to_f32_v(exp_floor, e_round_half_ne);
+    int64 exp_floor = v_convert_f32_to_i32_b(exp, SW_RD, 0, 1, 0);
+    float64 exp_floor_fl = v_convert_i32_to_f32_b(exp_floor, SW_RHNE, 0, 1, 0);
 
     // predicate mask of all exp elements that are whole numbers
-    bool256 p0 = bv_f32_cmp_eq_v_v(exp, exp_floor_fl);
+    bool256 p0 = from_bool64(v_f32_cmp_eq_b(exp, exp_floor_fl, 0, to_bool64((bool256){0}), 1, 0));
     // apply abs on all exp elements that are whole numbers
-    float64 base_b = v_f32_form_fp_num_v_v_v_vb(base, base, base, base, SW_FORCE_SIGN0, p0, 0);
+    float64 base_b = v_f32_form_fp_num_vb(base, base, base, SW_FORCE_SIGN0, base, to_bool64(p0), 0);
 
     float64 base_log2 = v_log2_fast_f32(base_b);
-    float64 power = v_f32_mul_v_v(exp, base_log2);
+    float64 power = v_f32_mul_b(exp, base_log2, 0, 0, 1, 0);
     float64 result = v_pow2_fast_f32(power);
 
     // predicate mask of all exp elements that are whole odd numbers
     bool256 p1 = 0;
-    p1 = bv_i32_cmp_eq_v_s_vb((exp_floor & 0x00000001), 0x00000001, p1, p0, 0);
+    p1 = from_bool64(v_i32_cmp_eq_vb((exp_floor & 0x00000001), 0x00000001, 0, to_bool64(p1), to_bool64(p0), 0));
     // return -result if base < 0 and exp is a whole odd number.
-    result = v_f32_f32_sel_less_v_s_v_v_vb(base, 0.0f, -result, result, result, p1, 0);
+    result = v_f32_sel_less_f32_vb(base, 0.0f, -result, result, 0, result, to_bool64(p1), 0);
 
     return result;
 }
 
 float64 v_pow_f32(float64 base, float64 exp)
 {
-    int64 exp_floor = v_convert_f32_to_i32_v(exp, e_round_down);
-    float64 exp_floor_fl = v_convert_i32_to_f32_v(exp_floor, e_round_half_ne);
+    int64 exp_floor = v_convert_f32_to_i32_b(exp, SW_RD, 0, 1, 0);
+    float64 exp_floor_fl = v_convert_i32_to_f32_b(exp_floor, SW_RHNE, 0, 1, 0);
 
     // predicate mask of all exp elements that are whole numbers
-    bool256 p0 = bv_f32_cmp_eq_v_v(exp, exp_floor_fl);
+    bool256 p0 = from_bool64(v_f32_cmp_eq_b(exp, exp_floor_fl, 0, to_bool64((bool256){0}), 1, 0));
     // apply abs on all exp elements that are whole numbers
-    float64 base_b = v_f32_abs_v_vb(base, base, p0, 0);
+    float64 base_b = v_f32_abs_vb(base, 0, base, to_bool64(p0), 0);
 
     float64 base_log2 = v_log2_f32(base_b);
-    float64 power = v_f32_mul_v_v(exp, base_log2);
+    float64 power = v_f32_mul_b(exp, base_log2, 0, 0, 1, 0);
     float64 result = v_pow2_f32(power);
 
     // predicate mask of all exp elements that are whole odd numbers
     bool256 p1 = 0;
-    p1 = bv_i32_cmp_eq_v_s_vb((exp_floor & 0x00000001), 0x00000001, p1, p0, 0);
+    p1 = from_bool64(v_i32_cmp_eq_vb((exp_floor & 0x00000001), 0x00000001, 0, to_bool64(p1), to_bool64(p0), 0));
     // return -result if base < 0 and exp is a whole odd number.
-    result = v_f32_f32_sel_less_v_s_v_v_vb(base, 0.0f, -result, result, result, p1, 0);
+    result = v_f32_sel_less_f32_vb(base, 0.0f, -result, result, 0, result, to_bool64(p1), 0);
     // if exp = 0
-    result = v_f32_f32_sel_eq_v_v_v_v(exp, 0.0f, 1.0f, result);                                     // 63
+    result = v_f32_sel_eq_f32_b(exp, 0.0f, 1.0f, result, 0, 0, 1, 0);                                     // 63
     // if exp = 1
-    result = v_f32_f32_sel_eq_v_v_v_v(exp, 1.0f, base, result);                                     // 64
+    result = v_f32_sel_eq_f32_b(exp, 1.0f, base, result, 0, 0, 1, 0);                                     // 64
 
 
     const uint64 flt_max = FLT_MAX;
@@ -1367,25 +1254,25 @@ float64 v_pow_f32(float64 base, float64 exp)
     const uint64 plus_inf = PLUS_INF_FP32;
     const float64 plus_inf_fp32 = *((float64*)&plus_inf);
 
-    float64 abs_base = v_f32_abs_v(base);                                                           // 65
-    float64 abs_exp  = v_f32_abs_v(exp);                                                            // 66
+    float64 abs_base = v_f32_abs_b(base, 0, 0, 1, 0);                                                           // 65
+    float64 abs_exp  = v_f32_abs_b(exp, 0, 0, 1, 0);                                                            // 66
 
-    bool256 pred0 = bv_f32_cmp_leq_v_v(exp, -flt_max_fp32);
-    result = v_f32_f32_sel_grt_v_s_v_v_vb(abs_base, 1.0f, 0.0f, result, result, pred0, 0);
-    result = v_f32_f32_sel_less_v_s_v_v_vb(abs_base, 1.0f, plus_inf_fp32, result, result, pred0, 0);
+    bool256 pred0 = from_bool64(v_f32_cmp_leq_b(exp, -flt_max_fp32, 0, to_bool64((bool256){0}), 1, 0));
+    result = v_f32_sel_grt_f32_vb(abs_base, 1.0f, 0.0f, result, 0, result, to_bool64(pred0), 0);
+    result = v_f32_sel_less_f32_vb(abs_base, 1.0f, plus_inf_fp32, result, 0, result, to_bool64(pred0), 0);
 
-    bool256 pred1 = bv_f32_cmp_geq_v_v(exp, flt_max_fp32);
-    result = v_f32_f32_sel_grt_v_s_v_v_vb(abs_base, 1.0f, plus_inf_fp32, result, result, pred1, 0);
-    result = v_f32_f32_sel_less_v_s_v_v_vb(abs_base, 1.0f, 0.0f, result, result, pred1, 0);
+    bool256 pred1 = from_bool64(v_f32_cmp_geq_b(exp, flt_max_fp32, 0, to_bool64((bool256){0}), 1, 0));
+    result = v_f32_sel_grt_f32_vb(abs_base, 1.0f, plus_inf_fp32, result, 0, result, to_bool64(pred1), 0);
+    result = v_f32_sel_less_f32_vb(abs_base, 1.0f, 0.0f, result, 0, result, to_bool64(pred1), 0);
 
-    bool256 pred2 = bv_f32_cmp_less_v_v(base, -flt_max_fp32);
-    result = v_f32_f32_sel_grt_v_s_v_v_vb(exp, 0.0f, plus_inf_fp32, result, result, pred2, 0);
-    result = v_f32_f32_sel_less_v_s_v_v_vb(exp, 0.0f, 0.0f, result, result, pred2, 0);
+    bool256 pred2 = from_bool64(v_f32_cmp_less_b(base, -flt_max_fp32, 0, to_bool64((bool256){0}), 1, 0));
+    result = v_f32_sel_grt_f32_vb(exp, 0.0f, plus_inf_fp32, result, 0, result, to_bool64(pred2), 0);
+    result = v_f32_sel_less_f32_vb(exp, 0.0f, 0.0f, result, 0, result, to_bool64(pred2), 0);
 
-    bool256 pred3 = bv_f32_cmp_geq_v_v(base, flt_max_fp32);
-    pred3 = bv_f32_cmp_grt_v_s_vb(abs_exp, 1.0f, pred3, pred3, 0);
-    result = v_f32_f32_sel_grt_v_s_v_v_vb(exp, 0.0f, plus_inf_fp32, result, result, pred3, 0);
-    result = v_f32_f32_sel_less_v_s_v_v_vb(exp, 0.0f, 0.0f, result, result, pred3, 0);
+    bool256 pred3 = from_bool64(v_f32_cmp_geq_b(base, flt_max_fp32, 0, to_bool64((bool256){0}), 1, 0));
+    pred3 = from_bool64(v_f32_cmp_grt_vb(abs_exp, 1.0f, 0, to_bool64(pred3), to_bool64(pred3), 0));
+    result = v_f32_sel_grt_f32_vb(exp, 0.0f, plus_inf_fp32, result, 0, result, to_bool64(pred3), 0);
+    result = v_f32_sel_less_f32_vb(exp, 0.0f, 0.0f, result, 0, result, to_bool64(pred3), 0);
 
     return result;
 }
@@ -1412,23 +1299,23 @@ inline short128 v_recip_i16(short128 x, short expX)
     //     x = x >> 2;
     char cmp_pred = ((-expX) < 13 ); // if exp >=  13, we get overflow,
                                      // so need to avoid this situations
-    bRangeReduced = bv_i16_cmp_geq_v_s_b(x, fourFlex, bRangeReduced, cmp_pred, 0);
+    bRangeReduced = from_bool128(v_i16_cmp_geq_b(x, fourFlex, 0, to_bool128(bRangeReduced), cmp_pred, 0));
 
-    x = v_i16_ash_v_s_vb(x, -2, x, 1, bRangeReduced, 0);
-    x = v_i16_min_v_s_vb(x, fourFlexMinusOne, x, bRangeReduced, 0);
+    x = v_i16_ash_vb(x, -2, 1 << 1, x, to_bool128(bRangeReduced), 0);
+    x = v_i16_min_vb(x, fourFlexMinusOne, 0, x, to_bool128(bRangeReduced), 0);
 
-    x00_shr = v_i16_shr_v_s(x, intervalShift);
-    x00_and = v_i16_and_v_s(x, intervalStartMask);
+    x00_shr = v_i16_shr_b(x, intervalShift, 0, 0, 1, 0);
+    x00_and = v_i16_and_b(x, intervalStartMask, 0, 0, 1, 0);
 
-    y00 = v_i16_lookup_c1c2_v(*(ushort128 *)&x00_shr, y00, e_lookup_fp16_low, e_i16_rcp);
-    y00 = v_i16_lookup_c1c2_v(*(ushort128 *)&x00_shr, y00, e_lookup_fp16_high, e_i16_rcp);
-    y00.v1 = v_i16_msac_v_v_v_s(y00.v2, x00_and, (char256)shift, 0, y00.v1, 1, e_normalize_ab);
+    y00 = v_i16_lookup_c1c2(*(ushort128 *)&x00_shr, e_i16_rcp, e_lookup_fp16_low, y00, 1, 0);
+    y00 = v_i16_lookup_c1c2(*(ushort128 *)&x00_shr, e_i16_rcp, e_lookup_fp16_high, y00, 1, 0);
+    y00.v1 = v_i16_msac_b(y00.v2, x00_and, (char256)shift, 0, SW_NORMALIZE_AB | (1 << 1), y00.v1, 1, 0);
 
-    y00.v2 = v_i16_lookup_c0_v(*(ushort128 *)&x00_shr, y00.v2, e_lookup_fp16_low, e_i16_rcp);
-    y00.v2 = v_i16_lookup_c0_v(*(ushort128 *)&x00_shr, y00.v2, e_lookup_fp16_high, e_i16_rcp);
-    y00.v2 = v_i16_msac_v_v_v_s(y00.v1, x00_and, (char256)shift, 0, y00.v2, 1, e_normalize_ab);
+    y00.v2 = v_i16_lookup_c0(*(ushort128 *)&x00_shr, e_i16_rcp, e_lookup_fp16_low, y00.v2, 1, 0);
+    y00.v2 = v_i16_lookup_c0(*(ushort128 *)&x00_shr, e_i16_rcp, e_lookup_fp16_high, y00.v2, 1, 0);
+    y00.v2 = v_i16_msac_b(y00.v1, x00_and, (char256)shift, 0, SW_NORMALIZE_AB | (1 << 1), y00.v2, 1, 0);
 
-    y00.v2 = v_i16_ash_v_s_vb(y00.v2, -2, y00.v2, 1, bRangeReduced, 0);
+    y00.v2 = v_i16_ash_vb(y00.v2, -2, 1 << 1, y00.v2, to_bool128(bRangeReduced), 0);
 
     return y00.v2;
 }
@@ -1444,33 +1331,33 @@ inline short128 v_tanh_i16(
     char tanhMSAC1diffABToC // exponentTanhC1 + exponentX - exponentTanhC0
     )
 {
-    short128 absX = v_i16_abs_v(input);
-    short128 interval = v_i16_shr_v_s(absX, tanhIntervalShift);
+    short128 absX = v_i16_abs_b(input, 0, 0, 1, 0);
+    short128 interval = v_i16_shr_b(absX, tanhIntervalShift, 0, 0, 1, 0);
 
     absX &= tanhIntervalStartMask;
 
     short128_pair_t lookupResC1C2 = {0};
-    lookupResC1C2 = v_i16_lookup_c1c2_v(*(ushort128*)&interval,lookupResC1C2, e_lookup_fp16_low, e_i16_tanh);
-    lookupResC1C2 = v_i16_lookup_c1c2_v_b(*(ushort128*)&interval, lookupResC1C2, e_lookup_fp16_high, e_i16_tanh, 1, 0);
+    lookupResC1C2 = v_i16_lookup_c1c2(*(ushort128*)&interval, e_i16_tanh, e_lookup_fp16_low, lookupResC1C2, 1, 0);
+    lookupResC1C2 = v_i16_lookup_c1c2(*(ushort128*)&interval, e_i16_tanh, e_lookup_fp16_high, lookupResC1C2, 1, 0);
 
     short128 C0 = 0;
-    C0 = v_i16_lookup_c0_v(*(ushort128*)&interval,C0, e_lookup_fp16_low, e_i16_tanh);
-    C0 = v_i16_lookup_c0_v_b(*(ushort128*)&interval, C0, e_lookup_fp16_high, e_i16_tanh, 1, 0);
+    C0 = v_i16_lookup_c0(*(ushort128*)&interval, e_i16_tanh, e_lookup_fp16_low, C0, 1, 0);
+    C0 = v_i16_lookup_c0(*(ushort128*)&interval, e_i16_tanh, e_lookup_fp16_high, C0, 1, 0);
 
     short128 C1 = lookupResC1C2.v1;
     short128 C2 = lookupResC1C2.v2;
     // MSACs come here
     char256 shiftABToC = tanhMSAC0diffABToC;
-    C1 = v_i16_msac_v_v_v_s_b(C2, absX, shiftABToC, 0, C1, 1, e_normalize_ab, 1, 0);
+    C1 = v_i16_msac_b(C2, absX, shiftABToC, 0, SW_NORMALIZE_AB | (1 << 1), C1, 1, 0);
     shiftABToC = tanhMSAC1diffABToC;
-    C0 = v_i16_msac_v_v_v_s_b(C1, absX, shiftABToC, 0, C0, 1, e_normalize_ab, 0, 1);
+    C0 = v_i16_msac_b(C1, absX, shiftABToC, 0, SW_NORMALIZE_AB | (1 << 1), C0, 0, 1);
 
-    bool256 isNegative = bv_i16_cmp_less_v_s(input, 0);
+    bool256 isNegative = from_bool128(v_i16_cmp_less_b(input, 0, 0, to_bool128((bool256){0}), 1, 0));
 
     short128 zerosVec = 0;
 
     // If the input was negative, subtract the result from zero, negating the result
-    C0 = v_i16_sub_v_v_vb(zerosVec, C0, C0, e_no_saturation, isNegative, 0);
+    C0 = v_i16_sub_vb(zerosVec, C0, 0, C0, to_bool128(isNegative), 0);
 
     return C0;
 }
@@ -1487,30 +1374,30 @@ inline short128 v_sigmoid_i16(
     char sigmoidMSAC1diffABToC      // exponentSigmoidC1 + exponentX - exponentSigmoidC0)
     )
 {
-    short128 absX = v_i16_abs_v(input);
-    short128 interval = v_i16_shr_v_s(absX, sigmoidIntervalShift);
+    short128 absX = v_i16_abs_b(input, 0, 0, 1, 0);
+    short128 interval = v_i16_shr_b(absX, sigmoidIntervalShift, 0, 0, 1, 0);
 
     absX &= sigmoidIntervalStartMask;
     short128_pair_t lookupResC1C2 = {0};
-    lookupResC1C2 = v_i16_lookup_c1c2_v(*(ushort128*)&interval, lookupResC1C2, e_lookup_fp16_low, e_i16_sigmoid);
-    lookupResC1C2 = v_i16_lookup_c1c2_v_b(*(ushort128*)&interval, lookupResC1C2, e_lookup_fp16_high, e_i16_sigmoid, 1, 0);
+    lookupResC1C2 = v_i16_lookup_c1c2(*(ushort128*)&interval, e_i16_sigmoid, e_lookup_fp16_low, lookupResC1C2, 1, 0);
+    lookupResC1C2 = v_i16_lookup_c1c2(*(ushort128*)&interval, e_i16_sigmoid, e_lookup_fp16_high, lookupResC1C2, 1, 0);
 
     short128 C0 = 0;
-    C0 = v_i16_lookup_c0_v(*(ushort128*)&interval, C0, e_lookup_fp16_low, e_i16_sigmoid);
-    C0 = v_i16_lookup_c0_v_b(*(ushort128*)&interval, C0, e_lookup_fp16_high, e_i16_sigmoid, 1, 0);
+    C0 = v_i16_lookup_c0(*(ushort128*)&interval, e_i16_sigmoid, e_lookup_fp16_low, C0, 1, 0);
+    C0 = v_i16_lookup_c0(*(ushort128*)&interval, e_i16_sigmoid, e_lookup_fp16_high, C0, 1, 0);
 
     short128 C1 = lookupResC1C2.v1;
     short128 C2 = lookupResC1C2.v2;
     // MSACs come here
     char256 shiftABToC = sigmoidMSAC0diffABToC;
-    C1 = v_i16_msac_v_v_v_s_b(C2, absX, shiftABToC, 0, C1, 1, e_normalize_ab, 1, 0);
+    C1 = v_i16_msac_b(C2, absX, shiftABToC, 0, SW_NORMALIZE_AB | (1 << 1), C1, 1, 0);
     shiftABToC = sigmoidMSAC1diffABToC;
-    C0 = v_i16_msac_v_v_v_s_b(C1, absX, shiftABToC, 0, C0, 1, e_normalize_ab, 0, 1);
+    C0 = v_i16_msac_b(C1, absX, shiftABToC, 0, SW_NORMALIZE_AB | (1 << 1), C0, 0, 1);
 
-    bool256 isNegative = bv_i16_cmp_less_v_s(input, 0);
+    bool256 isNegative = from_bool128(v_i16_cmp_less_b(input, 0, 0, to_bool128((bool256){0}), 1, 0));
 
     ushort128 quantizedOnes = 32768;
-    ushort128 ushortC0 = v_u16_sub_v_v_vb(quantizedOnes, *(ushort128*)&C0, *(ushort128*)&C0, e_no_saturation, isNegative, 0);
+    ushort128 ushortC0 = v_u16_sub_vb(quantizedOnes, *(ushort128*)&C0, 0, *(ushort128*)&C0, to_bool128(isNegative), 0);
     return *(short128 *)&ushortC0;
 }
 
@@ -1531,16 +1418,16 @@ inline char256 v_exp_i8(char256 x, char shift)
     //char256 norm_shift = (-7 + shift) - (-7);
     char256 norm_shift = shift;
 
-    x00_abs = v_i8_abs_v(x);
-    x00_shr = v_i8_shr_v_s(x00_abs, intervalShift);
-    x00_and = v_i8_and_v_s(x00_abs, intervalStartMask);
+    x00_abs = v_i8_abs_b(x, 0, 0, 1, 0);
+    x00_shr = v_i8_shr_b(x00_abs, intervalShift, 0, 0, 1, 0);
+    x00_and = v_i8_and_b(x00_abs, intervalStartMask, 0, 0, 1, 0);
 
-    y00 = v_i8_lookup_c1c2_v(*(uchar256 *)&x00_shr, y00, e_lookup_int8_0, 40);
-    y00 = v_i8_lookup_c1c2_v(*(uchar256 *)&x00_shr, y00, e_lookup_int8_1, 40);
-    y00 = v_i8_lookup_c1c2_v(*(uchar256 *)&x00_shr, y00, e_lookup_int8_2, 40);
-    y00 = v_i8_lookup_c1c2_v(*(uchar256 *)&x00_shr, y00, e_lookup_int8_3, 40);
+    y00 = v_i8_lookup_c1c2(*(uchar256 *)&x00_shr, 40, e_lookup_int8_0, y00, 1, 0);
+    y00 = v_i8_lookup_c1c2(*(uchar256 *)&x00_shr, 40, e_lookup_int8_1, y00, 1, 0);
+    y00 = v_i8_lookup_c1c2(*(uchar256 *)&x00_shr, 40, e_lookup_int8_2, y00, 1, 0);
+    y00 = v_i8_lookup_c1c2(*(uchar256 *)&x00_shr, 40, e_lookup_int8_3, y00, 1, 0);
 
-    y00.v1 = v_i8_msac_v_v_v_s(y00.v2, x00_and, norm_shift, 0, y00.v1, 1, e_normalize_ab);
+    y00.v1 = v_i8_msac_b(y00.v2, x00_and, norm_shift, 0, SW_NORMALIZE_AB | (1 << 1), y00.v1, 1, 0);
 
     return y00.v1;
 }
@@ -1567,19 +1454,19 @@ inline short128 v_exp_i16(short128 x, short shift)
     short128 shift_hp = shift;
 
     //(C2 * x + C1) * x  + C0
-    x00_abs = v_i16_abs_v(x);
-    x00_shr = v_i16_shr_v_s(x00_abs, intervalShift);
-    x00_and = v_i16_and_v_s(x00_abs, intervalStartMask);
+    x00_abs = v_i16_abs_b(x, 0, 0, 1, 0);
+    x00_shr = v_i16_shr_b(x00_abs, intervalShift, 0, 0, 1, 0);
+    x00_and = v_i16_and_b(x00_abs, intervalStartMask, 0, 0, 1, 0);
 
-    y00 = v_i16_lookup_c1c2_v(*(ushort128 *)&x00_shr, y00, e_lookup_fp16_low, e_i16_exp_nep);
-    y00 = v_i16_lookup_c1c2_v(*(ushort128 *)&x00_shr, y00, e_lookup_fp16_high, e_i16_exp_nep);
+    y00 = v_i16_lookup_c1c2(*(ushort128 *)&x00_shr, e_i16_exp_nep, e_lookup_fp16_low, y00, 1, 0);
+    y00 = v_i16_lookup_c1c2(*(ushort128 *)&x00_shr, e_i16_exp_nep, e_lookup_fp16_high, y00, 1, 0);
 
-    y00.v1 = v_i16_msac_v_v_v_s(y00.v2, x00_and, (char256)shift_lp, 0, y00.v1, 1, e_normalize_ab);
+    y00.v1 = v_i16_msac_b(y00.v2, x00_and, (char256)shift_lp, 0, SW_NORMALIZE_AB | (1 << 1), y00.v1, 1, 0);
 
-    y00.v2 = v_i16_lookup_c0_v(*(ushort128 *)&x00_shr, y00.v2, e_lookup_fp16_low, e_i16_exp_nep);
-    y00.v2 = v_i16_lookup_c0_v(*(ushort128 *)&x00_shr, y00.v2, e_lookup_fp16_high, e_i16_exp_nep);
+    y00.v2 = v_i16_lookup_c0(*(ushort128 *)&x00_shr, e_i16_exp_nep, e_lookup_fp16_low, y00.v2, 1, 0);
+    y00.v2 = v_i16_lookup_c0(*(ushort128 *)&x00_shr, e_i16_exp_nep, e_lookup_fp16_high, y00.v2, 1, 0);
 
-    y00.v2 = v_i16_msac_v_v_v_s(y00.v1, x00_and, (char256)shift_hp, 0, y00.v2, 1, e_normalize_ab);
+    y00.v2 = v_i16_msac_b(y00.v1, x00_and, (char256)shift_hp, 0, SW_NORMALIZE_AB | (1 << 1), y00.v2, 1, 0);
 
     return y00.v2;
 }
@@ -1604,32 +1491,32 @@ float64 v_exp_cephes_fast_f32(float64 input)
     const float64 c6 = 5.0000001201E-1;
 
     float64 z = 0.5;
-    z = v_f32_mac_v_s(input, log2_e, z, false);
+    z = v_f32_mac_b(input, log2_e, z, (false) << 1, 1, 0);
 
-    z = v_f32_nearbyint_v(z, e_round_down);
+    z = v_f32_nearbyint_b(z, SW_RD, 0, 1, 0);
 
     float64 x_reduced = input;
-    x_reduced = v_f32_mac_v_v(z, ln_2_1, x_reduced, true);
-    x_reduced = v_f32_mac_v_v(z, ln_2_2, x_reduced, true);
+    x_reduced = v_f32_mac_b(z, ln_2_1, x_reduced, (true) << 1, 1, 0);
+    x_reduced = v_f32_mac_b(z, ln_2_2, x_reduced, (true) << 1, 1, 0);
 
-    float64 sqr_x = v_f32_mul_v_v(x_reduced, x_reduced);
+    float64 sqr_x = v_f32_mul_b(x_reduced, x_reduced, 0, 0, 1, 0);
     float64 result;
-    result = v_f32_mac_v_s(x_reduced ,c1 , c2, false);
-    result = v_f32_mac_v_v(result, x_reduced, c3, false);
-    result = v_f32_mac_v_v(result, x_reduced, c4, false);
-    result = v_f32_mac_v_v(result, x_reduced, c5, false);
-    result = v_f32_mac_v_v(result, x_reduced, c6, false);
+    result = v_f32_mac_b(x_reduced , c1 , c2, (false) << 1, 1, 0);
+    result = v_f32_mac_b(result, x_reduced, c3, (false) << 1, 1, 0);
+    result = v_f32_mac_b(result, x_reduced, c4, (false) << 1, 1, 0);
+    result = v_f32_mac_b(result, x_reduced, c5, (false) << 1, 1, 0);
+    result = v_f32_mac_b(result, x_reduced, c6, (false) << 1, 1, 0);
 
     float64 x_plus1 = 1.0;
-    x_plus1 = v_f32_add_v_v(x_reduced, x_plus1);
+    x_plus1 = v_f32_add_b(x_reduced, x_plus1, 0, 0, 1, 0);
 
-    result = v_f32_mac_v_v(result, sqr_x, x_plus1, false);
+    result = v_f32_mac_b(result, sqr_x, x_plus1, (false) << 1, 1, 0);
 
     int64 res_i32 = *(int64*)&result;
 
-    int64 z_i32 = v_convert_f32_to_i32_v(z, e_round_down);
-    z_i32 = v_i32_shl_v_s(z_i32, 23);
-    res_i32 = v_i32_add_v_v(res_i32, z_i32, 0);
+    int64 z_i32 = v_convert_f32_to_i32_b(z, SW_RD, 0, 1, 0);
+    z_i32 = v_i32_shl_b(z_i32, 23, 0, 0, 1, 0);
+    res_i32 = v_i32_add_b(res_i32, z_i32, 0, 0, 1, 0);
 
     result = *(float64*)&res_i32;
 
@@ -1646,9 +1533,9 @@ float64 v_exp_cephes_f32(float64 input)
     const float64 exp_upper =  88.722;
     const int64 plus_inf  = PLUS_INF_FP32;
 
-    result = v_f32_f32_sel_leq_v_v_v_v(input, exp_lower, 0.0f, result);
-    result = v_f32_f32_sel_geq_v_v_v_v(input, exp_upper, *((float64*)&plus_inf), result);
-    result = v_u32_f32_sel_grt_v_v_v_v(*((uint64*)&input) & NAN_FP32, PLUS_INF_FP32, input, result);
+    result = v_f32_sel_leq_f32_b(input, exp_lower, 0.0f, result, 0, 0, 1, 0);
+    result = v_f32_sel_geq_f32_b(input, exp_upper, *((float64*)&plus_inf), result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_u32_b(*((uint64*)&input) & NAN_FP32, PLUS_INF_FP32, input, result, 0, 0, 1, 0);
 // ====================================
 
     return result;
@@ -1658,10 +1545,10 @@ float64 v_exp_cephes_f32(float64 input)
 inline
 float64 v_sigmoid_f32(float64 input)
 {//sigmoid(x) = 0.5 * (tanh(0.5*x)+1) instead of (div_f32(1.0, (1.0 + exp_cephes_f32(-input))));
-    float64 x = v_f32_mul_v_s(input, 0.5f);                                                         // 1
+    float64 x = v_f32_mul_b(input, 0.5f, 0, 0, 1, 0);                                                         // 1
     float64 res = 0.5f;
     x = v_tanh_f32(x);                                                                                // 17
-    res =  v_f32_mac_v_s(x, 0.5f, res, e_no_negation);                                              // 18
+    res = v_f32_mac_b(x, 0.5f, res, SW_NO_NEG, 1, 0); // 18
 
     return res;
 }
@@ -1679,51 +1566,51 @@ float64 v_asin_cephes_f32(float64 input)
     const float64 c5 = 1.6666752422E-1;
     const float64 PIO2F = 1.5707963267948966192;
 
-    bool256 lt_zero = bv_f32_cmp_less_v_s(input, 0);
+    bool256 lt_zero = from_bool64(v_f32_cmp_less_b(input, 0, 0, to_bool64((bool256){0}), 1, 0));
 
-    abs_x = v_f32_abs_v(input);
+    abs_x = v_f32_abs_b(input, 0, 0, 1, 0);
 
-    bool256 lt_one = bv_f32_cmp_leq_v_s(abs_x, 1);
-    bool256 gt_half = bv_f32_cmp_grt_v_s(abs_x, 0.5);
+    bool256 lt_one = from_bool64(v_f32_cmp_leq_b(abs_x, 1, 0, to_bool64((bool256){0}), 1, 0));
+    bool256 gt_half = from_bool64(v_f32_cmp_grt_b(abs_x, 0.5, 0, to_bool64((bool256){0}), 1, 0));
 
     // Predicate is set for elements > 0.5 and <= 1.0
-    bool256 pred0 = bv_b_and_bv_bv(lt_one, gt_half);
+    bool256 pred0 = v_i1_and_b(lt_one, gt_half, 0, (bool256){0}, 1, 0);
 
-    bool256 lt_half = bv_f32_cmp_leq_v_s(abs_x, 0.5);
-    bool256 gt_min_const = bv_f32_cmp_geq_v_s(abs_x, 1.0e-4);
+    bool256 lt_half = from_bool64(v_f32_cmp_leq_b(abs_x, 0.5, 0, to_bool64((bool256){0}), 1, 0));
+    bool256 gt_min_const = from_bool64(v_f32_cmp_geq_b(abs_x, 1.0e-4, 0, to_bool64((bool256){0}), 1, 0));
 
     // Predicate is set for elements >= 1.0e-4 and <= 0.5
-    bool256 pred1 = bv_b_and_bv_bv(lt_half, gt_min_const);
+    bool256 pred1 = v_i1_and_b(lt_half, gt_min_const, 0, (bool256){0}, 1, 0);
 
-    bool256 ele_in_range = bv_b_or_bv_bv(pred0, pred1);
-    bool256 ele_lt_zero = bv_b_and_bv_bv(ele_in_range, lt_zero);
+    bool256 ele_in_range = v_i1_or_b(pred0, pred1, 0, (bool256){0}, 1, 0);
+    bool256 ele_lt_zero = v_i1_and_b(ele_in_range, lt_zero, 0, (bool256){0}, 1, 0);
 
     // 0.5 * (1.0 - a);
-    z = v_f32_mov_s_vb(0.5, z, pred0, 0);
-    z = v_f32_mac_v_s_vb(abs_x, 0.5, z, true, pred0, 0);
+    z = v_f32_mov_vb(0.5, 0, z, to_bool64(pred0), 0);
+    z = v_f32_mac_vb(abs_x, 0.5, z, (true) << 1, to_bool64(pred0), 0);
     x = v_sqrt_f32(z);
 
-    x = v_f32_mov_v_vb(abs_x, x, pred1, 0);
-    z = v_f32_mul_v_v_vb(x, x, z, pred1, 0);
+    x = v_f32_mov_vb(abs_x, 0, x, to_bool64(pred1), 0);
+    z = v_f32_mul_vb(x, x, 0, z, to_bool64(pred1), 0);
 
-    result = v_f32_mac_v_v(c1, z, c2, 0);
-    result = v_f32_mac_v_v(result, z, c3, 0);
-    result = v_f32_mac_v_v(result, z, c4, 0);
-    result = v_f32_mac_v_v(result, z, c5, 0);
-    float64 temp0 = v_f32_mul_v_v(z, x);
-    result = v_f32_mac_v_v(result, temp0, x, 0);
+    result = v_f32_mac_b(c1, z, c2, (0) << 1, 1, 0);
+    result = v_f32_mac_b(result, z, c3, (0) << 1, 1, 0);
+    result = v_f32_mac_b(result, z, c4, (0) << 1, 1, 0);
+    result = v_f32_mac_b(result, z, c5, (0) << 1, 1, 0);
+    float64 temp0 = v_f32_mul_b(z, x, 0, 0, 1, 0);
+    result = v_f32_mac_b(result, temp0, x, (0) << 1, 1, 0);
 
-    result = v_f32_add_v_v_vb(result, result, result, pred0, 0);
-    result = v_f32_sub_v_v_vb(PIO2F, result, result, 0, pred0, 0);
+    result = v_f32_add_vb(result, result, 0, result, to_bool64(pred0), 0);
+    result = v_f32_sub_vb(PIO2F, result, 0 << 1, result, to_bool64(pred0), 0);
 
     // sign < 0
-    result = v_f32_mul_v_s_vb(result, -1, result, ele_lt_zero, 0);
+    result = v_f32_mul_vb(result, -1, 0, result, to_bool64(ele_lt_zero), 0);
 
     // abs(input) > 1.0
-    result = v_f32_mov_s_vb(0, result, lt_one, 1);
+    result = v_f32_mov_vb(0, 0, result, to_bool64(lt_one), 1);
 
     // abs(input) < 1.0e-4
-    result = v_f32_mov_v_vb(input, result, gt_min_const, 1);
+    result = v_f32_mov_vb(input, 0, result, to_bool64(gt_min_const), 1);
 
     return result;
 }
@@ -1735,35 +1622,35 @@ float64 v_acos_cephes_f32(float64 input)
     const float PIF = 3.141592653589793238;
     const float PIO2F = 1.5707963267948966192;
 
-    float64 abs_x = v_f32_abs_v(input);
+    float64 abs_x = v_f32_abs_b(input, 0, 0, 1, 0);
 
-    bool256 leq_one = bv_f32_cmp_leq_v_s(abs_x, 1);
-    bool256 gt_half = bv_f32_cmp_grt_v_s(abs_x, 0.5);
+    bool256 leq_one = from_bool64(v_f32_cmp_leq_b(abs_x, 1, 0, to_bool64((bool256){0}), 1, 0));
+    bool256 gt_half = from_bool64(v_f32_cmp_grt_b(abs_x, 0.5, 0, to_bool64((bool256){0}), 1, 0));
 
     // Predicate is set if abs(input) is > 0.5 and <= 1.0
-    bool256 pred0 = bv_b_and_bv_bv(leq_one, gt_half);
+    bool256 pred0 = v_i1_and_b(leq_one, gt_half, 0, (bool256){0}, 1, 0);
 
-    bool256 lt_zero = bv_f32_cmp_less_v_s(input, 0);
+    bool256 lt_zero = from_bool64(v_f32_cmp_less_b(input, 0, 0, to_bool64((bool256){0}), 1, 0));
     // Predicate is set if input element is < -0.5
-    bool256 pred1 = bv_b_and_bv_bv(pred0, lt_zero);
+    bool256 pred1 = v_i1_and_b(pred0, lt_zero, 0, (bool256){0}, 1, 0);
 
     // Calculate 0.5 * (1.0 - x) when 0.5 < abs(input) <= 1.0
-    x = v_f32_mov_s_vb(0.5, abs_x, pred0, 0);
-    x = v_f32_mac_v_s_vb(abs_x, 0.5, x, true, pred0, 0);
+    x = v_f32_mov_vb(0.5, 0, abs_x, to_bool64(pred0), 0);
+    x = v_f32_mac_vb(abs_x, 0.5, x, (true) << 1, to_bool64(pred0), 0);
 
     x = v_sqrt_f32(x);
-    x = v_f32_mov_v_vb(input, x, gt_half, 1);
+    x = v_f32_mov_vb(input, 0, x, to_bool64(gt_half), 1);
 
     // Call Arcsin implementation
     x = v_asin_cephes_f32(x);
 
-    acc = v_f32_mov_s_vb(PIF, acc, pred1, 0);
-    acc = v_f32_mov_s_vb(PIO2F, acc, gt_half, 1);
+    acc = v_f32_mov_vb(PIF, 0, acc, to_bool64(pred1), 0);
+    acc = v_f32_mov_vb(PIO2F, 0, acc, to_bool64(gt_half), 1);
 
-    scale_const = v_f32_mov_s_vb(1, scale_const, gt_half, 1);
-    scale_const = v_f32_mov_s_vb(2, scale_const, pred1, 0);
+    scale_const = v_f32_mov_vb(1, 0, scale_const, to_bool64(gt_half), 1);
+    scale_const = v_f32_mov_vb(2, 0, scale_const, to_bool64(pred1), 0);
 
-    acc = v_f32_mac_v_v(scale_const, x, acc, true);
+    acc = v_f32_mac_b(scale_const, x, acc, (true) << 1, 1, 0);
     return acc;
 }
 
@@ -1783,35 +1670,35 @@ float64 v_atan_cephes_f32(float64 input)
 
     float64 y, res;
 
-    bool256 lt_zero = bv_f32_cmp_less_v_s(input, 0.0);
-    input = v_f32_abs_v(input);
+    bool256 lt_zero = from_bool64(v_f32_cmp_less_b(input, 0.0, 0, to_bool64((bool256){0}), 1, 0));
+    input = v_f32_abs_b(input, 0, 0, 1, 0);
 
     // if input > TAN_PI_8
-    float64 minus_one = v_f32_sub_v_s(input, 1.0, 0);
-    float64 plus_one = v_f32_add_v_s(input, 1.0);
+    float64 minus_one = v_f32_sub_b(input, 1.0, 0 << 1, 0, 1, 0);
+    float64 plus_one = v_f32_add_b(input, 1.0, 0, 0, 1, 0);
     float64 div_res = v_div_f32(minus_one, plus_one);
 
-    y = v_f32_f32_sel_grt_v_v_v_v(input, TAN_PI_8, PI_4, 0);
-    res = v_f32_f32_sel_grt_v_v_v_v(input, TAN_PI_8, div_res, input);
+    y = v_f32_sel_grt_f32_b(input, TAN_PI_8, PI_4, 0, 0, 0, 1, 0);
+    res = v_f32_sel_grt_f32_b(input, TAN_PI_8, div_res, input, 0, 0, 1, 0);
 
     // if input > TAN_3PI_8
     float64 neg_one = -1.0;
     div_res = v_div_f32(neg_one, input);
 
-    y = v_f32_f32_sel_grt_v_v_v_v(input, TAN_3PI_8, PI_2, y);
-    input = v_f32_f32_sel_grt_v_v_v_v(input, TAN_3PI_8, div_res, res);
+    y = v_f32_sel_grt_f32_b(input, TAN_3PI_8, PI_2, y, 0, 0, 1, 0);
+    input = v_f32_sel_grt_f32_b(input, TAN_3PI_8, div_res, res, 0, 0, 1, 0);
 
-    float64 z = v_f32_mul_v_v(input, input);
-    res = v_f32_mac_v_v(C1, z, C2, 0);
-    res = v_f32_mac_v_v(res, z, C3, 0);
-    res = v_f32_mac_v_v(res, z, C4, 0);
-    res = v_f32_mul_v_v(res, input);
-    res = v_f32_mac_v_v(res, z, input, 0);
+    float64 z = v_f32_mul_b(input, input, 0, 0, 1, 0);
+    res = v_f32_mac_b(C1, z, C2, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C3, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C4, (0) << 1, 1, 0);
+    res = v_f32_mul_b(res, input, 0, 0, 1, 0);
+    res = v_f32_mac_b(res, z, input, (0) << 1, 1, 0);
 
-    y = v_f32_add_v_v(res, y);
+    y = v_f32_add_b(res, y, 0, 0, 1, 0);
 
     // if input < 0 -> y = -y
-    y = v_f32_sub_v_s_vb(y, 0.0, y, 1, lt_zero, 0);
+    y = v_f32_sub_vb(y, 0.0, 1 << 1, y, to_bool64(lt_zero), 0);
 
     return y;
 }
@@ -1837,53 +1724,53 @@ float64 v_tan_cephes_f32(float64 input)
     float64 y, z, sqr_z;
     int64 j, j_and_1, j_and_2;
 
-    bool256 lt_zero = bv_f32_cmp_less_v_s(input, 0.0);
-    input = v_f32_abs_v(input);
+    bool256 lt_zero = from_bool64(v_f32_cmp_less_b(input, 0.0, 0, to_bool64((bool256){0}), 1, 0));
+    input = v_f32_abs_b(input, 0, 0, 1, 0);
 
-    float64 res = v_f32_mul_v_v(FOPI, input);
-    y = v_f32_nearbyint_v(res, 1);
+    float64 res = v_f32_mul_b(FOPI, input, 0, 0, 1, 0);
+    y = v_f32_nearbyint_b(res, (1) << 16, 0, 1, 0);
 
     // convert res f32 to i32 to perform bitwise operation
-    j = v_convert_f32_to_i32_v(res, 1);
+    j = v_convert_f32_to_i32_b(res, (1 <<16), 0, 1, 0);
 
     // if (j & 1)
-    j_and_1 = v_i32_and_v_s(j, 1);
-    bool256 j_1 = bv_i32_cmp_eq_v_s(j_and_1, 1);
-    j = v_i32_add_v_s_vb(j, 1, j, 0, j_1, 0);
-    y = v_f32_add_v_s_vb(y, 1, y, j_1, 0);
+    j_and_1 = v_i32_and_b(j, 1, 0, 0, 1, 0);
+    bool256 j_1 = from_bool64(v_i32_cmp_eq_b(j_and_1, 1, 0, to_bool64((bool256){0}), 1, 0));
+    j = v_i32_add_vb(j, 1, 0, j, to_bool64(j_1), 0);
+    y = v_f32_add_vb(y, 1, 0, y, to_bool64(j_1), 0);
 
-    z = v_f32_mac_v_v(DP1, y, input, 0);
-    z = v_f32_mac_v_v(DP2, y, z, 0);
-    z = v_f32_mac_v_v(DP3, y, z, 0);
+    z = v_f32_mac_b(DP1, y, input, (0) << 1, 1, 0);
+    z = v_f32_mac_b(DP2, y, z, (0) << 1, 1, 0);
+    z = v_f32_mac_b(DP3, y, z, (0) << 1, 1, 0);
 
-    sqr_z = v_f32_mul_v_v(z, z);
+    sqr_z = v_f32_mul_b(z, z, 0, 0, 1, 0);
 
-    bool256 leq_low = bv_f32_cmp_leq_v_s(input, low_range);
+    bool256 leq_low = from_bool64(v_f32_cmp_leq_b(input, low_range, 0, to_bool64((bool256){0}), 1, 0));
 
-    y = v_f32_mac_v_v(C1, sqr_z, C2, 0);
-    y = v_f32_mac_v_v(y, sqr_z, C3, 0);
-    y = v_f32_mac_v_v(y, sqr_z, C4, 0);
-    y = v_f32_mac_v_v(y, sqr_z, C5, 0);
-    y = v_f32_mac_v_v(y, sqr_z, C6, 0);
-    y = v_f32_mul_v_v(y, z);
-    y = v_f32_mac_v_v(y, sqr_z, z, 0);
+    y = v_f32_mac_b(C1, sqr_z, C2, (0) << 1, 1, 0);
+    y = v_f32_mac_b(y, sqr_z, C3, (0) << 1, 1, 0);
+    y = v_f32_mac_b(y, sqr_z, C4, (0) << 1, 1, 0);
+    y = v_f32_mac_b(y, sqr_z, C5, (0) << 1, 1, 0);
+    y = v_f32_mac_b(y, sqr_z, C6, (0) << 1, 1, 0);
+    y = v_f32_mul_b(y, z, 0, 0, 1, 0);
+    y = v_f32_mac_b(y, sqr_z, z, (0) << 1, 1, 0);
 
     // if (input <= low_range), y = z
-    y = v_f32_mov_v_vb(z, y, leq_low, 0);
+    y = v_f32_mov_vb(z, 0, y, to_bool64(leq_low), 0);
 
     float64 neg_inv_y = v_div_fast_f32(-1.0, y);
 
     // if (j & 2)
-    j_and_2 = v_i32_and_v_s(j, 2);
-    bool256 j_2 = bv_i32_cmp_eq_v_s(j_and_2, 2);
-    y = v_f32_mov_v_vb(neg_inv_y, y, j_2, 0);
+    j_and_2 = v_i32_and_b(j, 2, 0, 0, 1, 0);
+    bool256 j_2 = from_bool64(v_i32_cmp_eq_b(j_and_2, 2, 0, to_bool64((bool256){0}), 1, 0));
+    y = v_f32_mov_vb(neg_inv_y, 0, y, to_bool64(j_2), 0);
 
     // if (input < 0), input = -input
-    y = v_f32_sub_v_s_vb(y, 0.0, y, 1, lt_zero, 0);
+    y = v_f32_sub_vb(y, 0.0, 1 << 1, y, to_bool64(lt_zero), 0);
 
     // if (abs(input) > lossth), y = 0
-    bool256 b_lossth = bv_f32_cmp_grt_v_s(input, lossth);
-    y = v_f32_mov_s_vb(0.0, y, b_lossth, 0);
+    bool256 b_lossth = from_bool64(v_f32_cmp_grt_b(input, lossth, 0, to_bool64((bool256){0}), 1, 0));
+    y = v_f32_mov_vb(0.0, 0, y, to_bool64(b_lossth), 0);
 
     return y;
 }
@@ -1896,28 +1783,28 @@ float64 v_asinh_f32(float64 input)
     float C3 = 7.4847586088E-2;
     float C4 = -1.6666288134E-1;
 
-    bool256 lt_zero = bv_f32_cmp_less_v_s(input, 0.0);
-    input = v_f32_abs_v(input);
+    bool256 lt_zero = from_bool64(v_f32_cmp_less_b(input, 0.0, 0, to_bool64((bool256){0}), 1, 0));
+    input = v_f32_abs_b(input, 0, 0, 1, 0);
 
-    float64 z = v_f32_mul_v_v(input, input);
+    float64 z = v_f32_mul_b(input, input, 0, 0, 1, 0);
 
     float64 res;
-    res = v_f32_mac_v_v(C1, z, C2, 0);
-    res = v_f32_mac_v_v(res, z, C3, 0);
-    res = v_f32_mac_v_v(res, z, C4, 0);
-    res = v_f32_mul_v_v(res, input);
-    res = v_f32_mac_v_v(res, z, input, 0);
+    res = v_f32_mac_b(C1, z, C2, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C3, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C4, (0) << 1, 1, 0);
+    res = v_f32_mul_b(res, input, 0, 0, 1, 0);
+    res = v_f32_mac_b(res, z, input, (0) << 1, 1, 0);
 
-    z = v_f32_add_v_v(z, 1.0);
+    z = v_f32_add_b(z, 1.0, 0, 0, 1, 0);
     z = v_sqrt_f32(z);
-    z = v_f32_add_v_v(z, input);
+    z = v_f32_add_b(z, input, 0, 0, 1, 0);
     z = v_log_f32(z);
 
-    bool256 geq_half = bv_f32_cmp_geq_v_s(input, 0.5);
-    res = v_f32_mov_v_vb(z, res, geq_half, 0);
+    bool256 geq_half = from_bool64(v_f32_cmp_geq_b(input, 0.5, 0, to_bool64((bool256){0}), 1, 0));
+    res = v_f32_mov_vb(z, 0, res, to_bool64(geq_half), 0);
 
     // sign < 0
-    res = v_f32_mul_v_s_vb(res, -1, res, lt_zero, 0);
+    res = v_f32_mul_vb(res, -1, 0, res, to_bool64(lt_zero), 0);
 
     return res;
 }
@@ -1932,43 +1819,43 @@ float64 v_acosh_f32(float64 input)
     float C5 = 1.4142135263E0;
     float LOGE2F = 0.693147180559945309;
 
-    bool256 lt_one = bv_f32_cmp_less_v_s(input, 1.0);
+    bool256 lt_one = from_bool64(v_f32_cmp_less_b(input, 1.0, 0, to_bool64((bool256){0}), 1, 0));
 
-    float64 z = v_f32_sub_v_s(input, 1.0, 0);
+    float64 z = v_f32_sub_b(input, 1.0, 0 << 1, 0, 1, 0);
 
-    bool256 geq_half = bv_f32_cmp_geq_v_s(z, 0.5);
-    bool256 grt_limit = bv_f32_cmp_grt_v_s(input, 1500);
+    bool256 geq_half = from_bool64(v_f32_cmp_geq_b(z, 0.5, 0, to_bool64((bool256){0}), 1, 0));
+    bool256 grt_limit = from_bool64(v_f32_cmp_grt_b(input, 1500, 0, to_bool64((bool256){0}), 1, 0));
 
     // if z < 0.5
     float64 res;
-    res = v_f32_mac_v_v(C1, z, C2, 0);
-    res = v_f32_mac_v_v(res, z, C3, 0);
-    res = v_f32_mac_v_v(res, z, C4, 0);
-    res = v_f32_mac_v_v(res, z, C5, 0);
+    res = v_f32_mac_b(C1, z, C2, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C3, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C4, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C5, (0) << 1, 1, 0);
 
     float64 sqrt_z = v_sqrt_fast_f32(z);
 
-    res = v_f32_mul_v_v(res, sqrt_z);
+    res = v_f32_mul_b(res, sqrt_z, 0, 0, 1, 0);
 
     // if z >= 0.5
-    float64 plus_one = v_f32_add_v_s(input, 1);
-    z = v_f32_mul_v_v(z, plus_one);
+    float64 plus_one = v_f32_add_b(input, 1, 0, 0, 1, 0);
+    z = v_f32_mul_b(z, plus_one, 0, 0, 1, 0);
     z = v_sqrt_f32(z);
-    z = v_f32_add_v_v(z, input);
+    z = v_f32_add_b(z, input, 0, 0, 1, 0);
     z = v_log_f32(z);
 
-    res = v_f32_mov_v_vb(z, res, geq_half, 0);
+    res = v_f32_mov_vb(z, 0, res, to_bool64(geq_half), 0);
 
     // if input > 1500
     z = v_log_f32(input);
-    z = v_f32_add_v_s(z, LOGE2F);
+    z = v_f32_add_b(z, LOGE2F, 0, 0, 1, 0);
 
-    res = v_f32_mov_v_vb(z, res, grt_limit, 0);
+    res = v_f32_mov_vb(z, 0, res, to_bool64(grt_limit), 0);
 
     const uint64 nan_int = NAN_FP32;
     const float64 nan_fp32 = *((float64*)&nan_int);
 
-    res = v_f32_mov_v_vb(nan_fp32, res, lt_one, 0);
+    res = v_f32_mov_vb(nan_fp32, 0, res, to_bool64(lt_one), 0);
 
     return res;
 }
@@ -1983,35 +1870,35 @@ float64 v_atanh_f32(float64 input)
     float C5 = 3.33337300303E-1;
 
     // if input < 0.5
-    float64 z = v_f32_mul_v_v(input, input);
-    float64 res = v_f32_mac_v_v(C1, z, C2, 0);
-    res = v_f32_mac_v_v(res, z, C3, 0);
-    res = v_f32_mac_v_v(res, z, C4, 0);
-    res = v_f32_mac_v_v(res, z, C5, 0);
-    res = v_f32_mul_v_v(res, input);
-    res = v_f32_mac_v_v(res, z, input, 0);
+    float64 z = v_f32_mul_b(input, input, 0, 0, 1, 0);
+    float64 res = v_f32_mac_b(C1, z, C2, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C3, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C4, (0) << 1, 1, 0);
+    res = v_f32_mac_b(res, z, C5, (0) << 1, 1, 0);
+    res = v_f32_mul_b(res, input, 0, 0, 1, 0);
+    res = v_f32_mac_b(res, z, input, (0) << 1, 1, 0);
 
     // if input >= 0.5
-    float64 one_plus = v_f32_add_v_v(1, input);
-    float64 one_minus = v_f32_sub_v_v(1, input, 0);
+    float64 one_plus = v_f32_add_b(1, input, 0, 0, 1, 0);
+    float64 one_minus = v_f32_sub_b(1, input, 0 << 1, 0, 1, 0);
     z = v_div_fast_f32(one_plus, one_minus);
     z = v_log_fast_f32(z);
-    z = v_f32_mul_v_s(z, 0.5);
+    z = v_f32_mul_b(z, 0.5, 0, 0, 1, 0);
 
-    float64 abs_in = v_f32_abs_v(input);
-    bool256 geq_half = bv_f32_cmp_geq_v_s(abs_in, 0.5);
-    res = v_f32_mov_v_vb(z, res, geq_half, 0);
+    float64 abs_in = v_f32_abs_b(input, 0, 0, 1, 0);
+    bool256 geq_half = from_bool64(v_f32_cmp_geq_b(abs_in, 0.5, 0, to_bool64((bool256){0}), 1, 0));
+    res = v_f32_mov_vb(z, 0, res, to_bool64(geq_half), 0);
 
     const uint64 inf_int  = PLUS_INF_FP32;
     const float64 inf_f = *((float64*)&inf_int);
     const uint64 nan_int = NAN_FP32;
     const float64 nan_f = *((float64*)&nan_int);
 
-    bool256 geq_one = bv_f32_cmp_geq_v_s(abs_in, 1.0);
+    bool256 geq_one = from_bool64(v_f32_cmp_geq_b(abs_in, 1.0, 0, to_bool64((bool256){0}), 1, 0));
 
-    float64 gt_range = v_f32_f32_sel_less_v_v_v_v(input, 0, -inf_f, inf_f);
-    gt_range = v_f32_f32_sel_grt_v_v_v_v(abs_in, 1.0, nan_f, gt_range);
-    res = v_f32_mov_v_vb(gt_range, res, geq_one, 0);
+    float64 gt_range = v_f32_sel_less_f32_b(input, 0, -inf_f, inf_f, 0, 0, 1, 0);
+    gt_range = v_f32_sel_grt_f32_b(abs_in, 1.0, nan_f, gt_range, 0, 0, 1, 0);
+    res = v_f32_mov_vb(gt_range, 0, res, to_bool64(geq_one), 0);
 
     return res;
 }
@@ -2026,40 +1913,39 @@ float64 v_sinh_cephes_f32(float64 input)
     const float C3 = 1.66667160211E-1;
 
     float64 abs_val, temp_1, temp_2, result_1, result_2, final_res = 0.0f;
-    bool256 lt_zero = bv_f32_cmp_less_v_s(input, 0.0);
+    bool256 lt_zero = from_bool64(v_f32_cmp_less_b(input, 0.0, 0, to_bool64((bool256){0}), 1, 0));
 
-    abs_val = v_f32_abs_v(input);
-    bool256 gt_one = bv_f32_cmp_grt_v_s(abs_val, 1.0);
+    abs_val = v_f32_abs_b(input, 0, 0, 1, 0);
+    bool256 gt_one = from_bool64(v_f32_cmp_grt_b(abs_val, 1.0, 0, to_bool64((bool256){0}), 1, 0));
 
     // abs_val > 1.0
 
     result_1 = v_exp_cephes_f32(abs_val);
-    temp_1 = v_f32_mul_v_s_vb(result_1, 0.5, result_1, gt_one, 0);
+    temp_1 = v_f32_mul_vb(result_1, 0.5, 0, result_1, to_bool64(gt_one), 0);
     temp_2 = v_div_f32(0.5, result_1);
-    result_1 = v_f32_sub_v_v_vb(temp_1, temp_2, result_1, 0, gt_one, 0);
+    result_1 = v_f32_sub_vb(temp_1, temp_2, 0 << 1, result_1, to_bool64(gt_one), 0);
 
-    bool256 pred0 = bv_b_and_bv_bv(gt_one, lt_zero);
-    result_1 = v_f32_mul_v_s_vb(result_1, -1, result_1, pred0, 0);
+    bool256 pred0 = v_i1_and_b(gt_one, lt_zero, 0, (bool256){0}, 1, 0);
+    result_1 = v_f32_mul_vb(result_1, -1, 0, result_1, to_bool64(pred0), 0);
 
     // abs_val <= 1.0
 
-    temp_1 = v_f32_mul_v_v(input, input);
-    result_2 = v_f32_mac_v_v(C1, temp_1, C2, 0);
-    result_2 = v_f32_mac_v_v(result_2, temp_1, C3, 0);
-    result_2 = v_f32_mul_v_v(result_2, temp_1);
-    result_2 = v_f32_mac_v_v(result_2, input, input, 0);
+    temp_1 = v_f32_mul_b(input, input, 0, 0, 1, 0);
+    result_2 = v_f32_mac_b(C1, temp_1, C2, (0) << 1, 1, 0);
+    result_2 = v_f32_mac_b(result_2, temp_1, C3, (0) << 1, 1, 0);
+    result_2 = v_f32_mul_b(result_2, temp_1, 0, 0, 1, 0);
+    result_2 = v_f32_mac_b(result_2, input, input, (0) << 1, 1, 0);
 
-    final_res = v_f32_mov_v_vb(result_1, final_res, gt_one, 0);
-    final_res = v_f32_mov_v_vb(result_2, final_res, gt_one, 1);
+    final_res = v_f32_mov_vb(result_1, 0, final_res, to_bool64(gt_one), 0);
+    final_res = v_f32_mov_vb(result_2, 0, final_res, to_bool64(gt_one), 1);
 
     const int64 plus_inf = PLUS_INF_FP32;
     const int64 minus_inf = MINUS_INF_FP32;
 
     // abs_val > maxlog
 
-    bool256 gt_maxlog = bv_f32_cmp_grt_v_s(abs_val, maxlogf);
-    final_res = v_f32_f32_sel_grt_v_s_v_v_vb(input, 0.0, *((float64*)&plus_inf),
-            *((float64*)&minus_inf), final_res, gt_maxlog, 0);
+    bool256 gt_maxlog = from_bool64(v_f32_cmp_grt_b(abs_val, maxlogf, 0, to_bool64((bool256){0}), 1, 0));
+    final_res = v_f32_sel_grt_f32_vb(input, 0.0, *((float64*)&plus_inf), *((float64*)&minus_inf), 0, final_res, to_bool64(gt_maxlog), 0);
 
     return final_res;
 }
@@ -2070,41 +1956,41 @@ float64 v_cosh_cephes_f32(float64 input)
 
     float64 recip, result;
 
-    input = v_f32_abs_v(input);
+    input = v_f32_abs_b(input, 0, 0, 1, 0);
 
     result = v_exp_cephes_f32(input);
 
     // z + ( 1 / z )
 
     recip = v_reciprocal_f32(result);
-    result = v_f32_add_v_v(result, recip);
+    result = v_f32_add_b(result, recip, 0, 0, 1, 0);
 
-    result = v_f32_mul_v_v(result, 0.5);
+    result = v_f32_mul_b(result, 0.5, 0, 0, 1, 0);
 
-    // v_f32_abs_v > maxlog
+    // v_f32_abs_b > maxlog
 
-    bool256 gt_maxlog = bv_f32_cmp_grt_v_s(input, maxlogf);
+    bool256 gt_maxlog = from_bool64(v_f32_cmp_grt_b(input, maxlogf, 0, to_bool64((bool256){0}), 1, 0));
 
     const int64 plus_inf = PLUS_INF_FP32;
 
-    result = v_f32_mov_v_vb(*(float64*)&plus_inf, result, gt_maxlog, 0);
+    result = v_f32_mov_vb(*(float64*)&plus_inf, 0, result, to_bool64(gt_maxlog), 0);
 
     return result;
 }
 ///////////////////////////////////// MOD_F32 /////////////////////////////////////////////
 float64 v_mod_f32(float64 input_x, float64 input_y)
 {
-    float64 abs_x = v_f32_abs_v(input_x);
-    float64 abs_y = v_f32_abs_v(input_y);
+    float64 abs_x = v_f32_abs_b(input_x, 0, 0, 1, 0);
+    float64 abs_y = v_f32_abs_b(input_y, 0, 0, 1, 0);
     float64 div_result = v_div_f32(abs_x, abs_y);
-    float64 round_result = v_f32_nearbyint_v(div_result, e_round_half_ne);
-    float64 mul_result = v_f32_mul_v_v(round_result , abs_y);
-    float64 result = v_f32_sub_v_v(abs_x, mul_result, 0);
+    float64 round_result = v_f32_nearbyint_b(div_result, SW_RHNE, 0, 1, 0);
+    float64 mul_result = v_f32_mul_b(round_result , abs_y, 0, 0, 1, 0);
+    float64 result = v_f32_sub_b(abs_x, mul_result, 0 << 1, 0, 1, 0);
 
-    bool256 bpredv = bv_f32_cmp_less_v_s(result, 0.0);
-    result = v_f32_add_v_v_vb(result, abs_y, result, bpredv, 0);
+    bool256 bpredv = from_bool64(v_f32_cmp_less_b(result, 0.0, 0, to_bool64((bool256){0}), 1, 0));
+    result = v_f32_add_vb(result, abs_y, 0, result, to_bool64(bpredv), 0);
 
-    result = v_f32_form_fp_num_v_v_v(result, input_x, result, 0x0);
+    result = v_f32_form_fp_num_b(result, input_x, result, 0x0, 0, 1, 0);
 
     return result;
 }
@@ -2120,36 +2006,36 @@ float64 v_expm1_f32(float64 input)
 
     // Checking boundary
 
-    bool256 leq_bv = bv_f32_cmp_leq_v_s(input, boundval);
-    bool256 geq_bv = bv_f32_cmp_geq_v_s(input, -boundval);
-    bool256 pred0 =  bv_b_and_bv_bv(leq_bv, geq_bv);
+    bool256 leq_bv = from_bool64(v_f32_cmp_leq_b(input, boundval, 0, to_bool64((bool256){0}), 1, 0));
+    bool256 geq_bv = from_bool64(v_f32_cmp_geq_b(input, -boundval, 0, to_bool64((bool256){0}), 1, 0));
+    bool256 pred0 =  v_i1_and_b(leq_bv, geq_bv, 0, (bool256){0}, 1, 0);
 
     // Cases within boundary
 
-    output = v_f32_mul_v_s_vb(input, 0.5, output, pred0, 0);
+    output = v_f32_mul_vb(input, 0.5, 0, output, to_bool64(pred0), 0);
     output = v_tanh_f32(output);
 
-    temp1 = v_f32_mul_v_s_vb(output, 2, temp1, pred0, 0);
-    temp2 = v_f32_sub_v_v_vb(1, output, temp2, 0, pred0, 0);
+    temp1 = v_f32_mul_vb(output, 2, 0, temp1, to_bool64(pred0), 0);
+    temp2 = v_f32_sub_vb(1, output, 0 << 1, temp2, to_bool64(pred0), 0);
     output = v_div_f32(temp1, temp2);
 
     // Cases outside boundary
 
     temp3 =  v_exp_f32(input);
-    output = v_f32_sub_v_s_vb(temp3, 1, output, 0, pred0, 1);
+    output = v_f32_sub_vb(temp3, 1, 0 << 1, output, to_bool64(pred0), 1);
 
     // Special case of min float
 
-    bool256 pred_fmin = bv_f32_cmp_eq_v_v(input, flt_min_fp32);
-    output = v_f32_mov_v_vb(input, output, pred_fmin, 0);
+    bool256 pred_fmin = from_bool64(v_f32_cmp_eq_b(input, flt_min_fp32, 0, to_bool64((bool256){0}), 1, 0));
+    output = v_f32_mov_vb(input, 0, output, to_bool64(pred_fmin), 0);
 
     return output;
 }
 
 // Remove all pre-processor definitions
-#if defined(__gaudi__)
-    #undef v_f32_lookup_c0_v
-    #undef v_f32_lookup_c1c2_v
+#if defined(__gaudi__) || defined(__gaudib__) || defined(__greco__) || defined(__gaudi2__) || defined(__doron1__)
+    #undef v_f32_lookup_c0
+    #undef v_f32_lookup_c1c2
 #endif
 #undef PROCESS_SIN_COS_SPECIAL_VALUES
 #undef SIN_COS_CALC
@@ -2266,7 +2152,7 @@ float64 v_expm1_f32(float64 input)
 /// BF16
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if defined(__gaudi__)
+#if defined(__gaudi__) || defined(__gaudib__) || defined(__greco__) || defined(__gaudi2__) || defined(__doron1__)
 
 // bfloat128 v_bf16_reduce_add(bfloat128 x);
 #define REDUCE_DT 3
@@ -2288,6 +2174,34 @@ float64 v_expm1_f32(float64 input)
 #include "tpc-reduction_functions_core.h"
 #undef REDUCE_DT
 #undef REDUCE_OP
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// F16
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#if defined(__greco__) || defined(__gaudi2__) || defined(__doron1__)
+// half128 v_f16_reduce_min(half128 x);
+#define REDUCE_DT 4
+#define REDUCE_OP 2
+#include "tpc-reduction_functions_core.h"
+#undef REDUCE_DT
+#undef REDUCE_OP
+
+// half128 v_f16_reduce_max(half128 x);
+#define REDUCE_DT 4
+#define REDUCE_OP 3
+#include "tpc-reduction_functions_core.h"
+#undef REDUCE_DT
+#undef REDUCE_OP
+
+// half128 v_f16_reduce_add(half128 x);
+#define REDUCE_DT 4
+#define REDUCE_OP 0
+#include "tpc-reduction_functions_core.h"
+#undef REDUCE_DT
+#undef REDUCE_OP
+
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

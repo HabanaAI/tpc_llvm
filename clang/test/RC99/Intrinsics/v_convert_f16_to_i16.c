@@ -1,0 +1,79 @@
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=GEN3P %s
+
+void main(int dest, int src1, int vpredp, _Bool pred) {
+  volatile short128 __local *dest_ptr = (short128 __local *)dest;
+  half128 __local *src_ptr = (half128 __local *)src1;
+  bool256 __local *vpred_ptr = (bool256 __local *)vpredp;
+
+  half128 x      = *src_ptr++;
+  bool256  vpred  = *vpred_ptr++;
+  short128  income = *dest_ptr;
+
+// GEN3P-DAG: ld_l_v   [[DEST:%V[0-9]+]], %S0
+// GEN3P-DAG: ld_l_v   [[SRC:%V[0-9]+]], %S1
+// GEN3P-DAG: ld_l_v   [[VPRED:%VP[0-9]+]], %S2
+// GEN3P-DAG: mov{{.*}}	[[PRED:%SP[0-9]+]], %S3
+
+  // v_convert_f16_to_i16_b
+  {
+    short128 res = income;
+
+    res = v_convert_f16_to_i16_b(x, 0, res, pred, 0);
+    *dest_ptr++ = res;
+    // GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], [[PRED]]
+
+    res = v_convert_f16_to_i16_b(x, 0, res, pred, 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], [[PRED]]
+    res = v_convert_f16_to_i16_b(x, 0, res, pred, 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], [[PRED]]
+
+    res = v_convert_f16_to_i16_b(x, SW_RHNE, res, pred, 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], %SP1
+
+    res = v_convert_f16_to_i16_b(x, SW_RZ, res, pred, 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rz [[DEST]], [[SRC]], [[PRED]]
+    res = v_convert_f16_to_i16_b(x, SW_SR, res, pred, 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 sr [[DEST]], [[SRC]], [[PRED]]
+
+
+    res = v_convert_f16_to_i16_b(x, SW_RD, res, pred, 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rd [[DEST]], [[SRC]], [[PRED]]
+
+    res = v_convert_f16_to_i16_b(x, SW_RU, res, pred, 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 ru [[DEST]], [[SRC]], [[PRED]]
+
+    income = res;
+  }
+
+  // v_convert_f16_to_i16_vb
+  {
+    short128 res = income;
+
+    res = v_convert_f16_to_i16_vb(x, 0, res, to_bool128(vpred), 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], [[VPRED]]
+
+    res = v_convert_f16_to_i16_vb(x, 0, res, to_bool128(vpred), 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], [[VPRED]]
+
+    res = v_convert_f16_to_i16_vb(x, 0, res, to_bool128(vpred), 0);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], [[VPRED]]
+
+    res = v_convert_f16_to_i16_vb(x, 0, res, to_bool128(vpred), 1);
+    *dest_ptr++ = res;
+// GEN3P: convert.f16 target_type=int16 rhne [[DEST]], [[SRC]], ![[VPRED]]
+
+    income = res;
+  }
+}
+
+

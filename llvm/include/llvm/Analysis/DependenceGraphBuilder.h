@@ -14,12 +14,15 @@
 #ifndef LLVM_ANALYSIS_DEPENDENCE_GRAPH_BUILDER_H
 #define LLVM_ANALYSIS_DEPENDENCE_GRAPH_BUILDER_H
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/EquivalenceClasses.h"
-#include "llvm/Analysis/DependenceAnalysis.h"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/Instructions.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
+
+class BasicBlock;
+class DependenceInfo;
+class Instruction;
 
 /// This abstract builder class defines a set of high-level steps for creating
 /// DDG-like graphs. The client code is expected to inherit from this class and
@@ -58,11 +61,8 @@ public:
     createFineGrainedNodes();
     createDefUseEdges();
     createMemoryDependencyEdges();
+    simplify();
     createAndConnectRootNode();
-#if 0
-    // Not required as of now
-    createAndConnectExitNode();
-#endif
     createPiBlocks();
     sortNodesTopologically();
   }
@@ -89,16 +89,21 @@ public:
   /// reachable from the root.
   void createAndConnectRootNode();
 
-  /// Create an exit node and add edges such that each node in the graph
-  /// reaches it.
-  void createAndConnectExitNode();
-
   /// Apply graph abstraction to groups of nodes that belong to a strongly
   /// connected component of the graph to create larger compound nodes
   /// called pi-blocks. The purpose of this abstraction is to isolate sets of
   /// program elements that need to stay together during codegen and turn
   /// the dependence graph into an acyclic graph.
   void createPiBlocks();
+
+  /// Go through all the nodes in the graph and collapse any two nodes
+  /// 'a' and 'b' if all of the following are true:
+  ///   - the only edge from 'a' is a def-use edge to 'b' and
+  ///   - the only edge to 'b' is a def-use edge from 'a' and
+  ///   - there is no cyclic edge from 'b' to 'a' and
+  ///   - all instructions in 'a' and 'b' belong to the same basic block and
+  ///   - both 'a' and 'b' are simple (single or multi instruction) nodes.
+  void simplify();
 
   /// Topologically sort the graph nodes.
   void sortNodesTopologically();
@@ -129,7 +134,7 @@ protected:
   /// Create a rooted edge going from \p Src to \p Tgt .
   virtual EdgeType &createRootedEdge(NodeType &Src, NodeType &Tgt) = 0;
 
-  /// Create a exiting edge going from \p Src to \p Tgt .
+  /// Create a exited edge going from \p Src to \p Tgt .
   virtual EdgeType &createExitedEdge(NodeType &Src, NodeType &Tgt) = 0;
 
   /// Given a pi-block node, return a vector of all the nodes contained within
@@ -148,6 +153,18 @@ protected:
 
   /// Return true if Use Def edges are expected
   virtual bool shouldCreateUseDefEdges() const { return true; }
+
+  /// Return true if graph simplification step is requested, and false
+  /// otherwise.
+  virtual bool shouldSimplify() const { return true; }
+
+  /// Return true if it's safe to merge the two nodes.
+  virtual bool areNodesMergeable(const NodeType &A,
+                                 const NodeType &B) const = 0;
+
+  /// Append the content of node \p B into node \p A and remove \p B and
+  /// the edge between \p A and \p B from the graph.
+  virtual void mergeNodes(NodeType &A, NodeType &B) = 0;
 
   /// Given an instruction \p I return its associated ordinal number.
   size_t getOrdinal(Instruction &I) {

@@ -1,5 +1,8 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN2P %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK,GEN3P %s
 
+
+// GEN2P check for VP was removed due to found hw issue GAUDI-1732
 
 void main(int dest, int src1, int vpredp, _Bool pred) {
   volatile float64 __local  *dest_ptr = (float64 __local *)dest;
@@ -31,8 +34,8 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
 
     res = v_convert_bf16_to_f32_all_b(x, 0, res, 1, 0);
     *dest_ptr++ = res.v1;
-    // GEN2P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]], %SP0
-    // GEN3P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]], %SP0
+    // GEN2P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]]
+    // GEN3P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]]
 
     res = v_convert_bf16_to_f32_all_b(x, SW_RHNE, res, pred, 0);
     *dest_ptr++ = res.v1;
@@ -48,12 +51,10 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
 
     res = v_convert_bf16_to_f32_all_vb(x, 0, res, to_bool128(vpred), 0);
     *dest_ptr++ = res.v1;
-    // GEN2P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]], [[VPRED]]
     // GEN3P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]], [[VPRED]]
 
     res = v_convert_bf16_to_f32_all_vb(x, 0, res, to_bool128(vpred), 1);
     *dest_ptr++ = res.v1;
-    // GEN2P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]], ![[VPRED]]
     // GEN3P: convert.bf16 all_lanes target_type=fp32 rhne %D[[DEST]], [[SRC]], ![[VPRED]]
 
     income = res;

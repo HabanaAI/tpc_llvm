@@ -11,4 +11,4 @@ entry:
   ret void
 }
 
-; CHECK: convert.i32 target_type=bf16 rhne %S0, %S0, %SP0
+; CHECK: convert.i32 target_type=bf16 rhne %S0, %S0

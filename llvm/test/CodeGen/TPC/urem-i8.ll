@@ -1,21 +1,26 @@
 ; RUN: llc -march=tpc -mcpu=dali -O2 -ignore-mem-overflow %s -o - | FileCheck %s --check-prefix=CHECK-DALI
 ; RUN: llc -march=tpc -mcpu=gaudi -O2 -ignore-mem-overflow %s -o - | FileCheck %s --check-prefix=CHECK-GAUDI
+; RUN: llc -march=tpc -mcpu=goya2 -O2 -ignore-mem-overflow %s -o - | FileCheck %s --check-prefix=CHECK-GOYA2
 
-; CHECK-DALI: mov.u8  %S{{[0-9]+}}, 0x0, %SP{{[0-9]+}}
-; CHECK-DALI: mov.u8  %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-DALI: udiv_step.u8  0x7 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-DALI: udiv_step.u8  0x6 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-DALI: udiv_step.u8  0x5 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-DALI: udiv_step.u8  0x4 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-DALI: udiv_step.u8  0x3 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-DALI: udiv_step.u8  0x2 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-DALI: udiv_step.u8  0x1 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK-DALI: mov.{{.+}}  %S{{[0-9]+}}, 0x0
+; CHECK-DALI: mov.{{.+}}  %S{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-DALI: udiv_step.u8  0x7 %Z{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-DALI: udiv_step.u8  0x6 %Z{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-DALI: udiv_step.u8  0x5 %Z{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-DALI: udiv_step.u8  0x4 %Z{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-DALI: udiv_step.u8  0x3 %Z{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-DALI: udiv_step.u8  0x2 %Z{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-DALI: udiv_step.u8  0x1 %Z{{[0-9]+}}, %S{{[0-9]+}}
 
-; CHECK-GAUDI: mov.u8  %S{{[0-9]+}}, 0x0, %SP{{[0-9]+}}
-; CHECK-GAUDI: mov.u8  %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-GAUDI: udiv_4step.u8  0x7 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK-GAUDI: udiv_4step.u8  0x3 %Z{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK-GAUDI: mov.{{.+}}  %S{{[0-9]+}}, 0x0
+; CHECK-GAUDI: mov.{{.+}}  %S{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-GAUDI: udiv_4step.u8  0x7 %Z{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-GAUDI: udiv_4step.u8  0x3 %Z{{[0-9]+}}, %S{{[0-9]+}}
 
+
+; CHECK-GOYA2: mov.{{.+}}  %S{{[0-9]+}}, 0x0
+; CHECK-GOYA2: mov.{{.+}}  %S{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK-GOYA2: udiv_4step.u8 x2 0x6 %Z{{[0-9]+}}, %S{{[0-9]+}}
 
 target datalayout = "e-p0:32:32:32-p1:32:32:32-p2:32:32:32-p3:64:64:64-i32:32:32-i16:32:32-i8:32:32-n8:16:32-f16:16:16-f32:32:32-v16:32:32-v32:32:32-v160:32:32-v256:2048:2048-v2048:2048:2048-v4096:2048:2048-v8192:2048:2048"
 target triple = "tpc"

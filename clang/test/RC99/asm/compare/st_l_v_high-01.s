@@ -10,14 +10,14 @@ NOP; NOP; NOP; ST_L_V_HIGH S5, S30, V21
 NOP; NOP; NOP; ST_L_V_HIGH S6, S29, V22
 NOP; NOP; NOP; ST_L_V_HIGH S7, S28, V23
 
-// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, V16, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S1, S34, V17, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S2, S33, V18, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S3, S32, V19, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S4, S31, V20, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S5, S30, V21, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S6, S29, V22, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S7, S28, V23, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, V16
+// CHECK: nop;    nop;    nop;    st_l_v_high S1, S34, V17
+// CHECK: nop;    nop;    nop;    st_l_v_high S2, S33, V18
+// CHECK: nop;    nop;    nop;    st_l_v_high S3, S32, V19
+// CHECK: nop;    nop;    nop;    st_l_v_high S4, S31, V20
+// CHECK: nop;    nop;    nop;    st_l_v_high S5, S30, V21
+// CHECK: nop;    nop;    nop;    st_l_v_high S6, S29, V22
+// CHECK: nop;    nop;    nop;    st_l_v_high S7, S28, V23
 
 
 NOP; NOP; NOP; ST_L_V_HIGH S0, S35, V16, SP0
@@ -29,7 +29,7 @@ NOP; NOP; NOP; ST_L_V_HIGH S5, S30, V21, SP5
 NOP; NOP; NOP; ST_L_V_HIGH S6, S29, V22, SP6
 NOP; NOP; NOP; ST_L_V_HIGH S7, S28, V23, SP7
 
-// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, V16, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, V16
 // CHECK: nop;    nop;    nop;    st_l_v_high S1, S34, V17, SP1
 // CHECK: nop;    nop;    nop;    st_l_v_high S2, S33, V18, SP2
 // CHECK: nop;    nop;    nop;    st_l_v_high S3, S32, V19, SP3
@@ -67,14 +67,14 @@ NOP; NOP; NOP; ST_L_V_HIGH S5, S30, VP1
 NOP; NOP; NOP; ST_L_V_HIGH S6, S29, VP2
 NOP; NOP; NOP; ST_L_V_HIGH S7, S28, VP3
 
-// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, VP6, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S1, S34, VP7, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S2, S33, VP8, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S3, S32, VP9, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S4, S31, VP0, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S5, S30, VP1, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S6, S29, VP2, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high S7, S28, VP3, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, VP6
+// CHECK: nop;    nop;    nop;    st_l_v_high S1, S34, VP7
+// CHECK: nop;    nop;    nop;    st_l_v_high S2, S33, VP8
+// CHECK: nop;    nop;    nop;    st_l_v_high S3, S32, VP9
+// CHECK: nop;    nop;    nop;    st_l_v_high S4, S31
+// CHECK: nop;    nop;    nop;    st_l_v_high S5, S30, VP1
+// CHECK: nop;    nop;    nop;    st_l_v_high S6, S29, VP2
+// CHECK: nop;    nop;    nop;    st_l_v_high S7, S28, VP3
 
 
 NOP; NOP; NOP; ST_L_V_HIGH S0, S35, VP6, SP0
@@ -86,7 +86,7 @@ NOP; NOP; NOP; ST_L_V_HIGH S5, S30, VP1, SP5
 NOP; NOP; NOP; ST_L_V_HIGH S6, S29, VP2, SP6
 NOP; NOP; NOP; ST_L_V_HIGH S7, S28, VP3, SP7
 
-// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, VP6, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high S0, S35, VP6
 // CHECK: nop;    nop;    nop;    st_l_v_high S1, S34, VP7, SP1
 // CHECK: nop;    nop;    nop;    st_l_v_high S2, S33, VP8, SP2
 // CHECK: nop;    nop;    nop;    st_l_v_high S3, S32, VP9, SP3
@@ -124,14 +124,14 @@ NOP; NOP; NOP; ST_L_V_HIGH 123, S5, V21
 NOP; NOP; NOP; ST_L_V_HIGH 123, S6, V22
 NOP; NOP; NOP; ST_L_V_HIGH 123, S7, V23
 
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, V16, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S1, V17, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S2, V18, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S3, V19, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S4, V20, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S5, V21, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S6, V22, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S7, V23, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, V16
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S1, V17
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S2, V18
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S3, V19
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S4, V20
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S5, V21
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S6, V22
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S7, V23
 
 
 NOP; NOP; NOP; ST_L_V_HIGH 123, S0, V16, SP0
@@ -143,7 +143,7 @@ NOP; NOP; NOP; ST_L_V_HIGH 123, S5, V21, SP5
 NOP; NOP; NOP; ST_L_V_HIGH 123, S6, V22, SP6
 NOP; NOP; NOP; ST_L_V_HIGH 123, S7, V23, SP7
 
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, V16, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, V16
 // CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S1, V17, SP1
 // CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S2, V18, SP2
 // CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S3, V19, SP3
@@ -181,14 +181,14 @@ NOP; NOP; NOP; ST_L_V_HIGH 123, S5, VP1
 NOP; NOP; NOP; ST_L_V_HIGH 123, S6, VP2
 NOP; NOP; NOP; ST_L_V_HIGH 123, S7, VP3
 
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, VP6, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S1, VP7, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S2, VP8, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S3, VP9, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S4, VP0, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S5, VP1, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S6, VP2, SP0
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S7, VP3, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, VP6
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S1, VP7
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S2, VP8
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S3, VP9
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S4
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S5, VP1
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S6, VP2
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S7, VP3
 
 
 NOP; NOP; NOP; ST_L_V_HIGH 123, S0, VP6, SP0
@@ -200,7 +200,7 @@ NOP; NOP; NOP; ST_L_V_HIGH 123, S5, VP1, SP5
 NOP; NOP; NOP; ST_L_V_HIGH 123, S6, VP2, SP6
 NOP; NOP; NOP; ST_L_V_HIGH 123, S7, VP3, SP7
 
-// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, VP6, SP0
+// CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S0, VP6
 // CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S1, VP7, SP1
 // CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S2, VP8, SP2
 // CHECK: nop;    nop;    nop;    st_l_v_high 0x7b, S3, VP9, SP3

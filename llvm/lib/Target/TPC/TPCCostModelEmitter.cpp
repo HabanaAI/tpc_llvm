@@ -1,11 +1,11 @@
 //===- TPCCostModelEmitter.cpp --- Cost Model------------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// author: Michael Zuckerman
-//         mzuckerman@habana.ai
+//                     The LLVM Compiler Infrastructure:
+//
+//              2019 - This pass is a property of Habana labs
+//
+// Author: Michael Zuckerman
 //===----------------------------------------------------------------------===//
 //   TPC-COST MODEL creates a flow graph of the tpc kernel. This is done via the
 //   following steps:
@@ -22,6 +22,7 @@
 
 #include "TPCCostModelEmitter.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/IR/Dominators.h"
 
 using namespace llvm;
 

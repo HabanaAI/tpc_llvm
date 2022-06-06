@@ -5,10 +5,10 @@
 %struct._bfloat128_pair_t = type { <128 x bfloat16>, <128 x bfloat16> }
 @bfloat16_v128pair = external dso_local addrspace(2) global %struct._bfloat128_pair_t, section ".vldata"
 
-; CHECK: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0:%SP[0-9]+]]
-; CHECK-NEXT: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0:%SP[0-9]+]]
-; CHECK-NEXT: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0:%SP[0-9]+]]
-; CHECK-NEXT: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0:%SP[0-9]+]]
+; CHECK: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-NEXT: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-NEXT: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-NEXT: convert.f32 all_lanes target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
 
 ; Function Attrs: noinline nounwind
 define dso_local void @main() #0 {

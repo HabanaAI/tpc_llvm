@@ -1,3 +1,5 @@
+add_llvm_component_group(TPC)
+
 set(LLVM_TARGET_DEFINITIONS TPC.td)
 
 tablegen(LLVM TPCGenAsmWriter.inc -gen-asm-writer)
@@ -20,13 +22,17 @@ set(sources
   latencies.cpp
   latenciesGen1.cpp
   latenciesGen2.cpp
+  latenciesGen3.cpp
+  latenciesGen4.cpp
+  latenciesDoron1.cpp
   MemoryToReg.cpp
-  NodePreLegalizer.cpp
+  TPCModuleLegalizer.cpp
   ScalarToIRF.cpp
   TPCTargetMachine.cpp
   TPCTools.cpp
   TPCSubtarget.cpp
   TPCAsmPrinter.cpp
+  TPCEliminateRedundantLinearity.cpp
   TPCFrameLowering.cpp
   TPCInstrInfo.cpp
   TPCAddrOpt.cpp
@@ -54,6 +60,8 @@ set(sources
   TPCExpandHWRegCopies.cpp
   TPCUnHardwareLoops.cpp
   TPCSetSpillBase.cpp
+  TPCExpandHWRegCopies.cpp
+  TPCUnHardwareLoops.cpp
   TPCPredicateOptimizer.cpp
   TPCRegisterBalancer.cpp
   TPCLatencyResolver.cpp
@@ -70,14 +78,40 @@ set(sources
   TPCIndexSpace.cpp
   SCEVParser.cpp
   TPCCostModelEmitter.cpp
+  TPCEventProfiler.cpp
   TPCLoopData.cpp
+  TPCMachineInstrTools.cpp
+  TPCMachineLoopDependencyAnalysis.cpp
+  TPCMachineLoopLinearIV.cpp
+  TPCMarkupDirectMMIOAccess.cpp
   TPCMovCoalescer.cpp
   TPCScalarSink.cpp
   TPCImmToReg.cpp
   TPCCopyElision.cpp
+  TPCSwapFakePredicate.cpp
+  TPCIncMerger.cpp
+  TPCx2CombineUtil.cpp
   )
 
-add_llvm_target(TPCCodeGen ${sources})
+add_llvm_target(TPCCodeGen
+  ${sources}
+
+  LINK_COMPONENTS
+  Analysis
+  AsmPrinter
+  CodeGen
+  Core
+  IPO
+  MC
+  SelectionDAG
+  Support
+  Target
+  TPCDesc
+  TPCInfo
+
+  ADD_TO_COMPONENT
+  TPC
+  )
 
 add_subdirectory(MCTargetDesc)
 add_subdirectory(TargetInfo)

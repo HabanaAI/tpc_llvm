@@ -13,9 +13,9 @@ void main(int x0, int x2, int x3, int dest0, int dest1, int dest2)
   float64 temp_res1 = 0;
   float64 temp_res2 = 0;
 
-  temp_res0 = v_f32_lookup_1c_v_b(*ptr_x0, temp_res0, 0, e_fp32_rsqrt, x3, 0);
-  temp_res1 = v_f32_lookup_1c_v_b(*ptr_x1, temp_res0, 0, e_fp32_rsqrt, x3, 0);
-  temp_res2 = v_f32_lookup_1c_v_b(*ptr_x1, temp_res0, 0, e_fp32_rcp, x3, 0);
+  temp_res0 = v_f32_lookup_1c(*ptr_x0, e_fp32_rsqrt, 0, temp_res0, x3, 0);
+  temp_res1 = v_f32_lookup_1c(*ptr_x1, e_fp32_rsqrt, 0, temp_res0, x3, 0);
+  temp_res2 = v_f32_lookup_1c(*ptr_x1, e_fp32_rcp, 0, temp_res0, x3, 0);
 
   *res0 = temp_res0;
   *res1 = temp_res1;

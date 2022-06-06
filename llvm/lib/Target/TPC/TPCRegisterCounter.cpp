@@ -1,21 +1,22 @@
 //===---- TPCRegisterCounter.cpp --- Optimizes predicates ----------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
+//
+// This pass:
+// -
 //
 //===----------------------------------------------------------------------===//
 #define DEBUG_TYPE "tpc-rcount"
+
+#include "TPCFrameLowering.h"
 #include "TPCInstrInfo.h"
 #include "TPCSubtarget.h"
-#include "TPCFrameLowering.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "MCTargetDesc/TPCMCTargetDesc.h"
-#include "MCTargetDesc/TPCMCInstrInfo.h"
 #include "MCTargetDesc/TPCInstPrinter.h"
+#include "MCTargetDesc/TPCMCInstrInfo.h"
+#include "MCTargetDesc/TPCMCTargetDesc.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Target/TargetMachine.h"
 #include <set>
 #include <sstream>
 
@@ -100,8 +101,8 @@ bool TPCRegisterCounter::runOnMachineFunction(MachineFunction &MF) {
       VectorSz = 0;
   }
 
-  const TPCInstrInfo *TII = MF.getSubtarget<TPCSubtarget>().getInstrInfo();
-  const TPCRegisterInfo &RI = TII->getRegisterInfo();
+  // const TPCInstrInfo *TII = MF.getSubtarget<TPCSubtarget>().getInstrInfo();
+  // const TPCRegisterInfo &RI = TII->getRegisterInfo();
 
   std::set<unsigned> SRF;
   std::set<unsigned> VRF;
@@ -117,9 +118,10 @@ bool TPCRegisterCounter::runOnMachineFunction(MachineFunction &MF) {
           continue;
         if (!MO.getReg().isPhysical())
           continue;
-        unsigned R = MO.getReg();
+        Register R = MO.getReg();
         if (R) {
-          const TargetRegisterClass *RegClass =  TII->getClassOfPhysicalRegister(R, RI);
+          const MachineRegisterInfo &MRI = MF.getRegInfo();
+          const TargetRegisterClass *RegClass = getRegisterClass(R, MRI);
           if (RegClass == &TPC::VRFRegClass) {
             VRF.insert(R);
           } else if (RegClass == &TPC::SRFRegClass) {

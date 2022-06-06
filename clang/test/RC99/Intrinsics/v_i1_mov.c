@@ -1,6 +1,6 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi %s -o - | FileCheck %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 %s -o - | FileCheck --check-prefixes=CHECK,CHECK-G3 %s
 
 void main(int dest, int x, int vpredp, _Bool pred) {
   volatile bool256 __local *dest_ptr = (bool256 __local *)dest;
@@ -106,4 +106,55 @@ void main(int dest, int x, int vpredp, _Bool pred) {
 
     income = res;
   }
+
+#if defined(__goya2__) || defined(__gaudi2__)
+
+  // v_i1_mov_u32_b
+  {
+    bool256 res = income;
+    volatile uint64 __local *val_ptr = (uint64 __local *)dest_ptr;
+    uint64 val = *val_ptr;
+    dest_ptr++;
+
+    res = v_i1_mov_u32_b(val, 0, res, pred, 0);
+    *dest_ptr++ = res;
+// CHECK-G3: mov    [[DEST]], %V{{.*}}, [[PRED]]
+
+    income = res;
+  }
+
+  // v_i1_mov_u32_vb
+  {
+    bool256 res = income;
+    volatile uint64 __local *val_ptr = (uint64 __local *)dest_ptr;
+    uint64 val = *val_ptr;
+    dest_ptr++;
+
+    res = v_i1_mov_u32_vb(val, 0, res, vpred, 0);
+    *dest_ptr++ = res;
+// CHECK-G3: mov    [[DEST]], %V{{.*}}, [[VPRED]]
+
+    income = res;
+  }
+
+  // v_u32_mov_i1_b
+  {
+    volatile uint64 __local *dptr = (uint64 __local *)dest_ptr;
+    uint64 res = *dptr++;
+
+    res = v_u32_mov_i1_b(income, 0, res, pred, 0);
+    *dptr++ = res;
+// CHECK-G3: mov    %V{{.*}}, %VP{{.*}}, [[PRED]]
+  }
+
+  // v_u32_mov_i1_vb
+  {
+    volatile uint64 __local *dptr = (uint64 __local *)dest_ptr;
+    uint64 res = *dptr++;
+
+    res = v_u32_mov_i1_vb(income, 0, res, vpred, 0);
+    *dptr++ = res;
+// CHECK-G3: mov    %V{{.*}}, %VP{{.*}}, [[VPRED]]
+  }
+#endif
 }

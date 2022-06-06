@@ -8,7 +8,7 @@ void main(tensor ifm , tensor ofm)
     float64 zeros = 0;
     bool256 pp = 1;
     bool256 p = 0;
-    p = bv_mov_b_b(1,p,1,0);
+    p = v_i1_mov_i1_b(1, 0, p, 1, 0);
     // spatial for loops
     for (int h = 0 ; h < 10; h++)
     {
@@ -17,9 +17,9 @@ void main(tensor ifm , tensor ofm)
         {
             addr[2] = w;
             float64 tmp = 0;
-            tmp = v_f32_ld_tnsr_i_b(addr,ifm,tmp,1,0);
-            tmp = v_f32_max_v_v_vb(tmp,zeros,tmp,p,0);
-            f32_st_tnsr_i_v_b(addr,ofm,tmp,1,0);
+            tmp = v_f32_ld_tnsr_b(addr, ifm, 0, tmp, 1, 0);
+            tmp = v_f32_max_vb(tmp, zeros, 0, tmp, to_bool64(p), 0);
+            v_f32_st_tnsr(addr, ofm, tmp, 0, 1, 0);
         }
     }
 }

@@ -28,7 +28,7 @@ void main(tensor in, tensor out_max, tensor out_maxidx)
 	float64 fltZero = 0.0f;
 	float64 fltMax = 3.402823466e+38F;
 	float64 fltMin = 0;
-	fltMin = v_f32_sub_v_v_b(fltZero, fltMax, fltMin, 0, 0, 1);
+	fltMin = v_f32_sub_b(fltZero, fltMax, 0 << 1, fltMin, 0, 1);
 
 	for (int C_itr = 0; C_itr < C_end; C_itr += 64)
 	{
@@ -52,7 +52,7 @@ void main(tensor in, tensor out_max, tensor out_maxidx)
 					int inputWindowStartW = W_itr * strideW - paddingW;
 					//float64 maxVal = fltMin;
 					float64 maxVal = 0;
-					maxVal = v_f32_mov_v_b(fltMin, maxVal, 1, 0);
+					maxVal = v_f32_mov_b(fltMin, 0, maxVal, 1, 0);
 					int64 maxIdx = 0;
 
 					// Window handling starts here
@@ -65,23 +65,23 @@ void main(tensor in, tensor out_max, tensor out_maxidx)
 							int idxInWindow = kH_itr * windowW + kW_itr;
 							curInputIndex[1] = inputWindowStartW + kW_itr;
 							float64 inputValVec = 0;
-							inputValVec = v_f32_ld_tnsr_i_b(curInputIndex, in,inputValVec, 1, 0);
+							inputValVec = v_f32_ld_tnsr_b(curInputIndex, in, 0, inputValVec, 1, 0);
 							/*
 							// This is the code I need but the intrinsics for sel2 aren't implemented yet. So I will come up with a different flavor of the code.
-							float64_int64_pair_t respair = v_f32_i32_sel2_grt_v_v_v_s_b(inputValVec, maxVal, maxIdx, idxInWindow, 1, 0);
+							float64_int64_pair_t respair = v_i32_sel2_grt_f32_b(inputValVec, maxVal, maxIdx, idxInWindow, 0, 1, 0, );
 							maxVal = respair.a;
 							maxIdx = respair.b;
 							*/
 							bool256 predGrt = 0;
-							predGrt = bv_f32_cmp_grt_v_v_b(inputValVec, maxVal,predGrt, 1, 0);
-							//float64 v_f32_mov_v_vb(float64 a, bool256 predicate, bool predicatePolarity);
-							maxVal = v_f32_mov_v_vb(inputValVec, maxVal, predGrt, 0);
-							//int64 v_i32_mov_s_vb(int32_t a, bool256 predicate, bool predicatePolarity);
-							maxIdx = v_i32_mov_s_vb(idxInWindow, maxIdx, predGrt, 0);
+							predGrt = from_bool64(v_f32_cmp_grt_b(inputValVec, maxVal, 0, to_bool64(predGrt), 1, 0));
+							//float64 v_f32_mov_vb(float64 a, 0, bool256 predicate, to_bool64(bool predicatePolarity), );
+							maxVal = v_f32_mov_vb(inputValVec, 0, maxVal, to_bool64(predGrt), 0);
+							//int64 v_i32_mov_vb(int32_t a, 0, bool256 predicate, to_bool64(bool predicatePolarity), );
+							maxIdx = v_i32_mov_vb(idxInWindow, 0, maxIdx, to_bool64(predGrt), 0);
 						}
 					}
-					f32_st_tnsr_i_v_b(curOutputIndex, out_max, maxVal, 1, 0);
-					i32_st_tnsr_i_v_b(curOutputIndex, out_maxidx, maxIdx, 1, 0);
+					v_f32_st_tnsr(curOutputIndex, out_max, maxVal, 0, 1, 0);
+					v_i32_st_tnsr(curOutputIndex, out_maxidx, maxIdx, 0, 1, 0);
 				} // W loop
 			} // H loop
 		} // B loop

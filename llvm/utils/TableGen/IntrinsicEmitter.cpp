@@ -244,15 +244,17 @@ enum IIT_Info {
   IIT_SCALABLE_VEC = 43,
   IIT_SUBDIVIDE2_ARG = 44,
   IIT_SUBDIVIDE4_ARG = 45,
-  IIT_VEC_OF_BITCASTS_TO_INT = 46
+  IIT_VEC_OF_BITCASTS_TO_INT = 46,
+  IIT_V128 = 47,
+  IIT_BF16 = 48,
+  IIT_STRUCT9 = 49,
+  IIT_V256 = 50,
+  IIT_AMX  = 51
 #ifdef LLVM_TPC_COMPILER
   ,
-  IIT_V5 = 47,
-  IIT_V128 = 48,
-  IIT_V256 = 49,
-  IIT_BF16 = 50,
-  IIT_F8_143 = 51,
-  IIT_F8_152 = 52
+  IIT_V5 = 52,
+  IIT_F8_143 = 53,
+  IIT_F8_152 = 54
 
 #endif
 };
@@ -260,7 +262,7 @@ enum IIT_Info {
 static void EncodeFixedValueType(MVT::SimpleValueType VT,
                                  std::vector<unsigned char> &Sig) {
   if (MVT(VT).isInteger()) {
-    unsigned BitWidth = MVT(VT).getSizeInBits();
+    unsigned BitWidth = MVT(VT).getFixedSizeInBits();
     switch (BitWidth) {
     default: PrintFatalError("unhandled integer type width in intrinsic!");
     case 1: return Sig.push_back(IIT_I1);
@@ -275,18 +277,19 @@ static void EncodeFixedValueType(MVT::SimpleValueType VT,
   switch (VT) {
   default: PrintFatalError("unhandled MVT in intrinsic!");
   case MVT::f16: return Sig.push_back(IIT_F16);
+  case MVT::bf16: return Sig.push_back(IIT_BF16);
   case MVT::f32: return Sig.push_back(IIT_F32);
   case MVT::f64: return Sig.push_back(IIT_F64);
   case MVT::f128: return Sig.push_back(IIT_F128);
   case MVT::token: return Sig.push_back(IIT_TOKEN);
   case MVT::Metadata: return Sig.push_back(IIT_METADATA);
   case MVT::x86mmx: return Sig.push_back(IIT_MMX);
+  case MVT::x86amx: return Sig.push_back(IIT_AMX);
   // MVT::OtherVT is used to mean the empty struct type here.
   case MVT::Other: return Sig.push_back(IIT_EMPTYSTRUCT);
   // MVT::isVoid is used to represent varargs here.
   case MVT::isVoid: return Sig.push_back(IIT_VARARG);
 #ifdef LLVM_TPC_COMPILER
-  case MVT::bf16: return Sig.push_back(IIT_BF16);
   case MVT::f8_143: return Sig.push_back(IIT_F8_143);
   case MVT::f8_152: return Sig.push_back(IIT_F8_152);
 #endif
@@ -398,10 +401,8 @@ static void EncodeFixedType(Record *R, std::vector<unsigned char> &ArgCodes,
     case 16: Sig.push_back(IIT_V16); break;
     case 32: Sig.push_back(IIT_V32); break;
     case 64: Sig.push_back(IIT_V64); break;
-#ifdef LLVM_TPC_COMPILER
     case 128: Sig.push_back(IIT_V128); break;
     case 256: Sig.push_back(IIT_V256); break;
-#endif
     case 512: Sig.push_back(IIT_V512); break;
     case 1024: Sig.push_back(IIT_V1024); break;
     }
@@ -487,6 +488,7 @@ static void ComputeFixedEncoding(const CodeGenIntrinsic &Int,
       case 6: TypeSig.push_back(IIT_STRUCT6); break;
       case 7: TypeSig.push_back(IIT_STRUCT7); break;
       case 8: TypeSig.push_back(IIT_STRUCT8); break;
+      case 9: TypeSig.push_back(IIT_STRUCT9); break;
       default: llvm_unreachable("Unhandled case in struct");
     }
 
@@ -599,6 +601,12 @@ struct AttributeComparator {
     if (L->isNoReturn != R->isNoReturn)
       return R->isNoReturn;
 
+    if (L->isNoSync != R->isNoSync)
+      return R->isNoSync;
+
+    if (L->isNoFree != R->isNoFree)
+      return R->isNoFree;
+
     if (L->isWillReturn != R->isWillReturn)
       return R->isWillReturn;
 
@@ -644,13 +652,13 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
       std::max(maxArgAttrs, unsigned(intrinsic.ArgumentAttributes.size()));
     unsigned &N = UniqAttributes[&intrinsic];
     if (N) continue;
-    assert(AttrNum < 256 && "Too many unique attributes for table!");
     N = ++AttrNum;
+    assert(N < 65536 && "Too many unique attributes for table!");
   }
 
   // Emit an array of AttributeList.  Most intrinsics will have at least one
   // entry, for the function itself (index ~1), which is usually nounwind.
-  OS << "  static const uint8_t IntrinsicsToAttributesMap[] = {\n";
+  OS << "  static const uint16_t IntrinsicsToAttributesMap[] = {\n";
 
   for (unsigned i = 0, e = Ints.size(); i != e; ++i) {
     const CodeGenIntrinsic &intrinsic = Ints[i];
@@ -678,14 +686,15 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
     unsigned ai = 0, ae = intrinsic.ArgumentAttributes.size();
     if (ae) {
       while (ai != ae) {
-        unsigned argNo = intrinsic.ArgumentAttributes[ai].first;
-        unsigned attrIdx = argNo + 1; // Must match AttributeList::FirstArgIndex
+        unsigned attrIdx = intrinsic.ArgumentAttributes[ai].Index;
 
         OS << "      const Attribute::AttrKind AttrParam" << attrIdx << "[]= {";
         bool addComma = false;
 
+        bool AllValuesAreZero = true;
+        SmallVector<uint64_t, 8> Values;
         do {
-          switch (intrinsic.ArgumentAttributes[ai].second) {
+          switch (intrinsic.ArgumentAttributes[ai].Kind) {
           case CodeGenIntrinsic::NoCapture:
             if (addComma)
               OS << ",";
@@ -696,6 +705,12 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
             if (addComma)
               OS << ",";
             OS << "Attribute::NoAlias";
+            addComma = true;
+            break;
+          case CodeGenIntrinsic::NoUndef:
+            if (addComma)
+              OS << ",";
+            OS << "Attribute::NoUndef";
             addComma = true;
             break;
           case CodeGenIntrinsic::Returned:
@@ -728,21 +743,48 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
             OS << "Attribute::ImmArg";
             addComma = true;
             break;
+          case CodeGenIntrinsic::Alignment:
+            if (addComma)
+              OS << ',';
+            OS << "Attribute::Alignment";
+            addComma = true;
+            break;
           }
+          uint64_t V = intrinsic.ArgumentAttributes[ai].Value;
+          Values.push_back(V);
+          AllValuesAreZero &= (V == 0);
 
           ++ai;
-        } while (ai != ae && intrinsic.ArgumentAttributes[ai].first == argNo);
+        } while (ai != ae && intrinsic.ArgumentAttributes[ai].Index == attrIdx);
         OS << "};\n";
+
+        // Generate attribute value array if not all attribute values are zero.
+        if (!AllValuesAreZero) {
+          OS << "      const uint64_t AttrValParam" << attrIdx << "[]= {";
+          addComma = false;
+          for (const auto V : Values) {
+            if (addComma)
+              OS << ',';
+            OS << V;
+            addComma = true;
+          }
+          OS << "};\n";
+        }
+
         OS << "      AS[" << numAttrs++ << "] = AttributeList::get(C, "
-           << attrIdx << ", AttrParam" << attrIdx << ");\n";
+           << attrIdx << ", AttrParam" << attrIdx;
+        if (!AllValuesAreZero)
+          OS << ", AttrValParam" << attrIdx;
+        OS << ");\n";
       }
     }
 
     if (!intrinsic.canThrow ||
-        (intrinsic.ModRef != CodeGenIntrinsic::ReadWriteMem && !intrinsic.hasSideEffects) ||
-        intrinsic.isNoReturn || intrinsic.isWillReturn || intrinsic.isCold ||
-        intrinsic.isNoDuplicate || intrinsic.isConvergent ||
-        intrinsic.isSpeculatable) {
+        (intrinsic.ModRef != CodeGenIntrinsic::ReadWriteMem &&
+         !intrinsic.hasSideEffects) ||
+        intrinsic.isNoReturn || intrinsic.isNoSync || intrinsic.isNoFree ||
+        intrinsic.isWillReturn || intrinsic.isCold || intrinsic.isNoDuplicate ||
+        intrinsic.isConvergent || intrinsic.isSpeculatable) {
       OS << "      const Attribute::AttrKind Atts[] = {";
       bool addComma = false;
       if (!intrinsic.canThrow) {
@@ -753,6 +795,18 @@ void IntrinsicEmitter::EmitAttributes(const CodeGenIntrinsicTable &Ints,
         if (addComma)
           OS << ",";
         OS << "Attribute::NoReturn";
+        addComma = true;
+      }
+      if (intrinsic.isNoSync) {
+        if (addComma)
+          OS << ",";
+        OS << "Attribute::NoSync";
+        addComma = true;
+      }
+      if (intrinsic.isNoFree) {
+        if (addComma)
+          OS << ",";
+        OS << "Attribute::NoFree";
         addComma = true;
       }
       if (intrinsic.isWillReturn) {

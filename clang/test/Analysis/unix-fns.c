@@ -3,7 +3,7 @@
 // RUN: mkdir -p %t.dir
 // RUN: %clang_analyze_cc1 -analyzer-checker=core,unix.API,osx.API,optin.portability -analyzer-output=html -analyzer-config faux-bodies=true -fblocks -o %t.dir %s
 // RUN: rm -fR %t.dir
-// XFAIL: *
+
 
 struct _opaque_pthread_once_t {
   long __sig;

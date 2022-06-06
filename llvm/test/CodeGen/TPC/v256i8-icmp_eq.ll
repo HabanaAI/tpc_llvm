@@ -1,8 +1,8 @@
 ; RUN: llc -O0 -march=tpc -mcpu=dali  %s -o - | FileCheck %s
-; CHECK: ld_tnsr %V{{[0-9]+}}, 0x0, %I{{[0-9]+}}, %SP{{[0-9]+}}
-; CHECK: add.i8 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x2, %SP{{[0-9]+}}
-; CHECK: cmp_eq.i8 %VP{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %VP{{[0-9]+}}
-; CHECK: st_tnsr 0x{{[0-9]+}}, %I{{[0-9]+}}, %V{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK: ld_tnsr %V{{[0-9]+}}, 0x0, %I{{[0-9]+}}
+; CHECK: add.i8 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x2
+; CHECK: cmp_eq.i8 %VP{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: st_tnsr 0x{{[0-9]+}}, %I{{[0-9]+}}, %V{{[0-9]+}}
 
 target triple = "tpc"
 

@@ -1,5 +1,5 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck --check-prefixes=CHECK %s
 
 void main(int dest, int src1, int vpredp, _Bool pred) {
   volatile bfloat128 __local *dest_ptr = (bfloat128 __local *)dest;
@@ -32,7 +32,7 @@ void main(int dest, int src1, int vpredp, _Bool pred) {
 
     res = v_convert_i32_to_bf16_b(x, 2, SW_RHNE, res, 1, 0);
     *dest_ptr++ = res;
-// CHECK: convert.i32 lane_sel=2 target_type=bf16 rhne [[DEST]], [[SRC]], %SP0
+// CHECK: convert.i32 lane_sel=2 target_type=bf16 rhne [[DEST]], [[SRC]]
     
     res = v_convert_i32_to_bf16_b(x, 1, 0, res, pred, 0);
     *dest_ptr++ = res;

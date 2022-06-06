@@ -43,7 +43,9 @@ enum OperandType {
   OPERAND_PREDICATE,
   // Immediate operand that represents type of values involved in operation.
   OPERAND_DATATYPE,
-  OPERAND_DIMMASK
+  OPERAND_DIMMASK,
+  // An immediate operand marks a SwitchSet operand.
+  OPERAND_SWITCH
 };
 } // end namespace TPC
 

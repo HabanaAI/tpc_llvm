@@ -8,12 +8,12 @@ void main(int x0, signed char x1, int x2, int dest0, int dest1)
     
    char256 __local *res0 = (char256  __local *)dest0;
     char256 temp_res0 = 0;
-    temp_res0 = v_i8_and_v_s_b(*ptr_x0, 1, temp_res0, x2, 0);
+    temp_res0 = v_i8_and_b(*ptr_x0, 1, 0, temp_res0, x2, 0);
     *res0 = temp_res0;
     
    char256 __local *res1 = (char256  __local *)dest1;
     char256 temp_res1 = 0;
-    temp_res1 = v_i8_and_v_s_b(*ptr_x0, x1, temp_res1, x2, 0);
+    temp_res1 = v_i8_and_b(*ptr_x0, x1, 0, temp_res1, x2, 0);
     *res1 = temp_res1;
 }
 //CHECK-ASM: .globl main

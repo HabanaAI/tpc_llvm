@@ -1,0 +1,39 @@
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 %s -o - | FileCheck %s
+
+void main(int dest, float src1, int src2, _Bool pred) {
+  float __local *dest_ptr = (float __local *)dest;
+  float res = 0;
+
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_RHNE, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 rhne %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_RZ, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 rz %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_RU, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 ru %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_RD, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 rd %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_SR, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 sr %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_CSR, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 default %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_RHAZ, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 rhaz %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_SR_RNE, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 sr_rne %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+
+  res = s_convert_fp_flex_f16_to_f32(src1, src2, SW_CLIP_FP | SW_CSR, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 default clip_fp %S{{[0-9]+}}, %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+
+  res = s_convert_fp_flex_f16_to_f32(src1, 0x07be, SW_CSR, res, pred, 0);
+// CHECK-DAG: convert_fp_flex.f32 default %S{{[0-9]+}}, %S{{[0-9]+}}, 0x7be, %SP{{[0-9]+}}
+  *dest_ptr++ = res;
+}

@@ -1,0 +1,59 @@
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck %s
+
+void main(int dest, int src1, int vpredp, _Bool pred) {
+  volatile half128 __local *dest_ptr = (half128 __local *)dest;
+  int64 __local *src_ptr = (int64 __local *)src1;
+  bool256 __local *vpred_ptr = (bool256 __local *)vpredp;
+
+  int128 x      = {*src_ptr++, 0};
+  bool256  vpred  = *vpred_ptr++;
+  half128  income = *dest_ptr;
+
+// CHECK-DAG: ld_l_v   [[DEST:%V[0-9]+]], %S0
+// CHECK-DAG: ld_l_v   %V[[SRC:[0-9]+]], %S1
+// CHECK-DAG: ld_l_v   [[VPRED:%VP[0-9]+]], %S2
+// CHECK-DAG: mov{{.*}}	[[PRED:%SP[0-9]+]], %S3
+
+  // v_convert_i32_to_f16_all_b
+  {
+    half128 res = income;
+
+    res = v_convert_i32_to_f16_all_b(x, 0, res, pred, 0);
+    *dest_ptr++ = res;
+    // CHECK: convert.i32 all_lanes target_type=f16 rhne [[DEST]], %D[[SRC]], [[PRED]]
+
+    res = v_convert_i32_to_f16_all_b(x, 0, res, pred, 0);
+    *dest_ptr++ = res;
+    // CHECK: convert.i32 all_lanes target_type=f16 rhne [[DEST]], %D[[SRC]], [[PRED]]
+    res = v_convert_i32_to_f16_all_b(x, 0, res, pred, 1);
+    *dest_ptr++ = res;
+    // CHECK: convert.i32 all_lanes target_type=f16 rhne [[DEST]], %D[[SRC]], ![[PRED]]
+
+    res = v_convert_i32_to_f16_all_b(x, SW_RHNE, res, 1, 0);
+    *dest_ptr++ = res;
+    // CHECK: convert.i32 all_lanes target_type=f16 rhne [[DEST]], %D[[SRC]]
+
+    income = res;
+  }
+
+  // v_convert_i32_to_f16_all_vb
+  {
+    half128 res = income;
+
+    res = v_convert_i32_to_f16_all_vb(x, 0, res, to_bool128(vpred), 0);
+    *dest_ptr++ = res;
+// CHECK: convert.i32 all_lanes target_type=f16 rhne [[DEST]], %D[[SRC]], [[VPRED]]
+
+    res = v_convert_i32_to_f16_all_vb(x, 0, res, to_bool128(vpred), 1);
+    *dest_ptr++ = res;
+// CHECK: convert.i32 all_lanes target_type=f16 rhne [[DEST]], %D[[SRC]], ![[VPRED]]
+
+    res = v_convert_i32_to_f16_all_vb(x, SW_RHNE, res, to_bool128(vpred), 0);
+    *dest_ptr++ = res;
+// CHECK: convert.i32 all_lanes target_type=f16 rhne [[DEST]], %D[[SRC]], [[VPRED]]
+
+    income = res;
+  }
+}
+
+

@@ -1,13 +1,5 @@
-//===---- TPCImmToReg.cpp--------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-//===----------------------------------------------------------------------===//
-
+//===---- TPCImmToReg.cpp ------------===//
+//===---------------------------------===//
 #include "MCTargetDesc/TPCMCInstrInfo.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
 #include "TPCInstrInfo.h"
@@ -235,7 +227,7 @@ unsigned TPCImmToReg::createReg(MachineFunction &Func, int64_t imm,
       .addImm(TPCII::OpType::INT32)
       .addImm(0)
       .addReg(v_reg, RegState::Undef)
-      .addReg(TPC::SP0)
+      .addReg(TPC::SPRF_TRUE)
       .addImm(0);
   return v_reg;
 }

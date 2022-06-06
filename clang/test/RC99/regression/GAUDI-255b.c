@@ -39,7 +39,7 @@ void main(tensor ifm, tensor ofm, char firstActivation, char lastActivation)
             int5 ifmIndex = {d};
             for (int k=0; k<K; k++)
             {
-            //    unsorted[k] = v_i8_ld_tnsr_i(ifmIndex,ifm);
+            //    unsorted[k] = v_i8_ld_tnsr_b(ifmIndex, ifm, 0, 0, 1, 0);
             //    ifmIndex[0]++;
                 unsorted[k] = 1;
             }
@@ -51,7 +51,7 @@ void main(tensor ifm, tensor ofm, char firstActivation, char lastActivation)
                 sum += unsorted[k];
             }
             
-            i8_st_tnsr_i_v(index_space_start, ofm, sum);
+            v_i8_st_tnsr(index_space_start, ofm, sum, 0, 1, 0);
         }
     }
 }

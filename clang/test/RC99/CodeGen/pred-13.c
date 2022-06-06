@@ -2,7 +2,7 @@
 
 void main(int dest, int src1, int src2) {
   int val = 0;
-  val = s_i32_add_s_s_b(src1, src2, val, e_no_saturation, 0, 0);
+  val = s_i32_add(src1, src2, SW_NO_SAT, val, 0, 0);
   *(int __local *)dest = val;
 }
 

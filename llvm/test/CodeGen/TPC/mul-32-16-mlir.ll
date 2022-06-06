@@ -1,8 +1,8 @@
 ; RUN: llc -march=tpc -mcpu=gaudi %s -o %t.o --filetype=obj
-; RUN: %disasm -mcpu=gaudi %t.o | FileCheck %s
+; RUN: %disasm --mcpu=gaudi %t.o | FileCheck %s
 
 ; RUN: llc -march=tpc -mcpu=goya %s -o %t.o --filetype=obj
-; RUN: %disasm -mcpu=goya %t.o | FileCheck %s
+; RUN: %disasm --mcpu=goya %t.o | FileCheck %s
 
 ; CHECK: convert_int32 lane_sel=0 rhne to_16
 ; CHECK: convert_int32 lane_sel=1 rhne to_16

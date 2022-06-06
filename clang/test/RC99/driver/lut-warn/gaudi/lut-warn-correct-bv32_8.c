@@ -15,10 +15,10 @@ void main(int x0, int x2, int x3, int dest0, int dest1, int dest2, int dest3) {
   float64 temp_res2 = 0;
   float64 temp_res3 = 0;
 
-  temp_res0 = v_f32_lookup_1c_v_b(*ptr_x0, temp_res0, 0, e_fp32_pow2, x3, 0);
-  temp_res1 = v_f32_lookup_1c_v_b(*ptr_x1, temp_res0, 2, e_i8_exp_linear, x3, 0);
-  temp_res2 = v_f32_lookup_1c_v_b(*ptr_x1, temp_res0, 3, e_i8_tanh_linear, x3, 0);
-  temp_res3 = v_f32_lookup_1c_v_b(*ptr_x1, temp_res0, 3, e_i8_sigmoid_linear, x3, 0);
+  temp_res0 = v_f32_lookup_1c(*ptr_x0, e_fp32_pow2, 0, temp_res0, x3, 0);
+  temp_res1 = v_f32_lookup_1c(*ptr_x1, e_i8_exp_linear, 2, temp_res0, x3, 0);
+  temp_res2 = v_f32_lookup_1c(*ptr_x1, e_i8_tanh_linear, 3, temp_res0, x3, 0);
+  temp_res3 = v_f32_lookup_1c(*ptr_x1, e_i8_sigmoid_linear, 3, temp_res0, x3, 0);
 
   *res0 = temp_res0;
   *res1 = temp_res1;

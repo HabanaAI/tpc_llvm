@@ -1,8 +1,4 @@
-//===--------InstructionDB.cpp---------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//===----------------------------------------------------------------------===//
 //
 //===----------------------------------------------------------------------===//
 //
@@ -74,6 +70,8 @@ enum OpType : unsigned {
   Invalid = ~0U
 };
 
+unsigned getOpTypeMinSizeBits(const OpType Ty);
+
 // Special Instruction opcodes
 // *** Must match TPCInstrFormat*.td ***
 
@@ -97,7 +95,10 @@ const uint64_t
   LD_TNSR         = 0x11,
   LD_TNSR_LOW     = 0x12,
   LD_TNSR_HIGH    = 0x13,
+  LD_FCLASS       = 0x15,
+  LD_CALC_FP_SPECIAL = 0x16,
   LD_EVENT        = 0x18,
+  LD_TNSR_CNVRT   = 0x19,
   ldNOP           = 0x1f;
 
 // Scalar slot
@@ -146,7 +147,7 @@ const uint64_t
   spuCALC_FP_SPECIAL= 0x34,
   spuCONVERT_INT8   = 0x35,
   spuCONVERT_UINT8  = 0x36,
-  spuCONVERT_FP_FLEX= 0x38,
+  spuTHREAD_SYNC    = 0x38,
   spuDBG            = 0x3E,
   spuNOP            = 0x3F,
   spuCONVERT_INT64  = 0x40;
@@ -230,6 +231,10 @@ const uint64_t
   stLD_TNSR_HIGH  = 0x13,
   CACHE_FLUSH     = 0x14,
   CACHE_INVALIDATE = 0x15,
+  ST_TNSR_SQZ     = 0x16,
+  ST_TNSR_S       = 0x17,
+  ST_EVENT        = 0x18,
+  stLD_TNSR_CNVRT = 0x19,
   stNOP           = 0x1f;
 
 
@@ -251,14 +256,21 @@ enum : unsigned {
   SW_X2_MOV             = 1U << 2,
 
   SW_NUM_LANES_SRCB     = 1U << 6,
+  SW_LOWER_LANES_SRCB   = 2U << 6,
+  SW_UPPER_LANES_SRCB   = 3U << 6,
   SW_ALL_LANES_SRCB     = 0,
   SW_SINGLE_LANE_SRCB   = SW_NUM_LANES_SRCB,
+  SW_NUM_LANES_SRCB_G5  = SW_NUM_LANES_SRCB | SW_UPPER_LANES_SRCB | SW_LOWER_LANES_SRCB, 
+
   SW_X2_CONVERT         = 1U << 7,
   SW_CLIP_FP16          = 1U << 7,
 
   SW_NUM_LANES          = 1U << 2,
   SW_ALL_LANES          = 0,
   SW_SINGLE_LANE        = SW_NUM_LANES,
+  SW_LOWER_LANES        = 2U << 2,
+  SW_UPPER_LANES        = 3U << 2,
+  SW_NUM_LANES_G5  = SW_NUM_LANES | SW_UPPER_LANES | SW_LOWER_LANES, 
 
   SW_TYPE               = 0x0f,
   SW_FP32               = OpType::FP32,
@@ -270,7 +282,23 @@ enum : unsigned {
   SW_INT16              = OpType::INT16,
   SW_UINT16             = OpType::UINT16,
   SW_FP16               = OpType::FP16,
+  SW_FP8_152            = OpType::FP8_152,
+  SW_FP8_143            = OpType::FP8_143,
   SW_INT64              = OpType::INT64,
+
+  SW_DT                 = 0x0f,
+  SW_DT_INT8            = 0,
+  SW_DT_INT16           = 0x01,
+  SW_DT_INT32           = 0x02,
+  SW_DT_UINT8           = 0x03,
+  SW_DT_UINT16          = 0x04,
+  SW_DT_UINT32          = 0x05,
+  SW_DT_BF16            = 0x06,
+  SW_DT_FP32            = 0x07,
+  SW_DT_FP16            = 0x08,
+  SW_DT_FP8_152         = 0x09,
+  SW_DT_FP8_143         = 0x0a,
+  SW_DT_INT64           = 0x0b,
 
   SW_TO_TYPE            = 0x0f << 8,
   SW_TO_FP32            = OpType::FP32 << 8,
@@ -289,9 +317,12 @@ enum : unsigned {
   SW_TO_8               = 0,
   SW_TO_16              = SW_GROUP_TO,
   SW_CNVRT              = 1U << 4,
+  SW_NEARBY_LANES       = 1U << 3,
 
   SW_LIMIT              = 1U << 0,
-  SW_MOV_IRF_DIM_BOTH   = 1U << 3
+  SW_MOV_IRF_DIM_BOTH   = 1U << 3,
+  
+  SW_ADDR_CALC          = 1U << 2
 };
 
 // DimMask as switch.
@@ -339,6 +370,8 @@ const unsigned SW_CARRY           = 1U << 1;
 const unsigned SW_NO_CARRY_GEN    = 1U << 2;
 const unsigned SW_NEG             = 1U << 1;
 const unsigned SW_MASK_EQ_ZERO    = 1U << 0;
+const unsigned SW_SUP_NAN         = 1U << 2;
+const unsigned SW_HIGH32          = 1U << 1;
 const unsigned SW_UPPER32         = 1U << 2;
 const unsigned SW_AUTO_INC_G3     = 1U << 0;
 const unsigned SW_INC_VAL_G3      = 0x3 << 2;
@@ -356,13 +389,14 @@ const unsigned SW_BV64            = 1 << 4;
 const unsigned SW_ST_TNSR_S_BV64  = 1 << 2;
 const unsigned SW_EV_HINT         = 1U << 6;
 const unsigned SW_SUBTRACT_BIAS   = 1U << 0;
+const unsigned SW_PRE_LOG         = 1U << 1;
 const unsigned SW_GROUP_RND32     = 0x03;
 const unsigned SW_RND32_NO_ROUND  = 0;
 const unsigned SW_RND32_DNR32     = 0x1;
 const unsigned SW_RND32_KEEP_RS   = 0x2;
 const unsigned SW_RND32_KEEP_RS_FOR_ADD = 0x3;
-const unsigned SW_DEC             = 1U << 0;
-const unsigned SW_VPU             = 1U << 1;
+const unsigned SW_DEC             = 1U << 8;
+const unsigned SW_VPU             = 2U << 8;
 const unsigned SW_LANE_SEL        = 0x3;
 const unsigned SW_LANE_0          = 0;
 const unsigned SW_LANE_1          = 0x1;
@@ -374,7 +408,7 @@ const unsigned SW_UNPCK_8_TO_16   = 0x1 << 1;
 const unsigned SW_UNPCK_8_TO_32   = 0x2 << 1;
 const unsigned SW_UNPCK_4_TO_8    = 0x03 << 1;
 const unsigned SW_UNPACK          = 1 << 4;
-const unsigned SW_L0CD            = 1 << 5;
+const unsigned SW_L0CS            = 1 << 5;
 const unsigned SW_DIRECT          = 1 << 6;
 const unsigned SW_PACK            = 1 << 2;
 const unsigned SW_PACK_DT         = 0x03 << 4;
@@ -420,9 +454,16 @@ const unsigned SW_FORCE_SIGN1     = 1 << 10;
 const unsigned SW_EXP_IS_NUM      = 1 << 11;
 const unsigned SW_SIGN_LSB        = 1 << 12;
 const unsigned SW_DT_OVERRIDE     = 1 << 4;
+const unsigned SW_L2              = 1 << 3;
+const unsigned SW_PAD             = 1 << 6;
+const unsigned SW_NO_INV          = 1 << 0;
+const unsigned SW_CL              = 1 << 1;
+const unsigned SW_INV_CL          = 1 << 5;
+const unsigned SW_INV_LOG         = 1 << 6;
 const unsigned SW_MMIO            = 1;
 const unsigned SW_LOCK            = 1 << 1;
 const unsigned SW_UNLOCK          = 1 << 1;
+const unsigned SW_VPU_ONLY        = 1 << 2;
 const unsigned SW_NEG_ZP          = 1U << 6;
 const unsigned SW_SB              = 1U << 0;
 const unsigned SW_PD              = 1U << 15;
@@ -430,13 +471,16 @@ const unsigned SW_D               = 1U << 1;
 const unsigned SW_LU              = 1U << 2;
 const unsigned SW_RST_LU          = 1U << 3;
 const unsigned SW_RST_D_PREF      = 1U << 4;
-const unsigned SW_NO_BORROW_GEN = 1U << 2;
+const unsigned SW_NO_BORROW_GEN   = 1U << 2;
 const unsigned SW_BORROW          = 1U << 3;
+const unsigned SW_ABS_ADDR        = 1U << 3;
 const unsigned SW_ST_INC          = 0x03U;
 const unsigned SW_V_INC_0         = 0U;
 const unsigned SW_V_INC_1         = 0x01U;
 const unsigned SW_V_INC_2         = 0x02U;
 const unsigned SW_V_INC_4         = 0x03U;
+const unsigned SW_READ_ONLY       = 1;
+const unsigned SW_DNORM           = 1 << 3;
 
 // MOV_DUAL_GROUP switches. Switches passed in SrcB are shifted by 8,
 // in SrcC - by 16.
@@ -481,6 +525,11 @@ const unsigned SW_WR_LOWER_GROUP2       = 1 << 20;
 const unsigned SW_WR_UPPER_GROUP2       = 1 << 21;
 const unsigned SW_WR_LOWER_GROUP3       = 1 << 22;
 const unsigned SW_WR_UPPER_GROUP3       = 1 << 23;
+const unsigned SW_NO_SWAP               = 0;
+const unsigned SW_SWAP_HL               = 1 << 2;
+const unsigned SW_SWAP_EO               = 2 << 2;
+const unsigned SW_MDG_SWAP_TYPE         = SW_SWAP_EO | SW_SWAP_HL;
+const unsigned SW_MDG_CTRL_REG          = 1 << 4;
 
 // Round modes. Are used in CONVERT* instructions. Bit values differ depending
 // on core and instruction.
@@ -501,6 +550,9 @@ const unsigned SW_G1_RD     = 0x010000;
 const unsigned SW_G1_RU     = 0x020000;
 const unsigned SW_G1_SR     = 0x030000;
 const unsigned SW_G1_RZ     = 0x040000;
+
+// High-level convert switches.
+const unsigned SW_LINEAR    = 1U << 24;
 
 // MSAC switches
 const unsigned SW_RHU          = 0x2;
@@ -530,6 +582,8 @@ const unsigned SW_DUAL_GROUP_EN = 0x3c;
 const unsigned SW_UPPER_HALF = 1 << 2;
 const unsigned SW_LUT_PTR    = 1 << 3;
 const unsigned SW_SBCD       = 1 << 5;
+const unsigned SW_LKP_PART1  = 0 << 6;
+const unsigned SW_LKP_PART2  = 1 << 6;
 
 // Function codes in CALC_FP_SPECIAL.
 const unsigned SW_FUNCID  = 0x7;
@@ -548,6 +602,7 @@ const unsigned SW_PRE_SQRT_RSQRT  = 1 << 13;
 const unsigned SW_POST_SQRT       = 2 << 13;
 const unsigned SW_POST_RSQRT      = 3 << 13;
 const unsigned SW_POST_RECIP      = 4 << 13;
+const unsigned SW_PRE_LOG_FUNC    = 5 << 13;
 
 const unsigned SW_RHAZ_RS = 0x04;
 const unsigned SW_NO_SAT = 0x01;
@@ -564,14 +619,42 @@ const unsigned SW_DIV_MODE_BOTH = 2;
 // So let's keep the slot switches 7 bits, and start Src2 switches from eighth bit.
 const unsigned SW_PARTIAL_SRCB = 1 << 8;
 
+// Exclusive Read/Write switch for LD_G & ST_G instructions. It should be kept in SrcB.
+const unsigned SW_EXC = 1 << 9;
+
+// CNVRT_DT
+const unsigned SW_CNVRT_DT = 1 << 1;
+const unsigned SW_FP32_TO_BF16 = 0;
+const unsigned SW_FP32_TO_FP16 = SW_CNVRT_DT;
+
+// PART
+const unsigned SW_PART = 1 << 4;
+const unsigned SW_PART_LOW = 0;
+const unsigned SW_PART_HIGH = SW_PART;
+
+// AUTO_INC_DIM
+const unsigned SW_AUTO_INC_DIM = 7 << 8;
+const unsigned SW_INC_DIM0 = 0;
+const unsigned SW_INC_DIM1 = 1 << 8;
+const unsigned SW_INC_DIM2 = 2 << 8;
+const unsigned SW_INC_DIM3 = 3 << 8;
+const unsigned SW_INC_DIM4 = 4 << 8;
+
 // AND
 const unsigned SW_ANDN = 1 << 1;
 
 // SET_INDX
 const unsigned SW_IRF44_HIGH = 1;
 
+// ST_TNSR_SQZ
+const unsigned SW_CNT_ONLY = 1;
+const unsigned SW_FLUSH = 1 << 4;
+
 void setSubTargetInfo(const MCSubtargetInfo *STI);
 const MCSubtargetInfo *getSubtargetInfo();
+
+void setInstrInfo(const MCInstrInfo* MCII);
+const MCInstrInfo *getInstrInfo();
 
 /// @brief Update switch set given new switch name.
 /// @return Text of error if the operation cannot be executed or empty string in

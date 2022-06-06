@@ -1,9 +1,5 @@
 //===---- TPCRegisterBalancer.cpp --- Optimizes predicates ----------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // This pass:
@@ -66,7 +62,7 @@ static bool isScalarSplat(const MachineInstr &MI) {
   if (MI.getOpcode() == TPC::MOVvsp) {
     const MCInstrDesc &Desc = MI.getDesc();
     return MI.getOperand(Desc.getNumOperands() - 1).getImm() == 0 &&
-           MI.getOperand(Desc.getNumOperands() - 2).getReg() == TPC::SP0;
+           MI.getOperand(Desc.getNumOperands() - 2).getReg() == TPC::SPRF_TRUE;
   }
   return false;
 }
@@ -75,7 +71,7 @@ static bool isImmSplat(const MachineInstr &MI) {
   if (MI.getOpcode() == TPC::MOVvip) {
     const MCInstrDesc &Desc = MI.getDesc();
     return MI.getOperand(Desc.getNumOperands() - 1).getImm() == 0 &&
-           MI.getOperand(Desc.getNumOperands() - 2).getReg() == TPC::SP0;
+           MI.getOperand(Desc.getNumOperands() - 2).getReg() == TPC::SPRF_TRUE;
   }
   return false;
 }

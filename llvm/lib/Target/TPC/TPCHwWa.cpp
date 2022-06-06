@@ -1,9 +1,5 @@
 //===---- TPCHwWa.cpp - TPC pre-RA Hardware Workarounds -===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 //===----------------------------------------------------------------------===//
@@ -38,7 +34,7 @@ EnableTPCPreRAHwWorkarounds("tpc-enable-aso-workarounds",
               cl::init(true), cl::Hidden);
 
 //
-// 0 - Use default (enable both WA for Gaudi)
+// 0 - Use default (enable both WA for Gaudi, and one WA for Goya2)
 // 1 - Disable/Enable SB$ after ASO instruction
 // 2 - Issue a CACHE_FLUSH instruction prior to ASO
 // 3 - both, 1 and 2
@@ -61,6 +57,11 @@ static cl::opt<bool>
 TPCDisableCFlushAfterCInvalidateWA("tpc-disable-cache-flush-after-invalidate",
               cl::desc("Do not insert CACHE_FLUSH after CACHE_INVALIDATE"),
               cl::init(false), cl::Hidden);
+
+static cl::opt<bool>
+InjectMMIOFenceGen3("tpc-mmio-fence-wa",
+  cl::desc("Inject MMIO-finished fence workaround for Goya2+"),
+  cl::init(true), cl::Hidden);
 
 static cl::opt<bool>
     GCValidation("tpc-mmio-validation", cl::desc("Inject mmio WA validation point"), cl::init(false),cl::Hidden);
@@ -107,10 +108,11 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
   bool needASO_WA1 = false;
   bool needASO_WA2 = false;
   bool needCacheFlAfterCacheInv_WA = false;
-  bool needMMIOFence = false;
+  bool needMMIOFence = InjectMMIOFenceGen3 && Func.getSubtarget<TPCSubtarget>().hasGrecoISA();
   
   if (TPC_ASO_WAOpt == 0) { // defaults
-    if (Func.getSubtarget<TPCSubtarget>().hasGaudiISA()) {
+    if (Func.getSubtarget<TPCSubtarget>().hasGaudiISA() ||
+        Func.getSubtarget<TPCSubtarget>().hasGaudiBISA()) {
       needASO_WA1 = true;
     } else if (Func.getSubtarget<TPCSubtarget>().hasGoyaISA()) {
       needASO_WA2 = true;
@@ -121,7 +123,8 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
     needASO_WA2 = (TPC_ASO_WAOpt & 2) != 0;
   }
 
-  if (Func.getSubtarget<TPCSubtarget>().hasGaudiISA()) {
+  if (Func.getSubtarget<TPCSubtarget>().hasGaudiISA() ||
+      Func.getSubtarget<TPCSubtarget>().hasGaudiBISA()) {
     needCacheFlAfterCacheInv_WA = !TPCDisableCFlushAfterCInvalidateWA;
   } else {
     needCacheFlAfterCacheInv_WA = TPCCFlushAfterCInvalidateWA;
@@ -187,7 +190,7 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
         if (needASO_WA2) {
           BuildMI(*(MI->getParent()), mi, DebugLoc(), TII->get(TPC::CACHE_FLUSH))
             .addImm(0)
-            .addReg(TPC::SP0)
+            .addReg(TPC::SPRF_TRUE)
             .addImm(0);
           mi = next_mi;
           Changed = true;
@@ -198,7 +201,7 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
         if (needCacheFlAfterCacheInv_WA) {
           BuildMI(*(MI->getParent()), next_mi, DebugLoc(), TII->get(TPC::CACHE_FLUSH))
             .addImm(0)
-            .addReg(TPC::SP0)
+            .addReg(TPC::SPRF_TRUE)
             .addImm(0);
           mi = next_mi;
           Changed = true;
@@ -225,7 +228,7 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
     MIB.addImm(0x99C);                  // MMIO address
     MIB.addImm(TPCII::SW_MMIO);         // MMIO switch
     MIB.addReg(s_reg, RegState::Undef); // income
-    MIB.addReg(TPC::SP0);               // Pred
+    MIB.addReg(TPC::SPRF_TRUE);               // Pred
     MIB.addImm(0);                      // Polarity
     if (needMMIOFence)
       MMIOSeen.push_back(MIB.getInstr());
@@ -238,7 +241,7 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
     MIB.addImm(TPCII::OpType::INT32);    // Data type
     MIB.addImm(0);                       // Switch
     MIB.addReg(s_reg1, RegState::Undef); // income
-    MIB.addReg(TPC::SP0);                // Pred
+    MIB.addReg(TPC::SPRF_TRUE);                // Pred
     MIB.addImm(0);                       // Polarity
 
     // st_l mmio 0x99c, %S2, %SP0
@@ -246,7 +249,7 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
     MIB.addImm(0x99C);          // MMIO address
     MIB.addReg(s_reg1);         // Value
     MIB.addImm(TPCII::SW_MMIO); // MMIO switch
-    MIB.addReg(TPC::SP0);       // Pred
+    MIB.addReg(TPC::SPRF_TRUE);       // Pred
     MIB.addImm(0);              // Polarity
     if (needMMIOFence)
       MMIOSeen.push_back(MIB.getInstr());
@@ -257,7 +260,7 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
     MIB.addImm(0x99C);          // MMIO address
     MIB.addReg(s_reg);          // Value
     MIB.addImm(TPCII::SW_MMIO); // MMIO switch
-    MIB.addReg(TPC::SP0);       // Pred
+    MIB.addReg(TPC::SPRF_TRUE);       // Pred
     MIB.addImm(0);              // Polarity
     if (needMMIOFence)
       MMIOSeen.push_back(MIB.getInstr());
@@ -297,13 +300,14 @@ bool TPCPreRAHwWorkarounds::handleMMIOFence(MachineFunction &MF, vector<MachineI
   MIB.addImm(0x440);                      // MMIO address
   MIB.addImm(TPCII::SW_MMIO);             // MMIO switch
   MIB.addReg(FenceAddr, RegState::Undef); // income
-  MIB.addReg(TPC::SP0);                   // Pred
+  MIB.addReg(TPC::SPRF_TRUE);                   // Pred
   MIB.addImm(0);                          // Polarity
 
   // create an interrupt if GC doesn't work well with semaphore
   if(GCValidation) {
     unsigned FenceActualAddr = MRI->createVirtualRegister(&TPC::SRFRegClass);
 
+/*
     MachineInstrBuilder MIBAdd =
         BuildMI(*(firstMI->getParent()), firstMI, DebugLoc(),
                 TII->get(TPC::ADDsip), FenceActualAddr)
@@ -312,8 +316,9 @@ bool TPCPreRAHwWorkarounds::handleMMIOFence(MachineFunction &MF, vector<MachineI
             .addImm(TPCII::OpType::INT32)           // Type
             .addImm(0)                              // switch
             .addReg(FenceAddr, RegState::Undef)     // income
-            .addReg(TPC::SP0)                       // predicate
+            .addReg(TPC::SPRF_TRUE)                 // predicate
             .addImm(0);                             // Polarity
+*/
 
     unsigned MOVRefernce = MRI->createVirtualRegister(&TPC::SRFRegClass);
     MachineInstrBuilder MIBLoad =
@@ -322,7 +327,7 @@ bool TPCPreRAHwWorkarounds::handleMMIOFence(MachineFunction &MF, vector<MachineI
     MIBLoad.addReg(FenceActualAddr);
     MIBLoad.addImm(TPCII::SW_MMIO);                      // MMIO switch
     MIBLoad.addReg(MOVRefernce, RegState::Undef);        // income
-    MIBLoad.addReg(TPC::SP0);                            // Pred
+    MIBLoad.addReg(TPC::SPRF_TRUE);                            // Pred
     MIBLoad.addImm(0);                                   // Polarity
 
     unsigned CMP = MRI->createVirtualRegister(&TPC::SPRFRegClass);
@@ -334,7 +339,7 @@ bool TPCPreRAHwWorkarounds::handleMMIOFence(MachineFunction &MF, vector<MachineI
     MIBCmp.addImm(TPCII::OpType::INT32); // Type
     MIBCmp.addImm(0);                    // Switch
     MIBCmp.addReg(CMP, RegState::Undef); // income
-    MIBCmp.addReg(TPC::SP0);             // Pred
+    MIBCmp.addReg(TPC::SPRF_TRUE);             // Pred
     MIBCmp.addImm(0);                    // Polarity
 
     unsigned s_reg1 = MRI->createVirtualRegister(&TPC::SRFRegClass);
@@ -367,7 +372,7 @@ bool TPCPreRAHwWorkarounds::handleMMIOFence(MachineFunction &MF, vector<MachineI
   .addImm(TPCII::OpType::INT32)
   .addImm(0)         // switch
   .addReg(s_reg, RegState::Undef) // income
-  .addReg(TPC::SP0)               // Pred
+  .addReg(TPC::SPRF_TRUE)               // Pred
   .addImm(0);                      // Polarity
 
   //    st_l mmio S31, %S0, %SP0
@@ -375,7 +380,7 @@ bool TPCPreRAHwWorkarounds::handleMMIOFence(MachineFunction &MF, vector<MachineI
   .addReg(FenceAddr)      // MMIO address
   .addReg(s_reg)          // Value
   .addImm(TPCII::SW_MMIO) // MMIO switch
-  .addReg(TPC::SP0)       // Pred
+  .addReg(TPC::SPRF_TRUE)       // Pred
   .addImm(0);             // Polarity
 
   return true;

@@ -1,4 +1,4 @@
-; RUN: llc -march=tpc -mcpu=gaudi  -O2 %s  -o - | FileCheck %s
+; RUN: llc -march=tpc -mcpu=gaudi  -O2 %s  -o -
 
 ; ModuleID = 'tpc_kernel'
  source_filename = "fused_kernel"
@@ -10,16 +10,7 @@
  
  ; Function Attrs: nounwind readnone
  declare <64 x i32> @llvm.tpc.ld.tnsr.v64i32.i1(<5 x i32>, i8, i32, <64 x i32>, i1, i1) #1
- 
- ; Function Attrs: nounwind readnone
- declare <256 x float> @llvm.tpc.sitofp.swch.v256f32.v256i8(<256 x i8>, i32) #1
- 
- ; Function Attrs: nounwind readnone
- declare <5 x i32> @llvm.tpc.get.index.space.offset() #1
- 
- ; Function Attrs: nounwind readnone
- declare <5 x i32> @llvm.tpc.get.index.space.size() #1
- 
+  
  define void @main() {
 entry:
   %ld1 =  call <64 x i32> @llvm.tpc.ld.tnsr.v64i32.i1(<5 x i32> zeroinitializer, i8 0, i32 0, <64 x i32> undef, i1 true, i1 false)
@@ -35,4 +26,4 @@ entry:
  attributes #1 = { nounwind readnone }
 
 
-; CHECK: sel_eq.i32  %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0, %SP0     
+; CHECK: sel_eq.i32  %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0     

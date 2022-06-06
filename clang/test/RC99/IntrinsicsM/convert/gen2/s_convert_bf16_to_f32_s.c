@@ -7,8 +7,8 @@ void main(bf16 x0, int dest0)
     
    float __local *res0 = (float  __local *)dest0;
     float temp_res0 = 0;
-    temp_res0 = s_convert_bf16_to_f32_s(x0);
+    temp_res0 = s_convert_bf16_to_f32(x0, SW_CSR, 0, 1, 0);
     *res0 = temp_res0;
 }
 //CHECK-ASM: .globl main
-//CHECK-ASM-DAG: convert.bf16 target_type=fp32 %S{{[0-9]+}}, %S{{[0-9]+}}, %SP0
+//CHECK-ASM-DAG: convert.bf16 target_type=fp32 %S{{[0-9]+}}, %S{{[0-9]+}}

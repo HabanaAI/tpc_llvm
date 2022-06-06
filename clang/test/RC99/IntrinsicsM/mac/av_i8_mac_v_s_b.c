@@ -6,12 +6,12 @@ void main(int x0, signed char x1, int x3, int dest0, int dest1)
     
     int64 __local *res0 = (int64 __local *)dest0;
     int256 temp_res0 = {0,0,0,0};
-    temp_res0 = av_i8_mac_v_s_b(*ptr_x0, 123, temp_res0, 1, x3, 0);
+    temp_res0 = v_i8_mac_b(*ptr_x0, 123, temp_res0, 1, x3, 0);
     *res0 = temp_res0.v1;
     
     int64 __local *res1 = (int64 __local *)dest1;
     int256 temp_res1 = {0,0,0,0};
-    temp_res1 = av_i8_mac_v_s_b(*ptr_x0, x1, temp_res1, 1, x3, 0);
+    temp_res1 = v_i8_mac_b(*ptr_x0, x1, temp_res1, 1, x3, 0);
     *res1 = temp_res1.v1;
 }
 

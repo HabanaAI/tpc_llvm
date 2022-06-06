@@ -8,5 +8,5 @@ void main(int src, int dest) {
   *dptr = convert_bfloat256_to_uint256(src_val, SW_RD);
 }
 
-// CHECK-IR: fptoui <256 x bfloat> {{.*}} to <256 x i32>
+// CHECK-IR: call <256 x i32> @llvm.tpc.convert.v256i32.v256bf16.i1(<256 x bfloat> {{.*}}, i8 1, i32 66304, <256 x i32> undef, i1 true, i1 false)
 // CHECK-IR: call <256 x i32> @llvm.tpc.convert.v256i32.v256bf16.i1(<256 x bfloat> {{.*}}, i8 1, i32 197376, <256 x i32> undef, i1 true, i1 false)

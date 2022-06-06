@@ -1,6 +1,6 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi -bfloat16 %s -o - | FileCheck %s
-
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu goya2 -bfloat16 %s -o - | FileCheck %s
 
 void main(int x0, int x1, int dest, _Bool pred) {
   int5 __local *dptr = (int5 __local *)dest;
@@ -10,7 +10,7 @@ void main(int x0, int x1, int dest, _Bool pred) {
   
   res = i_i32_mul(a, b, 0x1e, 0, res, 1, 0);
   *dptr++ = res;
-  // CHECK: mul.i32 b11110 %I{{[0-9]+}}, %I{{[0-9]+}}, %I{{[0-9]+}}, %SP0
+  // CHECK: mul.i32 b11110 %I{{[0-9]+}}, %I{{[0-9]+}}, %I{{[0-9]+}}
 
   res = i_i32_mul(a, b, 0x10, 0, res, pred, 0);
   *dptr++ = res;
@@ -22,7 +22,7 @@ void main(int x0, int x1, int dest, _Bool pred) {
 
   res = i_i32_mul(a, 123, 0x01, 0, res, 1, 0);
   *dptr++ = res;
-  // CHECK: mul.i32 b00001 %I{{[0-9]+}}, 0x7b, %I{{[0-9]+}}, %SP0
+  // CHECK: mul.i32 b00001 %I{{[0-9]+}}, 0x7b, %I{{[0-9]+}}
 
   res = i_i32_mul(a, 123, 0x02, 0, res, pred, 0);
   *dptr++ = res;

@@ -1,18 +1,18 @@
 ; RUN: llc -march=tpc -mcpu=gaudi %s -o - | FileCheck %s
 
-; CHECK-DAG: ld_tnsr  %V{{[0-9]+}}, 0x0, [[I2:%I[0-9]+]], [[SP0:%SP[0-9]+]]
-; CHECK-DAG: ld_tnsr  %V{{[0-9]+}}, 0x1, [[I2]], [[SP0]]
-; CHECK-DAG: convert.f32 target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK-DAG: convert.f32 target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK-DAG: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK-DAG: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK-DAG: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK-DAG: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK-DAG: mov_dg all sdg0=1 sdg1=2 sdg2=3 sdg3=0 weg0=2 weg1=1 weg2=0 weg3=0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK-DAG: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK-DAG: mov_dg all sdg0=1 sdg1=3 sdg2=0 sdg3=2 weg0=0 weg1=0 weg2=1 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK-DAG: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=0 weg1=0 weg2=2 weg3=2 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK-DAG: st_tnsr  0x2, [[I2]], %V{{[0-9]+}}, [[SP0]]
+; CHECK-DAG: ld_tnsr  %V{{[0-9]+}}, 0x0, [[I2:%I[0-9]+]]
+; CHECK-DAG: ld_tnsr  %V{{[0-9]+}}, 0x1, [[I2]]
+; CHECK-DAG: convert.f32 target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG: convert.f32 target_type=bf16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG: mov_dg all sdg0=1 sdg1=2 sdg2=3 sdg3=0 weg0=2 weg1=1 weg2=0 weg3=0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK-DAG: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK-DAG: mov_dg all sdg0=1 sdg1=3 sdg2=0 sdg3=2 weg0=0 weg1=0 weg2=1 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK-DAG: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=0 weg1=0 weg2=2 weg3=2 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK-DAG: st_tnsr  0x2, [[I2]], %V{{[0-9]+}}
 ; CHECK-DAG: halt
 
 target triple = "tpc"

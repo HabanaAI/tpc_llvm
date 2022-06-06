@@ -22,11 +22,11 @@ void main(int x0, int x2, int x3, int dest0, int dest1, int dest2, int dest3, in
     float64 temp_res4 = 0;
 
 
-    temp_res0 = v_f32_lookup_c0_v_b(*ptr_x0, temp_res0, 1, e_fp32_pow2, x3, 0);
-    temp_res1 = v_f32_lookup_c0_v_b(*ptr_x1, temp_res0, 1, e_fp32_pow2, x3, 0);
-    temp_res2 = v_f32_lookup_c0_v_b(*ptr_x1, temp_res0, 1, e_i16_tanh, x3, 0);
-    temp_res3 = v_f32_lookup_c0_v_b(*ptr_x1, temp_res0, 1, e_i16_sigmoid, x3, 0);
-    temp_res4 = v_f32_lookup_c0_v_b(*ptr_x1, temp_res0, 1, e_i16_exp_nep, x3, 0);
+    temp_res0 = v_f32_lookup_c0(*ptr_x0, e_fp32_pow2, 1, temp_res0, x3, 0);
+    temp_res1 = v_f32_lookup_c0(*ptr_x1, e_fp32_pow2, 1, temp_res0, x3, 0);
+    temp_res2 = v_f32_lookup_c0(*ptr_x1, e_i16_tanh, 1, temp_res0, x3, 0);
+    temp_res3 = v_f32_lookup_c0(*ptr_x1, e_i16_sigmoid, 1, temp_res0, x3, 0);
+    temp_res4 = v_f32_lookup_c0(*ptr_x1, e_i16_exp_nep, 1, temp_res0, x3, 0);
 
 
     *res0 = temp_res0;

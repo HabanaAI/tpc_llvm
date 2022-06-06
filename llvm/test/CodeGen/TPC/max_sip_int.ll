@@ -85,8 +85,8 @@ attributes #1 = { nounwind readnone }
 !6 = !{!"omnipotent char", !7, i64 0}
 !7 = !{!"Simple C/C++ TBAA"}
 
-; CHECK: max.i16  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80, %SP{{[0-9]+}}
-; CHECK: max.i8  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x40, %SP{{[0-9]+}}
-; CHECK: max.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80, %SP{{[0-9]+}}
-; CHECK: and.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0xffff, %SP{{[0-9]+}}
-; CHECK: and.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0xff, %SP{{[0-9]+}}
+; CHECK: max.i16  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80
+; CHECK: max.i8  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x40
+; CHECK: max.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0x80
+; CHECK: and.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0xffff
+; CHECK: and.i32  %S{{[0-9]+}}, %S{{[0-9]+}}, 0xff

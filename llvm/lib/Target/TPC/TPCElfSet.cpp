@@ -1,8 +1,9 @@
 //===- TPCELFSet.cpp--------Set ELF's TPC Program Header------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//                     The LLVM Compiler Infrastructure:
+//
+//              2020 - This pass is a property of Habana labs
 //
 // author: Michael Zuckerman
 //         mzuckerman@habana.ai
@@ -25,6 +26,7 @@
 
 #include "MCTargetDesc/TPCMCInstrInfo.h"
 #include "MCTargetDesc/TPCMCTargetDesc.h"
+#include "TPCTargetMachine.h"
 #include "TPCInstrInfo.h"
 #include "TPCSubtarget.h"
 #include "llvm/InitializePasses.h"
@@ -175,25 +177,20 @@ void TPCElfSpecSet::setLockUnlockMember(t_LockUnlock SW, int Index) {
 void TPCElfSpecSet::mapInputOutputTensor(const MachineInstr &BMI) {
   bool isImm = false;
   int tensorId = 0;
-  int switchVal = 0;
   const auto &STI = BMI.getParent()->getParent()->getSubtarget<TPCSubtarget>();
-  if (TPCII::is_ld_tnsr(BMI.getDesc())) {
+  if (TPCII::isLdTnsr(BMI.getDesc(),STI.hasGen3Plus())) {
     if(!BMI.getOperand(2).isImm())
       return;
     tensorId = BMI.getOperand(2).getImm();
     TensorMap[tensorId] = TT_INPUT;
   }
-  if (TPCII::is_st_tnsr(BMI.getDesc())) {
+  if (TPCII::isStTnsr(BMI.getDesc())) {
     isImm = BMI.getOperand(1).isImm();
     if (isImm) {
       tensorId = BMI.getOperand(1).getImm();
       TensorMap[tensorId] = TT_OUTPUT;
     }
-    if (BMI.getOperand(BMI.getNumOperands() - 2 - 1).isImm())
-      switchVal = BMI.getOperand(BMI.getNumOperands() - 2 - 1).getImm();
-    else
-      switchVal = BMI.getOperand(BMI.getNumOperands() - 2).getImm();
-    if (switchVal & TPCII::SW_RMW_SEL) {
+    if (getSwitches(BMI) & TPCII::SW_RMW_SEL) {
       if (isImm)
         HasRMWStore[tensorId] = true;
       else
@@ -203,19 +200,8 @@ void TPCElfSpecSet::mapInputOutputTensor(const MachineInstr &BMI) {
 }
 
 void TPCElfSpecSet::detectMMIO(const MachineInstr &BMI) {
-  if (TPCMetadata.mmioUsed)
-    return;
-
-  auto HasMMIOSuffix = [&BMI](unsigned SuffixOpNum) -> bool {
-    unsigned SuffixValue = BMI.getOperand(SuffixOpNum).getImm();
-    return SuffixValue & TPCII::SW_MMIO;
-  };
-
-  if (TPCII::is_ld_l(BMI.getDesc()) && HasMMIOSuffix(2))
+  if (TPCInstrInfo::isMMIOAccess(BMI))
     TPCMetadata.mmioUsed = true;
-  else if (TPCII::is_st_l(BMI.getDesc())&& HasMMIOSuffix(2))
-    TPCMetadata.mmioUsed = true;
-
 }
 
 void TPCElfSpecSet::searchInstruction(MachineFunction &Func) {
@@ -224,6 +210,7 @@ void TPCElfSpecSet::searchInstruction(MachineFunction &Func) {
   const auto &MRI = Func.getRegInfo();
   const auto &MDT = getAnalysis<MachineDominatorTree>();
 
+  bool isGoya2 = STI.getFeatureBits()[TPC::FeatureGreco];
   for (auto &MBB : Func) {
     std::vector<const MachineInstr *> DefInstrs;
     MachineBasicBlock::const_instr_iterator MII = MBB.instr_begin();
@@ -251,6 +238,25 @@ void TPCElfSpecSet::searchInstruction(MachineFunction &Func) {
               if (MI.getOperand(1).isDead() || MI.getOperand(1).isKill())
                 break;
             }
+          }
+        }
+      }
+
+      // The unlock lock feature is only relevant for goya2.
+      if (isGoya2) {
+        if (TPCII::is_ld_l(BMI.getDesc()) || TPCII::is_st_l(BMI.getDesc())) {
+          // The both switches (LOCK and MMIO) are needed to be set for this
+          // feature to take action.
+          if ((MII->getOperand(2).getImm() & TPCII::SW_LOCK) &&
+              (MII->getOperand(2).getImm() & TPCII::SW_MMIO)) {
+            t_LockUnlock operation = TPCII::is_ld_l(BMI.getDesc())
+                                         ? LU_LOCK
+                                         : LU_UNLOCK;
+            // ld_l memory operand 1
+            // St_l memory operand 0
+            const MachineOperand &Addr = MII->getOperand((operation + 1) % 2);
+            int MemberIdx = Addr.isImm() ? getLockUnlockIndex(Addr.getImm()) : numberOfLockRegister;
+            setLockUnlockMember(operation, MemberIdx);
           }
         }
       }
@@ -292,7 +298,7 @@ void TPCElfSpecSet::CalculateTPCMetadata(const MachineFunction &Func) {
   }
 
   // Calculate TPCMetadata.rmwStore
-  for (int j=0; j < TPCNumTensors; j++){
+  for (unsigned j=0; j < TPCNumTensors; j++){
     TPCMetadata.rmwStore[j]= AllTrueRMW || HasRMWStore[j];
   }
 
@@ -300,12 +306,24 @@ void TPCElfSpecSet::CalculateTPCMetadata(const MachineFunction &Func) {
   const TPCSubtarget &SubTarget = Func.getSubtarget<TPCSubtarget>();
   if (SubTarget.hasGoyaISA())
     TPCMetadata.march = 1;
-  else if (SubTarget.hasGaudiISA())
+  else if (SubTarget.hasGaudiISA() && !SubTarget.hasGaudiBISA())
     TPCMetadata.march = 2;
+  else if (SubTarget.hasGaudiBISA())
+    TPCMetadata.march = 5;
+  else if (SubTarget.hasGrecoISA())
+    TPCMetadata.march = 3;
+  else if (SubTarget.hasGaudi2ISA())
+    TPCMetadata.march = 4;
+  else if (SubTarget.hasDoron1ISA())
+    TPCMetadata.march = 6;
   else
     llvm_unreachable("A unhandled march case");
+
+  if (SubTarget.getTargetLowering()->getTargetMachine().Options.TpcDnorm)
+    TPCMetadata.dnorm = 1;
 }
 
+/*
 static std::vector<Constant *> createAString(std::string input, Type *&Int8Ty) {
   std::vector<Constant *> Init;
   for (unsigned i = 0; i < input.size(); i++) {
@@ -313,6 +331,7 @@ static std::vector<Constant *> createAString(std::string input, Type *&Int8Ty) {
   }
   return Init;
 }
+*/
 
 void TPCElfSpecSet::createElfSection(MachineFunction &Func) {
   llvm::Module *M = const_cast<llvm::Module*>(Func.getMMI().getModule());
@@ -321,7 +340,7 @@ void TPCElfSpecSet::createElfSection(MachineFunction &Func) {
   std::vector<Constant *> TPCMetadataData;
   CalculateTPCMetadata(Func);
   std::vector<uint8_t> BinaryData =
-      bianrySerializeTPCProgramHeader(TPCMetadata);
+      binarySerializeTPCProgramHeader(TPCMetadata);
   for (const uint8_t &El : BinaryData) {
     TPCMetadataData.push_back(ConstantInt::get(Int8Ty, El));
   }
@@ -338,6 +357,8 @@ void TPCElfSpecSet::createElfSection(MachineFunction &Func) {
 bool TPCElfSpecSet::runOnMachineFunction(MachineFunction &Func) {
   if (!EnableElfSpec)
     return false;
+  TPCMetadata.directMMIOAccess =
+      Func.getFunction().hasMetadata("tpc.direct.mmio.access");
   searchInstruction(Func);
   searchPrintF(Func);
   createElfSection(Func);

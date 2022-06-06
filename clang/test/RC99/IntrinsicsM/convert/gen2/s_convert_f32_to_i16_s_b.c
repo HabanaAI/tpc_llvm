@@ -7,7 +7,7 @@ void main(float x0, int x2, int dest0)
     
    short __local *res0 = (short  __local *)dest0;
     short temp_res0 = 0;
-    temp_res0 = s_convert_f32_to_i16_s_b(x0, temp_res0, 1, x2, 0);
+    temp_res0 = s_convert_f32_to_i16(x0, (1) << 16, temp_res0, x2, 0);
     *res0 = temp_res0;
 }
 //CHECK-ASM: .globl main

@@ -16,5 +16,5 @@ entry:
 ; CHECK-DAG: ld_l_v [[V1:%V[0-9]+]], %S1, 0x0
 ; CHECK-DAG: ld_l_v [[V2:%V[0-9]+]], %S2, 0x0
 ; mul is commutative so dunno how to check for exact args:
-; CHECK: mul.i8 %A[[#R:]], %V{{[0-9]+}}, %V{{[0-9]+}},
+; CHECK: mul.i8 %A[[#R:]], %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: st_l_v %S0, 0x0, %V[[#R]]

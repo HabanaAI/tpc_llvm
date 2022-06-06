@@ -13,7 +13,7 @@ void main(
   int5 offset;
   __global__ float64* ptr1;
   offset[0] = 0;offset[1] = 1;offset[2] = 2;offset[3] = offset[4] = 3;
-  ptr1 = a_gen_addr_i(offset, t2);
+  ptr1 = gen_addr(offset, t2, 0, 0, 1, 0);
   *ptr1 = float34;
   int __local *ptr = (int __local *)arg31;
   *ptr = arg30;

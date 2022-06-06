@@ -19,7 +19,7 @@
 
 namespace llvm {
 
-static const char *KernelInfoSectionName = ".KernelInfo";
+constexpr const char KernelInfoSectionName[] = ".KernelInfo";
 
 std::string GenerateKernelInfo(llvm::StringRef KernelInfo);
 

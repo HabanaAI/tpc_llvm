@@ -7,4 +7,4 @@ void main() {
 }
 
 // CHECK: error: unknown target CPU 'qqq'
-// CHECK: note: valid target CPU values are:  goya, gaudi
+// CHECK: note: valid target CPU values are: goya, gaudi, gaudib, greco, gaudi2

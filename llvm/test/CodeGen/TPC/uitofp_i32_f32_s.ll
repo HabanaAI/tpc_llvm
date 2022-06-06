@@ -13,6 +13,6 @@ entry:
   ret void
 }
 
-; CHECK: and.i32 %S{{[0-9]+}}, %S{{[0-9}+}, 0x7fffffff, %SP{{[0-9]+}}
-; CHECK: convert.i32 target_type=fp32  %S{{[0-9]+}}, %S{{[0-9}+}, %SP{{[0-9]+}}
-; CHECK: st_l %S{{[0-9]+}}, %S{{[0-9]+}}, %SP{{[0-9]+}}
+; CHECK: and.i32 %S{{[0-9]+}}, %S{{[0-9]+}}, 0x7fffffff
+; CHECK: convert.i32 target_type=fp32  %S{{[0-9]+}}, %S{{[0-9]+}}
+; CHECK: st_l %S{{[0-9]+}}, %S{{[0-9]+}}

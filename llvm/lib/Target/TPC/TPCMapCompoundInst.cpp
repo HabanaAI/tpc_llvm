@@ -1,8 +1,5 @@
 //===-- TPCMapCompoundInst.cpp - TPC Map Compound Inst -------------*- C++
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//-*-===//
 //
 //===----------------------------------------------------------------------===//
 /// \file
@@ -16,7 +13,7 @@
 IntrinsicVector MapTruncate::downConvertVec(const Instruction *I,
                                             const TPCSubtarget *ST) {
   unsigned SrcWidth = 0, DestWidth = 0;
-  assert(I->getType()->getTypeID() == Type::VectorTyID);
+  assert(I->getType()->getTypeID() == Type::FixedVectorTyID);
   SrcWidth =
       I->getOperand(0)->getType()->getScalarType()->getPrimitiveSizeInBits();
   DestWidth = I->getType()->getScalarType()->getPrimitiveSizeInBits();
@@ -36,8 +33,8 @@ IntrinsicVector MapTruncate::downConvertVec(const Instruction *I,
 IntrinsicVector MapTruncate::getMapping(const Instruction *I,
                                         const TPCSubtarget *ST) {
   IntrinsicVector Vec, Append;
-  if (I->getType()->getTypeID() == Type::VectorTyID) {
-    switch (I->getType()->getVectorNumElements()) {
+  if (I->getType()->getTypeID() == Type::FixedVectorTyID) {
+    switch (cast<FixedVectorType>(I->getType())->getNumElements()) {
     case 256:
       Vec = {{Intrinsic::tpc_mov_irf_dim, 4}, {Intrinsic::tpc_convert, 4}};
       break;
@@ -61,7 +58,7 @@ IntrinsicVector MapExtend::upConvertVec(const Instruction *I,
                                         const TPCSubtarget *ST) {
   unsigned SrcWidth = 0, DestWidth = 0;
   IntrinsicVector Append;
-  assert(I->getType()->getTypeID() == Type::VectorTyID);
+  assert(I->getType()->getTypeID() == Type::FixedVectorTyID);
   SrcWidth =
       I->getOperand(0)->getType()->getScalarType()->getPrimitiveSizeInBits();
   DestWidth = I->getType()->getScalarType()->getPrimitiveSizeInBits();
@@ -80,7 +77,7 @@ IntrinsicVector MapExtend::upConvertVec(const Instruction *I,
 IntrinsicVector MapExtend::getMapping(const Instruction *I,
                                       const TPCSubtarget *ST) {
   IntrinsicVector Vec;
-  if (I->getType()->getTypeID() == Type::VectorTyID) {
+  if (I->getType()->getTypeID() == Type::FixedVectorTyID) {
     Vec = upConvertVec(I, ST);
   } else if (I->getOpcode() == Instruction::FPExt) {
     Vec = {{Intrinsic::tpc_convert, 1}};
@@ -112,7 +109,7 @@ IntrinsicVector MapExtendTruncate::getMapping(const Instruction *I,
 
 IntrinsicVector MapSelect::getMapping(const Instruction *I,
                                       const TPCSubtarget *ST) {
-  if (I->getType()->getTypeID() != Type::VectorTyID) {
+  if (I->getType()->getTypeID() != Type::FixedVectorTyID) {
     if (auto *CI = dyn_cast<CmpInst>(I->getOperand(0))) {
       switch (CI->getPredicate()) {
       case CmpInst::Predicate::ICMP_SGT:
@@ -139,7 +136,10 @@ IntrinsicVector MapDivide::getMapping(const Instruction *I,
   if (!this->Unsigned) {
     Vec.append(And.begin(), And.end());
   }
-  Vec.insert(Vec.end(), {Intrinsic::tpc_udiv, 1});
+  if (!ST->hasGen4Plus())
+    Vec.insert(Vec.end(), {Intrinsic::tpc_udiv_step, getCount(I, ST)});
+  else
+    Vec.insert(Vec.end(), {Intrinsic::tpc_udiv, 1});
   return Vec;
 }
 

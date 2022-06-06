@@ -18,6 +18,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/Support/TypeSize.h"
 #include <string>
 
 namespace llvm {
@@ -33,6 +34,9 @@ class AttributeList;
 /// function known by LLVM. The enum values are returned by
 /// Function::getIntrinsicID().
 namespace Intrinsic {
+  // Abstraction for the arguments of the noalias intrinsics
+  static const int NoAliasScopeDeclScopeArg = 0;
+
   // Intrinsic ID type. This is an opaque typedef to facilitate splitting up
   // the enum into target-specific enums.
   typedef unsigned ID;
@@ -99,26 +103,46 @@ namespace Intrinsic {
   /// intrinsic. This is returned by getIntrinsicInfoTableEntries.
   struct IITDescriptor {
     enum IITDescriptorKind {
-      Void, VarArg, MMX, Token, Metadata, Half, Float, Double, Quad,
+      Void,
+      VarArg,
+      MMX,
+      Token,
+      Metadata,
+      Half,
+      BFloat,
 #ifdef LLVM_TPC_COMPILER
-      BFloat16,
       F8_143,
       F8_152,
 #endif
-      Integer, Vector, Pointer, Struct,
-      Argument, ExtendArgument, TruncArgument, HalfVecArgument,
-      SameVecWidthArgument, PtrToArgument, PtrToElt, VecOfAnyPtrsToElt,
-      VecElementArgument, ScalableVecArgument, Subdivide2Argument,
-      Subdivide4Argument, VecOfBitcastsToInt
+      Float,
+      Double,
+      Quad,
+      Integer,
+      Vector,
+      Pointer,
+      Struct,
+      Argument,
+      ExtendArgument,
+      TruncArgument,
+      HalfVecArgument,
+      SameVecWidthArgument,
+      PtrToArgument,
+      PtrToElt,
+      VecOfAnyPtrsToElt,
+      VecElementArgument,
+      Subdivide2Argument,
+      Subdivide4Argument,
+      VecOfBitcastsToInt,
+      AMX
     } Kind;
 
     union {
       unsigned Integer_Width;
       unsigned Float_Width;
-      unsigned Vector_Width;
       unsigned Pointer_AddressSpace;
       unsigned Struct_NumElements;
       unsigned Argument_Info;
+      ElementCount Vector_Width;
     };
 
     enum ArgKind {
@@ -170,6 +194,12 @@ namespace Intrinsic {
       IITDescriptor Result = {K, {Field}};
       return Result;
     }
+
+    static IITDescriptor getVector(unsigned Width, bool IsScalable) {
+      IITDescriptor Result = {Vector, {0}};
+      Result.Vector_Width = ElementCount::get(Width, IsScalable);
+      return Result;
+    }
   };
 
   /// Return the IIT table descriptor for the specified intrinsic into an array
@@ -197,6 +227,13 @@ namespace Intrinsic {
   ///
   /// This method returns true on error.
   bool matchIntrinsicVarArg(bool isVarArg, ArrayRef<IITDescriptor> &Infos);
+
+  /// Gets the type arguments of an intrinsic call by matching type contraints
+  /// specified by the .td file. The overloaded types are pushed into the
+  /// AgTys vector.
+  ///
+  /// Returns false if the given function is not a valid intrinsic call.
+  bool getIntrinsicSignature(Function *F, SmallVectorImpl<Type *> &ArgTys);
 
   // Checks if the intrinsic name matches with its signature and if not
   // returns the declaration with the same signature and remangled name.

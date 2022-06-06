@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-c/Core.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -127,11 +126,8 @@ unsigned LLVMGetMDKindID(const char *Name, unsigned SLen) {
   return LLVMGetMDKindIDInContext(LLVMGetGlobalContext(), Name, SLen);
 }
 
-#define GET_ATTR_KIND_FROM_NAME
-#include "AttributesCompatFunc.inc"
-
 unsigned LLVMGetEnumAttributeKindForName(const char *Name, size_t SLen) {
-  return getAttrKindFromName(StringRef(Name, SLen));
+  return Attribute::getAttrKindFromName(StringRef(Name, SLen));
 }
 
 unsigned LLVMGetLastEnumAttributeKind(void) {
@@ -147,6 +143,11 @@ LLVMAttributeRef LLVMCreateEnumAttribute(LLVMContextRef C, unsigned KindID,
     // After r362128, byval attributes need to have a type attribute. Provide a
     // NULL one until a proper API is added for this.
     return wrap(Attribute::getWithByValType(Ctx, NULL));
+  }
+
+  if (AttrKind == Attribute::AttrKind::StructRet) {
+    // Same as byval.
+    return wrap(Attribute::getWithStructRetType(Ctx, NULL));
   }
 
   return wrap(Attribute::get(Ctx, AttrKind, Val));
@@ -480,12 +481,12 @@ LLVMTypeKind LLVMGetTypeKind(LLVMTypeRef Ty) {
     return LLVMVoidTypeKind;
   case Type::HalfTyID:
     return LLVMHalfTypeKind;
+  case Type::BFloatTyID:
+    return LLVMBFloatTypeKind;
 #ifdef LLVM_TPC_COMPILER
-  case Type::BFloat16ID:
-    return LLVMBFloat16TypeKind;
-  case Type::F8_143ID:
+  case Type::F8_143TyID:
     return LLVMF8_143TypeKind;
-  case Type::F8_152ID:
+  case Type::F8_152TyID:
     return LLVMF8_152TypeKind;
 #endif
   case Type::FloatTyID:
@@ -512,12 +513,16 @@ LLVMTypeKind LLVMGetTypeKind(LLVMTypeRef Ty) {
     return LLVMArrayTypeKind;
   case Type::PointerTyID:
     return LLVMPointerTypeKind;
-  case Type::VectorTyID:
+  case Type::FixedVectorTyID:
     return LLVMVectorTypeKind;
   case Type::X86_MMXTyID:
     return LLVMX86_MMXTypeKind;
+  case Type::X86_AMXTyID:
+    return LLVMX86_AMXTypeKind;
   case Type::TokenTyID:
     return LLVMTokenTypeKind;
+  case Type::ScalableVectorTyID:
+    return LLVMScalableVectorTypeKind;
   }
   llvm_unreachable("Unhandled TypeID.");
 }
@@ -604,15 +609,15 @@ unsigned LLVMGetIntTypeWidth(LLVMTypeRef IntegerTy) {
 LLVMTypeRef LLVMHalfTypeInContext(LLVMContextRef C) {
   return (LLVMTypeRef) Type::getHalfTy(*unwrap(C));
 }
+LLVMTypeRef LLVMBFloatTypeInContext(LLVMContextRef C) {
+  return (LLVMTypeRef) Type::getBFloatTy(*unwrap(C));
+}
 #ifdef LLVM_TPC_COMPILER
 LLVMTypeRef LLVMF8_143TypeInContext(LLVMContextRef C) {
   return (LLVMTypeRef) Type::getF8_143Ty(*unwrap(C));
 }
 LLVMTypeRef LLVMF8_152TypeInContext(LLVMContextRef C) {
   return (LLVMTypeRef) Type::getF8_152Ty(*unwrap(C));
-}
-LLVMTypeRef LLVMBFloat16TypeInContext(LLVMContextRef C) {
-  return (LLVMTypeRef) Type::getBFloat16Ty(*unwrap(C));
 }
 #endif
 LLVMTypeRef LLVMFloatTypeInContext(LLVMContextRef C) {
@@ -633,9 +638,15 @@ LLVMTypeRef LLVMPPCFP128TypeInContext(LLVMContextRef C) {
 LLVMTypeRef LLVMX86MMXTypeInContext(LLVMContextRef C) {
   return (LLVMTypeRef) Type::getX86_MMXTy(*unwrap(C));
 }
+LLVMTypeRef LLVMX86AMXTypeInContext(LLVMContextRef C) {
+  return (LLVMTypeRef) Type::getX86_AMXTy(*unwrap(C));
+}
 
 LLVMTypeRef LLVMHalfType(void) {
   return LLVMHalfTypeInContext(LLVMGetGlobalContext());
+}
+LLVMTypeRef LLVMBFloatType(void) {
+  return LLVMBFloatTypeInContext(LLVMGetGlobalContext());
 }
 LLVMTypeRef LLVMFloatType(void) {
   return LLVMFloatTypeInContext(LLVMGetGlobalContext());
@@ -654,6 +665,9 @@ LLVMTypeRef LLVMPPCFP128Type(void) {
 }
 LLVMTypeRef LLVMX86MMXType(void) {
   return LLVMX86MMXTypeInContext(LLVMGetGlobalContext());
+}
+LLVMTypeRef LLVMX86AMXType(void) {
+  return LLVMX86AMXTypeInContext(LLVMGetGlobalContext());
 }
 
 /*--.. Operations on function types ........................................--*/
@@ -746,7 +760,11 @@ LLVMBool LLVMIsLiteralStruct(LLVMTypeRef StructTy) {
 }
 
 LLVMTypeRef LLVMGetTypeByName(LLVMModuleRef M, const char *Name) {
-  return wrap(unwrap(M)->getTypeByName(Name));
+  return wrap(StructType::getTypeByName(unwrap(M)->getContext(), Name));
+}
+
+LLVMTypeRef LLVMGetTypeByName2(LLVMContextRef C, const char *Name) {
+  return wrap(StructType::getTypeByName(*unwrap(C), Name));
 }
 
 /*--.. Operations on array, pointer, and vector types (sequence types) .....--*/
@@ -768,14 +786,21 @@ LLVMTypeRef LLVMPointerType(LLVMTypeRef ElementType, unsigned AddressSpace) {
 }
 
 LLVMTypeRef LLVMVectorType(LLVMTypeRef ElementType, unsigned ElementCount) {
-  return wrap(VectorType::get(unwrap(ElementType), ElementCount));
+  return wrap(FixedVectorType::get(unwrap(ElementType), ElementCount));
+}
+
+LLVMTypeRef LLVMScalableVectorType(LLVMTypeRef ElementType,
+                                   unsigned ElementCount) {
+  return wrap(ScalableVectorType::get(unwrap(ElementType), ElementCount));
 }
 
 LLVMTypeRef LLVMGetElementType(LLVMTypeRef WrappedTy) {
   auto *Ty = unwrap<Type>(WrappedTy);
   if (auto *PTy = dyn_cast<PointerType>(Ty))
     return wrap(PTy->getElementType());
-  return wrap(cast<SequentialType>(Ty)->getElementType());
+  if (auto *ATy = dyn_cast<ArrayType>(Ty))
+    return wrap(ATy->getElementType());
+  return wrap(cast<VectorType>(Ty)->getElementType());
 }
 
 unsigned LLVMGetNumContainedTypes(LLVMTypeRef Tp) {
@@ -791,7 +816,7 @@ unsigned LLVMGetPointerAddressSpace(LLVMTypeRef PointerTy) {
 }
 
 unsigned LLVMGetVectorSize(LLVMTypeRef VectorTy) {
-  return unwrap<VectorType>(VectorTy)->getNumElements();
+  return unwrap<VectorType>(VectorTy)->getElementCount().getKnownMinValue();
 }
 
 /*--.. Operations on other types ...........................................--*/
@@ -826,6 +851,7 @@ LLVMTypeRef LLVMTypeOf(LLVMValueRef Val) {
 
 LLVMValueKind LLVMGetValueKind(LLVMValueRef Val) {
     switch(unwrap(Val)->getValueID()) {
+#define LLVM_C_API 1
 #define HANDLE_VALUE(Name) \
   case Value::Name##Val: \
     return LLVM##Name##ValueKind;
@@ -935,6 +961,7 @@ LLVMValueMetadataEntry *
 LLVMInstructionGetAllMetadataOtherThanDebugLoc(LLVMValueRef Value,
                                                size_t *NumEntries) {
   return llvm_getMetadata(NumEntries, [&Value](MetadataEntries &Entries) {
+    Entries.clear();
     unwrap<Instruction>(Value)->getAllMetadata(Entries);
   });
 }
@@ -1044,6 +1071,10 @@ LLVMValueRef LLVMGetUndef(LLVMTypeRef Ty) {
   return wrap(UndefValue::get(unwrap(Ty)));
 }
 
+LLVMValueRef LLVMGetPoison(LLVMTypeRef Ty) {
+  return wrap(PoisonValue::get(unwrap(Ty)));
+}
+
 LLVMBool LLVMIsConstant(LLVMValueRef Ty) {
   return isa<Constant>(unwrap(Ty));
 }
@@ -1056,6 +1087,10 @@ LLVMBool LLVMIsNull(LLVMValueRef Val) {
 
 LLVMBool LLVMIsUndef(LLVMValueRef Val) {
   return isa<UndefValue>(unwrap(Val));
+}
+
+LLVMBool LLVMIsPoison(LLVMValueRef Val) {
+  return isa<PoisonValue>(unwrap(Val));
 }
 
 LLVMValueRef LLVMConstPointerNull(LLVMTypeRef Ty) {
@@ -1803,9 +1838,11 @@ LLVMValueRef LLVMConstInsertElement(LLVMValueRef VectorConstant,
 LLVMValueRef LLVMConstShuffleVector(LLVMValueRef VectorAConstant,
                                     LLVMValueRef VectorBConstant,
                                     LLVMValueRef MaskConstant) {
+  SmallVector<int, 16> IntMask;
+  ShuffleVectorInst::getShuffleMask(unwrap<Constant>(MaskConstant), IntMask);
   return wrap(ConstantExpr::getShuffleVector(unwrap<Constant>(VectorAConstant),
                                              unwrap<Constant>(VectorBConstant),
-                                             unwrap<Constant>(MaskConstant)));
+                                             IntMask));
 }
 
 LLVMValueRef LLVMConstExtractValue(LLVMValueRef AggConstant, unsigned *IdxList,
@@ -2011,7 +2048,7 @@ LLVMTypeRef LLVMGlobalGetValueType(LLVMValueRef Global) {
 
 unsigned LLVMGetAlignment(LLVMValueRef V) {
   Value *P = unwrap<Value>(V);
-  if (GlobalValue *GV = dyn_cast<GlobalValue>(P))
+  if (GlobalObject *GV = dyn_cast<GlobalObject>(P))
     return GV->getAlignment();
   if (AllocaInst *AI = dyn_cast<AllocaInst>(P))
     return AI->getAlignment();
@@ -2021,7 +2058,7 @@ unsigned LLVMGetAlignment(LLVMValueRef V) {
     return SI->getAlignment();
 
   llvm_unreachable(
-      "only GlobalValue, AllocaInst, LoadInst and StoreInst have alignment");
+      "only GlobalObject, AllocaInst, LoadInst and StoreInst have alignment");
 }
 
 void LLVMSetAlignment(LLVMValueRef V, unsigned Bytes) {
@@ -2029,11 +2066,11 @@ void LLVMSetAlignment(LLVMValueRef V, unsigned Bytes) {
   if (GlobalObject *GV = dyn_cast<GlobalObject>(P))
     GV->setAlignment(MaybeAlign(Bytes));
   else if (AllocaInst *AI = dyn_cast<AllocaInst>(P))
-    AI->setAlignment(MaybeAlign(Bytes));
+    AI->setAlignment(Align(Bytes));
   else if (LoadInst *LI = dyn_cast<LoadInst>(P))
-    LI->setAlignment(MaybeAlign(Bytes));
+    LI->setAlignment(Align(Bytes));
   else if (StoreInst *SI = dyn_cast<StoreInst>(P))
-    SI->setAlignment(MaybeAlign(Bytes));
+    SI->setAlignment(Align(Bytes));
   else
     llvm_unreachable(
         "only GlobalValue, AllocaInst, LoadInst and StoreInst have alignment");
@@ -2042,6 +2079,7 @@ void LLVMSetAlignment(LLVMValueRef V, unsigned Bytes) {
 LLVMValueMetadataEntry *LLVMGlobalCopyAllMetadata(LLVMValueRef Value,
                                                   size_t *NumEntries) {
   return llvm_getMetadata(NumEntries, [&Value](MetadataEntries &Entries) {
+    Entries.clear();
     if (Instruction *Instr = dyn_cast<Instruction>(unwrap(Value))) {
       Instr->getAllMetadata(Entries);
     } else {
@@ -2856,7 +2894,7 @@ void LLVMRemoveCallSiteStringAttribute(LLVMValueRef C, LLVMAttributeIndex Idx,
 }
 
 LLVMValueRef LLVMGetCalledValue(LLVMValueRef Instr) {
-  return wrap(unwrap<CallBase>(Instr)->getCalledValue());
+  return wrap(unwrap<CallBase>(Instr)->getCalledOperand());
 }
 
 LLVMTypeRef LLVMGetCalledFunctionType(LLVMValueRef Instr) {
@@ -3458,14 +3496,14 @@ LLVMValueRef LLVMBuildArrayMalloc(LLVMBuilderRef B, LLVMTypeRef Ty,
   return wrap(unwrap(B)->Insert(Malloc, Twine(Name)));
 }
 
-LLVMValueRef LLVMBuildMemSet(LLVMBuilderRef B, LLVMValueRef Ptr, 
+LLVMValueRef LLVMBuildMemSet(LLVMBuilderRef B, LLVMValueRef Ptr,
                              LLVMValueRef Val, LLVMValueRef Len,
                              unsigned Align) {
   return wrap(unwrap(B)->CreateMemSet(unwrap(Ptr), unwrap(Val), unwrap(Len),
                                       MaybeAlign(Align)));
 }
 
-LLVMValueRef LLVMBuildMemCpy(LLVMBuilderRef B, 
+LLVMValueRef LLVMBuildMemCpy(LLVMBuilderRef B,
                              LLVMValueRef Dst, unsigned DstAlign,
                              LLVMValueRef Src, unsigned SrcAlign,
                              LLVMValueRef Size) {
@@ -3960,6 +3998,19 @@ LLVMValueRef LLVMBuildAtomicCmpXchg(LLVMBuilderRef B, LLVMValueRef Ptr,
                 singleThread ? SyncScope::SingleThread : SyncScope::System));
 }
 
+unsigned LLVMGetNumMaskElements(LLVMValueRef SVInst) {
+  Value *P = unwrap<Value>(SVInst);
+  ShuffleVectorInst *I = cast<ShuffleVectorInst>(P);
+  return I->getShuffleMask().size();
+}
+
+int LLVMGetMaskValue(LLVMValueRef SVInst, unsigned Elt) {
+  Value *P = unwrap<Value>(SVInst);
+  ShuffleVectorInst *I = cast<ShuffleVectorInst>(P);
+  return I->getMaskValue(Elt);
+}
+
+int LLVMGetUndefMaskElem(void) { return UndefMaskElem; }
 
 LLVMBool LLVMIsAtomicSingleThread(LLVMValueRef AtomicInst) {
   Value *P = unwrap<Value>(AtomicInst);

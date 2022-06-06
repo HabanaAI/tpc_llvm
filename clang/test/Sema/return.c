@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -triple x86_64-apple-darwin9 %s -fsyntax-only -Wignored-qualifiers -Wno-error=return-type -verify -fblocks -Wno-unreachable-code -Wno-unused-value
-// XFAIL: *
+
 // clang emits the following warning by default.
 // With GCC, -pedantic, -Wreturn-type or -Wall are required to produce the 
 // following warning.

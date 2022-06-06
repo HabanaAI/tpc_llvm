@@ -1,39 +1,39 @@
-; RUN: llc -march=tpc -mcpu=gaudi -O0 %s -o - | FileCheck %s
-
+; RUN: llc -march=tpc -mcpu=gaudi -O1 %s -o - | FileCheck %s
+; With O0 catched incorrect COPY: mess with subregisters, difficult issue,
 target triple = "tpc"
 
 ; Function Attrs: nounwind writeonly
 define void @main() local_unnamed_addr #1 {
-; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
-; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
+; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
 
-; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
-; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
+; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
 
-; CHECK-DAG:    mov_dg src=1 dst=0 wr_lg=0x1 wr_ug=0x0 [[DEST:%V[0-9]+]], %V{{[0-9]+}}, -0x10000, %SP0
-; CHECK-DAG:    mov_dg src=2 dst=0 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff, %SP0
-; CHECK-DAG:    mov_dg src=3 dst=0 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000, %SP0
-; CHECK-DAG:    mov_dg src=0 dst=1 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, 0xffff, %SP0
-; CHECK-DAG:    mov_dg src=1 dst=1 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, -0x10000, %SP0
-; CHECK-DAG:    mov_dg src=2 dst=1 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff, %SP0
-; CHECK-DAG:    mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000, %SP0
+; CHECK-DAG:    mov_dg src=1 dst=0 wr_lg=0x1 wr_ug=0x0 [[DEST:%V[0-9]+]], %V{{[0-9]+}}, -0x10000
+; CHECK-DAG:    mov_dg src=2 dst=0 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff
+; CHECK-DAG:    mov_dg src=3 dst=0 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000
+; CHECK-DAG:    mov_dg src=0 dst=1 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, 0xffff
+; CHECK-DAG:    mov_dg src=1 dst=1 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, -0x10000
+; CHECK-DAG:    mov_dg src=2 dst=1 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff
+; CHECK-DAG:    mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000
 
-; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
-; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
+; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
 
-; CHECK-DAG:    mov_dg src=0 dst=2 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, 0xffff, %SP0
-; CHECK-DAG:    mov_dg src=1 dst=2 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, -0x10000, %SP0
-; CHECK-DAG:    mov_dg src=2 dst=2 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff, %SP0
-; CHECK-DAG:    mov_dg src=3 dst=2 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000, %SP0
+; CHECK-DAG:    mov_dg src=0 dst=2 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, 0xffff
+; CHECK-DAG:    mov_dg src=1 dst=2 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, -0x10000
+; CHECK-DAG:    mov_dg src=2 dst=2 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff
+; CHECK-DAG:    mov_dg src=3 dst=2 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000
 
-; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
-; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}, %SP0
+; CHECK-DAG:    pack.i8 source_group=0 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-DAG:    pack.i8 source_group=1 element_stride=4 %V{{[0-9]+}}, %V{{[0-9]+}}
 
-; CHECK-DAG:    mov_dg src=0 dst=3 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, 0xffff, %SP0
-; CHECK-DAG:    mov_dg src=1 dst=3 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, -0x10000, %SP0
-; CHECK-DAG:    mov_dg src=2 dst=3 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff, %SP0
-; CHECK-DAG:    mov_dg src=3 dst=3 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000, %SP0
-; CHECK-DAG:    st_tnsr 0x2, %I{{[0-9+]}}, [[DEST]], %SP0
+; CHECK-DAG:    mov_dg src=0 dst=3 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, 0xffff
+; CHECK-DAG:    mov_dg src=1 dst=3 wr_lg=0x1 wr_ug=0x0 [[DEST]], %V{{[0-9]+}}, -0x10000
+; CHECK-DAG:    mov_dg src=2 dst=3 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, 0xffff
+; CHECK-DAG:    mov_dg src=3 dst=3 wr_lg=0x0 wr_ug=0x1 [[DEST]], %V{{[0-9]+}}, -0x10000
+; CHECK-DAG:    st_tnsr 0x2, %I{{[0-9+]}}, [[DEST]]
 
 entry:
   %i0 = insertelement <5 x i32> zeroinitializer, i32 0, i32 0

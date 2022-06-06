@@ -38,7 +38,7 @@ void main(int dest, float xx, int addr, int addr1, int addr2)
     int sign = 1;
 
     float tmp = xx;
-    x = s_f32_abs_s_b(tmp, x, 1, 0);
+    x = s_f32_abs(tmp, 0, x, 1, 0);
 
     if( xx < 0.0f )
     {

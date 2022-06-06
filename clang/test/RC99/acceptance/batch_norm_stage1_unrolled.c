@@ -28,10 +28,10 @@ void main(tensor ifm , tensor mean_tensor, tensor var_tensor)
             addr2[2] = w+2;
             addr3[2] = w+3;
             float64 tmp0, tmp1,tmp2,tmp3;
-            tmp0 = v_f32_ld_tnsr_i_b(addr0,ifm,tmp0,1,0);
-            tmp1 = v_f32_ld_tnsr_i_b(addr1,ifm,tmp1,1,0);
-            tmp2 = v_f32_ld_tnsr_i_b(addr2,ifm,tmp2,1,0);
-            tmp3 = v_f32_ld_tnsr_i_b(addr3,ifm,tmp3,1,0);
+            tmp0 = v_f32_ld_tnsr_b(addr0, ifm, 0, tmp0, 1, 0);
+            tmp1 = v_f32_ld_tnsr_b(addr1, ifm, 0, tmp1, 1, 0);
+            tmp2 = v_f32_ld_tnsr_b(addr2, ifm, 0, tmp2, 1, 0);
+            tmp3 = v_f32_ld_tnsr_b(addr3, ifm, 0, tmp3, 1, 0);
             
             mean += tmp0;
             var += tmp0 * tmp0;
@@ -50,8 +50,8 @@ void main(tensor ifm , tensor mean_tensor, tensor var_tensor)
         }
     }
     int5 storeCoord = 0;
-    f32_st_tnsr_i_v_b(storeCoord, mean_tensor, mean, 1,0);
-    f32_st_tnsr_i_v_b(storeCoord, var_tensor, var, 1,0);
+    v_f32_st_tnsr(storeCoord, mean_tensor, mean, 0, 1, 0);
+    v_f32_st_tnsr(storeCoord, var_tensor, var, 0, 1, 0);
 }
 
 // CHECK:main

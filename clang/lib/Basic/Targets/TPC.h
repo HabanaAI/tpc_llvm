@@ -1,9 +1,5 @@
 //===--- TPC.h - Declare TPC target feature support -------------*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // This file declares TPC TargetInfo objects.
@@ -23,29 +19,15 @@
 namespace clang {
 namespace targets {
 
-#ifdef LLVM_TPC_COMPILER
-
-static LangASMap TPCAddrSpaceMap = {
-  0, // Default
-  1, // opencl_global
-  0, // opencl_local
-  0, // opencl_constant
-  0, // opencl_private
-  0, // opencl_generic
-  0, // cuda_device
-  0, // cuda_constant
-  1, // cuda_shared
-  0, // ptr32_sptr
-  0, // ptr32_uptr
-  0  // ptr64
-};
-
-
-class TPCTargetInfo : public TargetInfo {
+class LLVM_LIBRARY_VISIBILITY TPCTargetInfo : public TargetInfo {
   enum class CPUKind {
     Generic,
     Goya,
-    Gaudi
+    Gaudi,
+    GaudiB,
+    Greco,
+    Gaudi2,
+    Doron1
   } CPU = CPUKind::Goya;
 
   CPUKind getCPUKind(StringRef CPU) const;
@@ -78,11 +60,9 @@ public:
   bool validateAsmConstraint(const char *&Name,
                              TargetInfo::ConstraintInfo &Info) const override;
 
-  BuiltinVaListKind getBuiltinVaListKind() const override {
-    return TargetInfo::CharPtrBuiltinVaList;
-  }
+  BuiltinVaListKind getBuiltinVaListKind() const override;
+  const char *getBFloat16Mangling() const override;
 };
-#endif
 } // namespace targets
 } // namespace clang
-#endif // LLVM_CLANG_LIB_BASIC_TARGETS_TCE_H
+#endif // LLVM_CLANG_LIB_BASIC_TARGETS_TPC_H

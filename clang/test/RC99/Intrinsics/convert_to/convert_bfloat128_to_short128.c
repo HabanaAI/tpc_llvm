@@ -8,5 +8,5 @@ void main(int src, int dest) {
   *dptr = convert_bfloat128_to_short128(src_val, SW_RD);
 }
 
-// CHECK-IR: fptosi <128 x bfloat> {{.*}} to <128 x i16>
+// CHECK-IR: call <128 x i16> @llvm.tpc.convert.v128i16.v128bf16.i1(<128 x bfloat> {{.*}}, i8 1, i32 67328, <128 x i16> undef, i1 true, i1 false)
 // CHECK-IR: call <128 x i16> @llvm.tpc.convert.v128i16.v128bf16.i1(<128 x bfloat> {{.*}}, i8 1, i32 198400, <128 x i16> undef, i1 true, i1 false)

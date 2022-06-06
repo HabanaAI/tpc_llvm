@@ -1,9 +1,5 @@
 //===- TPCCopyElision.cpp -------------------------------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // Frontend generates extra copies when it deals with intrinsics that return
@@ -275,6 +271,8 @@ bool TpcCopyElision::runOnFunction(Function &F) {
         Value *Dest = nullptr;
         Value *Src = nullptr;
         if (isOnlyCopy(Call, Dest, Src)) {
+          if (isa<GetElementPtrInst>(Dest))
+            continue;
           StoreInst *StI = nullptr;
           BitCastInst *LdI = nullptr;
           SmallVector<Instruction *, 10> TempUsers;

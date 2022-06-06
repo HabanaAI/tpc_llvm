@@ -3,7 +3,7 @@
 void main(int dest, unsigned dividend, unsigned divisor, _Bool pred) {
   uint32_t_pair_t __local *dptr = (uint32_t_pair_t __local *) dest;
   uint32_t_pair_t quot_rem = { dividend, 0 };
-  quot_rem = s_u32_udiv_step_s_b(quot_rem, divisor, 1, pred, 0);
+  quot_rem = u32_udiv_step(divisor, 1, 0, quot_rem, pred, 0);
   *dptr = quot_rem;
 }
 

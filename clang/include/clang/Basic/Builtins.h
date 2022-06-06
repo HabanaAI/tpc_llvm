@@ -36,7 +36,7 @@ enum LanguageID {
   OCLC20_LANG = 0x20, // builtin for OpenCL C 2.0 only.
   OCLC1X_LANG = 0x40, // builtin for OpenCL C 1.x only.
   OMP_LANG = 0x80,    // builtin requires OpenMP.
-  RC99_LANG = 0x40,   // builtin for RC99 only.
+  RC99_LANG = 0x100,   // builtin for RC99 only.
   ALL_LANGUAGES = C_LANG | CXX_LANG | OBJC_LANG, // builtin for all languages.
   ALL_LANGUAGES_AND_RC99 = ALL_LANGUAGES | RC99_LANG,
   ALL_GNU_LANGUAGES = ALL_LANGUAGES | GNU_LANG,  // builtin requires GNU mode.
@@ -161,6 +161,13 @@ public:
   /// Determines whether this builtin has custom typechecking.
   bool hasCustomTypechecking(unsigned ID) const {
     return strchr(getRecord(ID).Attributes, 't') != nullptr;
+  }
+
+  /// Determines whether a declaration of this builtin should be recognized
+  /// even if the type doesn't match the specified signature.
+  bool allowTypeMismatch(unsigned ID) const {
+    return strchr(getRecord(ID).Attributes, 'T') != nullptr ||
+           hasCustomTypechecking(ID);
   }
 
   /// Determines whether this builtin has a result or any arguments which

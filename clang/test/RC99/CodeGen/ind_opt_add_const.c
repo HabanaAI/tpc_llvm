@@ -6,11 +6,11 @@ void main(int src,int step) {
   storeCoord[0]+=2;
   storeCoord[1]+=2;
   storeCoord[2]+=2;
-  i32_st_tnsr_i_v_b(storeCoord, 1, val, 1, 0);
+  v_i32_st_tnsr(storeCoord, 1, val, 0, 1, 0);
   storeCoord[3]+=2;
   storeCoord[4]+=2;
-  i32_st_tnsr_i_v_b(storeCoord, 1, val, 1, 0);
+  v_i32_st_tnsr(storeCoord, 1, val, 0, 1, 0);
 }
 
-// CHECK: add.i32  b00111 %I2, 0x2, %I2, %SP0
-// CHECK: add.i32  b11000 %I2, 0x2, %I2, %SP0
+// CHECK: add.i32  b00111 %I2, 0x2, %I2
+// CHECK: add.i32  b11000 %I2, 0x2, %I2

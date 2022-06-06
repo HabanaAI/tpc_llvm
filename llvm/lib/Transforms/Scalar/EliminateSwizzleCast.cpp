@@ -1,9 +1,16 @@
 //===---------------------------- EliminateSwizzleCast.cpp ----------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+//                     The LLVM Compiler Infrastructure:
+//
+//              2020 - This pass is a property of Habana labs
+//
+//
+// Author : Md Shahid
+// Email  : aashahid@habana.ai
+//
+//===----------------------------------------------------------------------===//
+
 //===----------------------------------------------------------------------===//
 // This file implements a pass to replace "fpext/fptrunc" or
 // 'sitofp/fptosi' or 'uitofp/fptoui' having post dominator relationship with
@@ -11,8 +18,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Scalar/EliminateSwizzleCast.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DDG.h"
-#include "llvm/IR/CallSite.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -21,6 +29,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/TPCIntrinsicUtils.h"
@@ -30,6 +39,10 @@
 #include <iostream>
 
 using namespace llvm;
+
+static cl::opt<bool> AggressiveCastSwizzle(
+    "aggressive-cast-swizzle", cl::init(false), cl::Hidden,
+    cl::desc("Perform cast-swizzle for store-pack patterns"));
 
 namespace {
 
@@ -110,7 +123,7 @@ private:
   void printPath(bool IsPrintUseDef = false);
 };
 
-static void printGraph(const DataDependenceGraph &G, bool isPrintUseDef);
+// static void printGraph(const DataDependenceGraph &G, bool isPrintUseDef);
 
 bool EliminateSwizzleCast::CheckLegal(unsigned int PrevStratCode,
                                       unsigned int PrevEndCode,
@@ -156,6 +169,12 @@ void EliminateSwizzleCast::processDDG(const DataDependenceGraph &G) {
   for (auto entry : marker) {
     StartOpCode = entry.first;
     EndOpCode = entry.second;
+
+    // Avoid fptrunc/store-pack pattern for non-aggressive cast-swizzle
+    // optimization.
+    if (!AggressiveCastSwizzle && StartOpCode == Instruction::FPTrunc &&
+        EndOpCode == Instruction::Call)
+      continue;
     LLVM_DEBUG(dbgs() << "StartOpCode =" << StartOpCode << "\n");
     LLVM_DEBUG(dbgs() << "EndOpCode =" << EndOpCode << "\n");
 
@@ -699,8 +718,7 @@ bool EliminateSwizzleCast::isLegalToTransform(void) {
       unsigned TmpOpCode;
       Instruction *SI = getIntrestingInst(PDomNode, &TmpOpCode);
       CallInst *CI = cast<CallInst>(SI);
-      CallSite CS(CI);
-      Value *CastVal = CS.getArgument(2);
+      Value *CastVal = CI->getArgOperand(2);
       LLVM_DEBUG(dbgs() << "isLegalToTransform:  Cast instruction:  "
                         << *CastVal << "\n");
       CallInst *Cast = dyn_cast<CallInst>(CastVal);
@@ -734,10 +752,10 @@ bool EliminateSwizzleCast::isLegalToTransform(void) {
 
     // Handle unsupported 'convert' ops by preventing the transformation.
     Instruction *I = getIntrestingInst(PDomNode, &OpEnd);
-    VectorType *VTy = dyn_cast<VectorType>(I->getType());
+    FixedVectorType *VTy = dyn_cast<FixedVectorType>(I->getType());
     if (VTy) {
       Type *ElementTy = VTy->getElementType();
-      unsigned Num = VTy->getVectorNumElements();
+      unsigned Num = VTy->getNumElements();
       if ((ElementTy->isIntegerTy() || ElementTy->isFloatTy()) && Num == 256) {
         PostDomSet.erase(PDomNode);
         continue;
@@ -789,6 +807,7 @@ bool EliminateSwizzleCast::isLegalToTransform(void) {
       }
     }
   }
+
   return true;
 }
 
@@ -828,9 +847,9 @@ void EliminateSwizzleCast::applyTransform(void) {
 // Sets the modified switch using the specified \p Switch to this call
 // instruction.If no switch is supplied, returns the switch from the call
 // instruction.
-static int getOrSetSwitch(CallSite CS, int ArgNum, int Switch = -1) {
+static int getOrSetSwitch(CallBase *CS, int ArgNum, int Switch = -1) {
   int SW = -1;
-  Value *SwitchVal = CS.getArgument(ArgNum);
+  Value *SwitchVal = CS->getArgOperand(ArgNum);
   ConstantInt *CI = dyn_cast<llvm::ConstantInt>(SwitchVal);
   if (!CI) {
     LLVM_DEBUG(dbgs() << "Switch not a constant !!\n");
@@ -844,7 +863,7 @@ static int getOrSetSwitch(CallSite CS, int ArgNum, int Switch = -1) {
   // Update the switch.
   SW = SW | Switch;
   SwitchVal = ConstantInt::get(CI->getType(), SW, true);
-  CS.setArgument(ArgNum, SwitchVal);
+  CS->setArgOperand(ArgNum, SwitchVal);
 
   // Return the modified switch
   return SW;
@@ -870,10 +889,9 @@ void EliminateSwizzleCast::replaceInstWithIntrinsic(
              isFpToSiIntrinsic(InstrToReplace)) {
     LLVM_DEBUG(dbgs() << "Found intrinsic to be replaced\n");
     CallInst *CI = cast<CallInst>(InstrToReplace);
-    CallSite CS(CI);
     // Get the switch from the intrinsic instruction to be applied while
     // creating the convert intrinsic.
-    int Switch = getOrSetSwitch(CS, 1);
+    int Switch = getOrSetSwitch(CI, 1);
     LLVM_DEBUG(dbgs() << "getOrSetSwitch(CS, 1): " << Switch << "\n");
     IntrinsicCall = createConvertIntrinsic(InstrToReplace, Switch);
   }
@@ -886,8 +904,7 @@ void EliminateSwizzleCast::replaceInstWithIntrinsic(
       isStoreIntrinsic(InstrToReplace)) {
     LLVM_DEBUG(dbgs() << "Modifying Store pack switch\n");
     CallInst *CI = cast<CallInst>(InstrToReplace);
-    CallSite CS(CI);
-    getOrSetSwitch(CS, 3, 1 << 2);
+    getOrSetSwitch(CI, 3, 1 << 2);
   }
 }
 
@@ -992,6 +1009,7 @@ void EliminateSwizzleCast::printPath(bool isPrintUseDef) {
 }
 
 // Prints DOT format graph using DataDependenceGraph \p G
+/*
 static void printGraph(const DataDependenceGraph &G, bool isPrintUseDef) {
   LLVM_DEBUG(dbgs() << "Printing Graph"
                     << "\n");
@@ -1006,6 +1024,7 @@ static void printGraph(const DataDependenceGraph &G, bool isPrintUseDef) {
   LLVM_DEBUG(dbgs() << "}"
                     << "\n");
 }
+*/
 
 class EliminateSwizzleCastLegacyPass : public FunctionPass {
 public:

@@ -8,12 +8,12 @@ void main(int x0, unsigned x1, int dest0, int dest1)
     
    uint64 __local *res0 = (uint64  __local *)dest0;
     uint64 temp_res0 = 0;
-    temp_res0 = v_u32_xor_v_s(*ptr_x0, 1);
+    temp_res0 = v_u32_xor_b(*ptr_x0, 1, 0, 0, 1, 0);
     *res0 = temp_res0;
     
    uint64 __local *res1 = (uint64  __local *)dest1;
     uint64 temp_res1 = 0;
-    temp_res1 = v_u32_xor_v_s(*ptr_x0, x1);
+    temp_res1 = v_u32_xor_b(*ptr_x0, x1, 0, 0, 1, 0);
     *res1 = temp_res1;
 }
 //CHECK-ASM: .globl main

@@ -1,5 +1,5 @@
 // RUN: %clang -cc1as -triple tpc-none-none -filetype obj -target-cpu gaudi %s -o %t.o
-// RUN: %disasm -mcpu=gaudi %t.o | FileCheck %s
+// RUN: %disasm --mcpu=gaudi %t.o | FileCheck %s
 
 	.text
 	.globl	main
@@ -15,14 +15,14 @@ PREFETCH AD5
 PREFETCH AD6
 PREFETCH AD7
 
-// CHECK-NEXT: prefetch AD0, SP0;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD1, SP0;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD2, SP0;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD3, SP0;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD4, SP0;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD5, SP0;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD6, SP0;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD7, SP0;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD0;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD1;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD2;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD3;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD4;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD5;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD6;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD7;    nop;    nop;    nop
 
 
 PREFETCH AD0, SP7
@@ -41,7 +41,7 @@ PREFETCH AD7, SP0
 // CHECK-NEXT: prefetch AD4, SP3;    nop;    nop;    nop
 // CHECK-NEXT: prefetch AD5, SP2;    nop;    nop;    nop
 // CHECK-NEXT: prefetch AD6, SP1;    nop;    nop;    nop
-// CHECK-NEXT: prefetch AD7, SP0;    nop;    nop;    nop
+// CHECK-NEXT: prefetch AD7;    nop;    nop;    nop
 
 
 PREFETCH AD0, SP15

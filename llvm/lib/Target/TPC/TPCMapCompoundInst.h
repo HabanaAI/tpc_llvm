@@ -1,9 +1,3 @@
-//===TPCMapCompound.h---------------------------------------------------------//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file contains code that maps compound Instruction to the corresponding
@@ -111,13 +105,15 @@ public:
   const IntrinsicVector &getExt16_32Gaudi() const { return Ext_16_32_Gaudi; }
   const IntrinsicVector &getExt16_32() const { return Ext_16_32; }
   const IntrinsicVector &getExt8_32(const TPCSubtarget *ST) const {
-    return (ST->hasGaudiISA()) ? getExt8_32Gaudi() : getExt8_32();
+    return (ST->hasGaudiISA() || ST->hasGaudiBISA()) ? getExt8_32Gaudi()
+                                                     : getExt8_32();
   }
   const IntrinsicVector &getExt8_16(const TPCSubtarget *ST) const {
     return getExt8_16();
   }
   const IntrinsicVector &getExt16_32(const TPCSubtarget *ST) const {
-    return (ST->hasGaudiISA()) ? getExt16_32Gaudi() : getExt16_32();
+    return (ST->hasGaudiISA() || ST->hasGaudiBISA()) ? getExt16_32Gaudi()
+                                                     : getExt16_32();
   }
   IntrinsicVector upConvertVec(const Instruction *I, const TPCSubtarget *ST);
   virtual ~MapExtend() = default;
@@ -158,9 +154,12 @@ public:
 
   unsigned getCount(const Instruction *I, const TPCSubtarget *ST) {
     unsigned Count = 0;
-    bool Gen2 = ST->hasGaudiISA();
+    bool Gen3 = ST->hasGrecoISA();
+    bool Gen2 = ST->hasGaudiISA() || ST->hasGaudiBISA();
     bool Gen1 = ST->hasGoyaISA();
-    bool Gen2OrHigher = ST->hasGaudiISA();
+    // Note: Division lowering code does not consider Gaudi2 in Gen2OrHigher
+    bool Gen2OrHigher =
+        ST->hasGrecoISA() || ST->hasGaudiISA() || ST->hasGaudiBISA();
     if (I->getType()->isIntegerTy()) {
       switch (I->getType()->getPrimitiveSizeInBits()) {
       case 32:
@@ -168,22 +167,34 @@ public:
           Count = 32;
         else if (Gen2)
           Count = 8;
+        else if (Gen3)
+          Count = 4;
+        else
+          assert(false && "Gaudi2 do not support udiv_step");
         break;
       case 16:
         if (Gen1)
           Count = 16;
         else if (Gen2)
           Count = 4;
+        else if (Gen3)
+          Count = 2;
+        else
+          assert(false && "Gaudi2 do not support udiv_step");
         break;
       default:
         if (Gen1)
           Count = 8;
         else if (Gen2)
           Count = 2;
+        else if (Gen3)
+          Count = 1;
+        else
+          assert(false && "Gaudi2 do not support udiv_step");
         break;
       }
     } else {
-      Count = (Gen2OrHigher ? 2 : 8);
+      Count = Gen3 ? 1 : (Gen2OrHigher ? 2 : 8);
     }
     return Count;
   }

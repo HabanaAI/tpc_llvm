@@ -45,11 +45,6 @@ namespace clang {
 
   void EmbedBitcode(llvm::Module *M, const CodeGenOptions &CGOpts,
                     llvm::MemoryBufferRef Buf);
-
-  llvm::Expected<llvm::BitcodeModule>
-  FindThinLTOModule(llvm::MemoryBufferRef MBRef);
-  llvm::BitcodeModule *
-  FindThinLTOModule(llvm::MutableArrayRef<llvm::BitcodeModule> BMs);
 #ifdef LLVM_TPC_COMPILER
   void EmbedText   (llvm::Module *M, const CodeGenOptions &CGOpts,
                     StringRef Str, StringRef SectionName, StringRef ItemName);

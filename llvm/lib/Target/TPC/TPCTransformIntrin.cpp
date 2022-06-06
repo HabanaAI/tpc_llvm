@@ -1,9 +1,3 @@
-//===- TPCTransformIntrin.cpp -----------------------------------*- C++ -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 // This pass
 // transforms intrinsic call into expression
@@ -12,6 +6,7 @@
 #ifdef LLVM_TPC_COMPILER
 
 #include "TPCTargetMachine.h"
+
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicsTPC.h"
@@ -104,13 +99,13 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
   IntegerType *I8Type = Type::getInt8Ty(Ctx);
   IntegerType *I16Type = Type::getInt16Ty(Ctx);
   Type *F32Type = Type::getFloatTy(Ctx);
-  Type *F16Type = Type::getBFloat16Ty(Ctx);
-  VectorType* Int64Type = VectorType::get(I32Type, 64);
-  VectorType* Float64Type = VectorType::get(F32Type, 64);
-  VectorType* Short128Type = VectorType::get(I16Type, 128);
-  VectorType* Bfloat128Type = VectorType::get(F16Type, 128);
-  VectorType* Char256Type = VectorType::get(I8Type, 256);
-  VectorType* Int5Type = VectorType::get(I32Type, 5);
+  Type *BF16Type = Type::getBFloatTy(Ctx);
+  VectorType* Int64Type = FixedVectorType::get(I32Type, 64);
+  VectorType* Float64Type = FixedVectorType::get(F32Type, 64);
+  VectorType* Short128Type = FixedVectorType::get(I16Type, 128);
+  VectorType* Bfloat128Type = FixedVectorType::get(BF16Type, 128);
+  VectorType* Char256Type = FixedVectorType::get(I8Type, 256);
+  VectorType* Int5Type = FixedVectorType::get(I32Type, 5);
   for (auto BBIt = Func.begin(), BBEnd = Func.end(); BBIt != BBEnd;) {
     BasicBlock &BB = *BBIt;
     ++BBIt;
@@ -202,12 +197,12 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
           if (cv->getType() != I32Type) {
             continue;
           }
-          apint = cv->getUniqueInteger();     
+          apint = cv->getUniqueInteger();
           Value* newins;
           // int5 sake
           int vne;
           if (t0->isVectorTy()) {
-            vne = t0->getVectorNumElements();
+            vne = cast<FixedVectorType>(t0)->getNumElements();
             if (vne == 5 && EnableTPCTransformIntrinInt5) { //int5 case
               if (t0->isVectorTy() && t1->isVectorTy()) {
                 // however at the moment this config is imposible under tpc_add_mask
@@ -215,8 +210,8 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
 
                 // maybe some is splat
                 if (auto shins = dyn_cast<ShuffleVectorInst>(op0)) {
-                  const Constant * mask = shins->getMask();
-                  if (mask && mask->isZeroValue()) {
+                  ArrayRef<int> Mask = shins->getShuffleMask();
+                  if (ShuffleVectorInst::isZeroEltSplatMask(Mask)) {
                     Constant *CI = ConstantInt::get(I32Type, 0);
                     auto sav0 = op0;
                     op0 = op1;
@@ -437,7 +432,7 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
           auto op6 = intrins->getOperand(6);
           auto op5 = intrins->getOperand(5);
           auto op4 = intrins->getOperand(4);  // income , need to look when MUL
-          auto op3 = intrins->getOperand(3);
+          auto op3 = intrins->getOperand(3);  // switches
           auto op2 = intrins->getOperand(2);
           auto op1 = intrins->getOperand(1);
           auto op0 = intrins->getOperand(0);
@@ -478,7 +473,7 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
           Type* t0 = op0->getType();
           Value* newins = nullptr;
           // 1 with saturation for int. skip it
-         if (apint != 0) {
+          if (apint != 0) {
             continue;
           }
 
@@ -677,7 +672,7 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
               }
             }
             else if (t0->isVectorTy()) {
-              if (t0->getVectorNumElements() < 32) {
+              if (cast<FixedVectorType>(t0)->getNumElements() < 32) {
                 // not yet for int5
                 continue;
               }
@@ -1195,12 +1190,11 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
           }
           {
             Type* t0 = op0->getType();
-            Value *ExtF;
             if (inid == Intrinsic::tpc_popcnt) {
               if (income_type != I8Type &&
                 !(income_type->isVectorTy() &&
-                  cast<VectorType>(income_type)->getNumElements() == 256 &&
-                  cast<VectorType>(income_type)->getElementType() == I8Type)
+                  cast<FixedVectorType>(income_type)->getNumElements() == 256 &&
+                  cast<FixedVectorType>(income_type)->getElementType() == I8Type)
                 ) {
                 continue;
               }
@@ -1218,15 +1212,15 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
               if (val2 != 1) { //ctpop counts only 1
                 continue;
               }
-              ExtF = Intrinsic::getDeclaration(F->getParent(), Intrinsic::ctpop, op0->getType());
+              Function *ExtF = Intrinsic::getDeclaration(F->getParent(), Intrinsic::ctpop, op0->getType());
               newins = Builder.CreateCall(ExtF, { op0 });
               newins = Builder.CreateTrunc(newins, income_type);
             }
             else if (inid == Intrinsic::tpc_find_first) {
               if (income_type != I8Type &&
                 !(income_type->isVectorTy() &&
-                  cast<VectorType>(income_type)->getNumElements() == 256 &&
-                  cast<VectorType>(income_type)->getElementType() == I8Type)
+                  cast<FixedVectorType>(income_type)->getNumElements() == 256 &&
+                  cast<FixedVectorType>(income_type)->getElementType() == I8Type)
                 ) {
                 continue;
               }
@@ -1245,7 +1239,7 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
                 continue;
               }
               // 3 means cttz  
-              ExtF = Intrinsic::getDeclaration(F->getParent(),
+              Function *ExtF = Intrinsic::getDeclaration(F->getParent(),
                 (val2 == 3) ? Intrinsic::cttz : Intrinsic::ctlz, op0->getType());
               Value* uv;// = Constant::getNullValue(I1Type);
               // with null value Codegen Prepare transform code into branches
@@ -1283,9 +1277,8 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
               }
             }
             else if (inid == Intrinsic::tpc_abs) {
-              Value *ExtF;
               if (apint == 0) { //float 
-                ExtF = Intrinsic::getDeclaration(F->getParent(), Intrinsic::fabs, op0->getType());
+                Function *ExtF = Intrinsic::getDeclaration(F->getParent(), Intrinsic::fabs, op0->getType());
                 newins = Builder.CreateCall(ExtF, { op0 });
               }
               else if (apint == 1) { //bfloat
@@ -1297,7 +1290,7 @@ bool TPCTransformIntrin::runOnFunction(Function &Func) {
                 else {
                   newins = Builder.CreateBitCast(op0, I16Type);
                   newins = Builder.CreateAnd(newins, ConstantInt::get(I16Type, 0x7fff));
-                  newins = Builder.CreateBitCast(newins, F16Type);
+                  newins = Builder.CreateBitCast(newins, BF16Type);
                 }
               }
               else { // int types

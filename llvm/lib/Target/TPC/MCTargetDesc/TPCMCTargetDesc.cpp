@@ -66,11 +66,17 @@ createTPCMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
     CPU = "goya";
   else if (CPU == "dali")
     CPU = "goya";
+  else if (CPU == "goya2")
+    CPU = "greco";
 
   if (CPU.equals("goya") ||
-      CPU.equals("gaudi") )
-    return createTPCMCSubtargetInfoImpl(TT, CPU, FS);
-
+      CPU.equals("gaudi") ||
+      CPU.equals("gaudib") ||
+      CPU.equals("goya2") ||
+      CPU.equals("greco") ||
+      CPU.equals("gaudi2") ||
+      CPU.equals("doron1"))
+    return createTPCMCSubtargetInfoImpl(TT, CPU, CPU, FS);
   return nullptr;
 }
 

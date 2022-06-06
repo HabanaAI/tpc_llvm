@@ -122,7 +122,7 @@ void DfaEmitter::emit(StringRef Name, raw_ostream &OS) {
   for (auto &T : DfaTransitions)
     Table.add(T.second.second);
   Table.layout();
-  OS << "std::array<NfaStatePair, " << Table.size() << "> " << Name
+  OS << "const std::array<NfaStatePair, " << Table.size() << "> " << Name
      << "TransitionInfo = {{\n";
   Table.emit(
       OS,
@@ -146,8 +146,8 @@ void DfaEmitter::emit(StringRef Name, raw_ostream &OS) {
 
   OS << "// A table of DFA transitions, ordered by {FromDfaState, Action}.\n";
   OS << "// The initial state is 1, not zero.\n";
-  OS << "std::array<" << Name << "Transition, " << DfaTransitions.size() << "> "
-     << Name << "Transitions = {{\n";
+  OS << "const std::array<" << Name << "Transition, "
+     << DfaTransitions.size() << "> " << Name << "Transitions = {{\n";
   for (auto &KV : DfaTransitions) {
     dfa_state_type From = KV.first.first;
     dfa_state_type To = KV.second.first;
@@ -174,7 +174,7 @@ namespace {
 struct Action {
   Record *R = nullptr;
   unsigned I = 0;
-  std::string S = nullptr;
+  std::string S;
 
   Action() = default;
   Action(Record *R, unsigned I, std::string S) : R(R), I(I), S(S) {}
@@ -346,9 +346,8 @@ Transition::Transition(Record *R, Automaton *Parent) {
     } else if (isa<IntRecTy>(SymbolV->getType())) {
       Actions.emplace_back(nullptr, R->getValueAsInt(A), "");
       Types.emplace_back("unsigned");
-    } else if (isa<StringRecTy>(SymbolV->getType()) ||
-               isa<CodeRecTy>(SymbolV->getType())) {
-      Actions.emplace_back(nullptr, 0, R->getValueAsString(A));
+    } else if (isa<StringRecTy>(SymbolV->getType())) {
+      Actions.emplace_back(nullptr, 0, std::string(R->getValueAsString(A)));
       Types.emplace_back("std::string");
     } else {
       report_fatal_error("Unhandled symbol type!");
@@ -356,7 +355,7 @@ Transition::Transition(Record *R, Automaton *Parent) {
 
     StringRef TypeOverride = Parent->getActionSymbolType(A);
     if (!TypeOverride.empty())
-      Types.back() = TypeOverride;
+      Types.back() = std::string(TypeOverride);
   }
 }
 

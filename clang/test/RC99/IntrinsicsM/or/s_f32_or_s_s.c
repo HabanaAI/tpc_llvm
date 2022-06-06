@@ -8,12 +8,12 @@ void main(float x0, float x1, int dest0, int dest1)
     
    float __local *res0 = (float  __local *)dest0;
     float temp_res0 = 0;
-    temp_res0 = s_f32_or_s_s(x0, x1);
+    temp_res0 = s_f32_or(x0, x1, 0, 0, 1, 0);
     *res0 = temp_res0;
     
    float __local *res1 = (float  __local *)dest1;
     float temp_res1 = 0;
-    temp_res1 = s_f32_or_s_s(x0, 8.);
+    temp_res1 = s_f32_or(x0, 8., 0, 0, 1, 0);
     *res1 = temp_res1;
 }
 //CHECK-ASM: .globl main

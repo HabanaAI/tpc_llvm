@@ -1,6 +1,7 @@
 // RUN: %clang_cc1 -S -triple tpc-none-none -std=rc99 -emit-llvm -O1 %s -o - | FileCheck %s
 // XFAIL: *
-// to be removed or rewritten as runtime test
+// GAUDI-2311
+// TODO rewrite as runtime test
 void main(
   int arg0, int arg1, int arg2, int arg3, int arg4,
   int arg5, int arg6, int arg7, int arg8, int arg9, 

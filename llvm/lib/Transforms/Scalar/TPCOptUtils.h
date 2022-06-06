@@ -1,12 +1,15 @@
-//===- TPCOptUtils.h --------------------------------------------------===//
+//===-------------------------- TPCOptUtils.h --------------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//                     The LLVM Compiler Infrastructure:
+//
+//            2020,2021 - This pass is a property of Habana labs
+//
+// Author : Vinay V. Vasista
+// Email  : vvasista@habana.ai
 //
 //===-------------------------------------------------------------------===//
-//
-//===-------------------------------------------------------------------===//
+
 #ifndef LLVM_TRANSFORM_SCALAR_TPC_OPT_UTILS_H
 #define LLVM_TRANSFORM_SCALAR_TPC_OPT_UTILS_H
 
@@ -86,7 +89,7 @@ public:
     }
 
     if (const auto *II = dyn_cast<InsertElementInst>(I)) {
-      Type *Int5Ty = VectorType::get(Type::getInt32Ty(I->getContext()), 5);
+      Type *Int5Ty = FixedVectorType::get(Type::getInt32Ty(I->getContext()), 5);
       if (Int5Ty == II->getType())
         return true;
     }
@@ -448,7 +451,7 @@ public:
                             InstructionSetType &LoopStructureInsts,
                             Lambda isInductionPHILambda) {
     BasicBlock *BB = I->getParent();
-    Type *T5xi32 = VectorType::get(Type::getInt32Ty(BB->getContext()), 5);
+    Type *T5xi32 = FixedVectorType::get(Type::getInt32Ty(BB->getContext()), 5);
     if (cast<Value>(I)->getType() == T5xi32)
       return false;
 

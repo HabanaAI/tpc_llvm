@@ -7,7 +7,7 @@ void main(signed char x0, int x1, int dest0)
     
    unsigned short __local *res0 = (unsigned short  __local *)dest0;
     unsigned short temp_res0 = 0;
-    temp_res0 = s_convert_i8_to_u16_s_b(x0, temp_res0, x1, 0);
+    temp_res0 = s_convert_i8_to_u16(x0, SW_CSR, temp_res0, x1, 0);
     *res0 = temp_res0;
 }
 //CHECK-ASM: .globl main

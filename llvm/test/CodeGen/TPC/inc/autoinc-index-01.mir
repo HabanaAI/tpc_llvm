@@ -1,0 +1,112 @@
+# RUN: llc -mtriple=tpc -mcpu=doron1 -run-pass=tpc-inc -tpc-inc-merger=1 %s -o - | FileCheck %s
+
+# Initially obtained from the source:
+#
+# void main(tensor input, int niter, int dest) {
+#   int5 index = {0};
+#   int64 __local *dest_ptr = (int64 __local *)dest;
+#   int64 sum = 0;
+#
+#   for (int i = 0; i < niter; ++i) {
+#     int64 res = v_i32_ld_tnsr_b(index, input, 0, 0, 1, 0);
+#     sum = sum + res;
+#     index[0] += 256;
+#   }
+#   *dest_ptr = sum;
+# }
+ 
+
+--- |
+  define void @main(i32 %niter, i32 %dest) #0 {
+  entry:
+    %cmp11 = icmp sgt i32 %niter, 0
+    br i1 %cmp11, label %for.body.preheader, label %for.cond.cleanup
+  
+  for.body.preheader:                               ; preds = %entry
+    br label %for.body
+  
+  for.cond.cleanup:                                 ; preds = %for.body, %entry
+    %sum.0.lcssa = phi <64 x i32> [ zeroinitializer, %entry ], [ %add, %for.body ]
+    %0 = inttoptr i32 %dest to <64 x i32> addrspace(2)*
+    store <64 x i32> %sum.0.lcssa, <64 x i32> addrspace(2)* %0, align 256
+    ret void
+  
+  for.body:                                         ; preds = %for.body, %for.body.preheader
+    %lsr.iv = phi i32 [ %lsr.iv.next, %for.body ], [ %niter, %for.body.preheader ]
+    %index.014 = phi <5 x i32> [ %2, %for.body ], [ zeroinitializer, %for.body.preheader ]
+    %sum.012 = phi <64 x i32> [ %add, %for.body ], [ zeroinitializer, %for.body.preheader ]
+    %1 = tail call <64 x i32> @llvm.tpc.ld.tnsr.v64i32.i1(<5 x i32> %index.014, i8 0, i32 0, <64 x i32> undef, i1 true, i1 false)
+    %add = add <64 x i32> %1, %sum.012
+    %2 = tail call <5 x i32> @llvm.tpc.add.mask.v5i32.i32(<5 x i32> %index.014, i32 256, i32 1, i8 2, i32 0, <5 x i32> %index.014, i1 true, i1 false)
+    %lsr.iv.next = add i32 %lsr.iv, -1
+    %exitcond.not = icmp eq i32 %lsr.iv.next, 0
+    br i1 %exitcond.not, label %for.cond.cleanup, label %for.body
+  }
+  
+  declare <64 x i32> @llvm.tpc.ld.tnsr.v64i32.i1(<5 x i32>, i8, i32, <64 x i32>, i1, i1) #1
+  declare <5 x i32> @llvm.tpc.add.mask.v5i32.i32(<5 x i32>, i32, i32, i8, i32, <5 x i32>, i1, i1) #1
+  
+  attributes #0 = { nounwind "target-cpu"="doron1" "tpc-kernel"="true" }
+  attributes #1 = { nounwind readnone "target-cpu"="doron1" }
+
+...
+---
+name:            main
+tracksRegLiveness: true
+body:             |
+  bb.0.entry:
+    successors: %bb.1(0x50000000), %bb.2(0x30000000)
+    liveins: $s0, $s1
+  
+    %8:srf = COPY $s1
+    %7:srf = COPY $s0
+    %11:sprf = IMPLICIT_DEF
+    %10:sprf = CMP_LESSsip %7, 1, 2, 0, %11, $sprf_true, 0
+    %12:vrf = IMPLICIT_DEF
+    %9:vrf = MOV_ld_vip 0, 2, 0, %12, $sprf_true, 0
+    JMPR %bb.2, killed %10, 0
+    JMPR_u %bb.1
+  
+  bb.1.for.body.preheader:
+    successors: %bb.3(0x80000000)
+  
+    %15:vrf = IMPLICIT_DEF
+    %14:vrf = MOV_ld_vip 0, 2, 0, %15, $sprf_true, 0
+    %16:irf = IMPLICIT_DEF
+    %13:irf = SET_INDX_ld_ip %16, 0, 31, 0, $sprf_true, 0
+    %19:vrf = IMPLICIT_DEF
+    %20:vrf = IMPLICIT_DEF
+    %21:srf = IMPLICIT_DEF
+    %23:sprf = IMPLICIT_DEF
+    JMPR_u %bb.3
+  
+  bb.2.for.cond.cleanup:
+    %0:vrf = PHI %9, %bb.0, %4, %bb.3
+    ST_L_Vsvp %8, %0, 0, $sprf_true, 0 :: (store 256 into %ir.0, addrspace 2)
+    HALTs
+  
+  bb.3.for.body:
+    successors: %bb.2(0x04000000), %bb.3(0x7c000000)
+  
+    %1:srf = PHI %7, %bb.1, %6, %bb.3
+    %2:irf = PHI %13, %bb.1, %5, %bb.3
+    %3:vrf = PHI %14, %bb.1, %4, %bb.3
+    %17:sprf = COPY $sprf_true
+    %18:vrf = LD_TNSRvp %2, 0, 1792, %19, $sprf_true, 0
+    %4:vrf = ADDvvp killed %18, %3, 2, 0, %20, $sprf_true, 0
+    %5:irf = ADDiIp 256, %2, 1, 2, 0, %2, $sprf_true, 0
+    %6:srf = ADDsip %1, -1, 2, 0, %21, $sprf_true, 0
+    %22:sprf = CMP_EQsip %6, 0, 2, 0, %23, $sprf_true, 0
+    JMPR %bb.2, killed %22, 0
+    JMPR_u %bb.3
+
+...
+
+
+# CHECK:        bb.1.for.body.preheader:
+# CHECK:          $inc_ld_dim_reg = MOV_ld_hsip 256, 0, $spu_lfsr, $sprf_true, 0
+# CHECK-NEXT:     JMPR_u %bb.3
+
+# CHECK:        bb.3.for.body:
+# CHECK:          %18:irf = PHI %9, %bb.1, %24, %bb.3
+# CHECK:          %22:vrf = LD_TNSRvp %18(tied-def 7), 0, 0, %10(tied-def 0), $sprf_true, 0, implicit-def %24, implicit $inc_ld_dim_reg

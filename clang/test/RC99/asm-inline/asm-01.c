@@ -7,5 +7,5 @@ void main(int x) {
 }
 // CHECK-LABEL: main:
 // CHECK:    //APP
-// CHECK-NEXT:    nop; add.f32 S11, S2, S3
+// CHECK-NEXT:    add.f32 %S11, %S2, %S3
 // CHECK-NEXT:    //NO_APP

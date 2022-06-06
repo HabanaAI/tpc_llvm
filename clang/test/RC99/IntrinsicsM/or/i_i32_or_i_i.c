@@ -8,9 +8,9 @@ void main()
     int5 indx1 = {0,0,0,0,0};
     int5 res0 = 0; 
 
-    res0 = i_i32_or_i_i(indx0, indx1, res0, 1);
+    res0 = i_i32_or(indx0, indx1, 1, 0, res0, 1, 0);
     float64 temp0 = 0;
-    f32_st_tnsr_i_v(res0, 1, temp0);
+    v_f32_st_tnsr(res0, 1, temp0, 0, 1, 0);
 }
 //CHECK-ASM: .globl main
-//CHECK-ASM-DAG: or.i32 b00001 %I2, 0x0, %I2, %SP0
+//CHECK-ASM-DAG: or.i32 b00001 %I2, 0x0, %I2

@@ -8,5 +8,5 @@ void main(int src, int dest) {
   *dptr = convert_float64_to_uint64(src_val, SW_RD);
 }
 
-// CHECK-IR: fptoui <64 x float> {{.*}} to <64 x i32>
+// CHECK-IR: call <64 x i32> @llvm.tpc.convert.v64i32.v64f32.i1(<64 x float> {{.*}}, i8 0, i32 66304, <64 x i32> undef, i1 true, i1 false)
 // CHECK-IR: call <64 x i32> @llvm.tpc.convert.v64i32.v64f32.i1(<64 x float> {{.*}}, i8 0, i32 197376, <64 x i32> undef, i1 true, i1 false)

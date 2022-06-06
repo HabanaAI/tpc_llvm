@@ -1,9 +1,5 @@
 //===--- TPC.cpp - Implement TPC target feature support -------------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
 //===----------------------------------------------------------------------===//
 //
 // This file implements TPC TargetInfo objects.
@@ -18,6 +14,21 @@
 
 namespace clang {
 namespace targets {
+
+static LangASMap TPCAddrSpaceMap = {
+    0, // Default
+    1, // opencl_global
+    0, // opencl_local
+    0, // opencl_constant
+    0, // opencl_private
+    0, // opencl_generic
+    0, // cuda_device
+    0, // cuda_constant
+    1, // cuda_shared
+    0, // ptr32_sptr
+    0, // ptr32_uptr
+    0  // ptr64
+};
 
 const Builtin::Info TPCTargetInfo::BuiltinInfo[] = {
 #define BUILTIN(ID, TYPE, ATTRS)                                               \
@@ -70,6 +81,14 @@ TPCTargetInfo::TPCTargetInfo(const llvm::Triple &Triple, const TargetOptions &TO
   : TargetInfo(Triple) {
   BigEndian = false;
   TLSSupported = false;
+  VLASupported = false;
+  NoAsmVariants = true;
+  HasLegalHalfType = true;
+  HasFloat128 = false;
+  HasFloat16 = true;
+  HasBFloat16 = true;
+  HasStrictFP = false;
+
   IntWidth = 32;
   IntAlign = 32;
   LongWidth = 32;
@@ -104,6 +123,10 @@ TPCTargetInfo::CPUKind TPCTargetInfo::getCPUKind(StringRef Name) const {
   return llvm::StringSwitch<CPUKind>(Name)
     .Cases("dali", "goya", CPUKind::Goya)
     .Case("gaudi", CPUKind::Gaudi)
+    .Case("gaudib", CPUKind::GaudiB)
+    .Cases("goya2", "greco", CPUKind::Greco)
+    .Case("gaudi2", CPUKind::Gaudi2)
+    .Case("doron1", CPUKind::Doron1)
     .Default(CPUKind::Generic);
 }
 
@@ -116,6 +139,10 @@ bool TPCTargetInfo::checkCPUKind(CPUKind Kind) const {
     return false;
   case CPUKind::Goya:
   case CPUKind::Gaudi:
+  case CPUKind::GaudiB:
+  case CPUKind::Greco:
+  case CPUKind::Gaudi2:
+  case CPUKind::Doron1:
     return true;
   }
   llvm_unreachable("Unhandled CPU kind");
@@ -128,6 +155,10 @@ bool TPCTargetInfo::isValidCPUName(StringRef Name) const {
 void TPCTargetInfo::fillValidCPUList(SmallVectorImpl<StringRef> &Values) const {
   Values.emplace_back("goya");
   Values.emplace_back("gaudi");
+  Values.emplace_back("gaudib");
+  Values.emplace_back("greco");
+  Values.emplace_back("gaudi2");
+  Values.emplace_back("doron1");
 }
 
 bool TPCTargetInfo::setCPU(const std::string &Name) {
@@ -153,6 +184,28 @@ void TPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__gaudi__");
     Builder.defineMacro("__gaudi_plus__");
     break;
+  case CPUKind::GaudiB:
+    Builder.defineMacro("__gaudib__");
+    Builder.defineMacro("__gaudi_plus__");
+    break;
+  case CPUKind::Greco:
+    Builder.defineMacro("__goya2__");
+    Builder.defineMacro("__greco__");
+    Builder.defineMacro("__gaudi_plus__");
+    Builder.defineMacro("__greco_plus__");
+    break;
+  case CPUKind::Gaudi2:
+    Builder.defineMacro("__gaudi2__");
+    Builder.defineMacro("__gaudi_plus__");
+    Builder.defineMacro("__greco_plus__");
+    Builder.defineMacro("__gaudi2_plus__");
+    break;
+  case CPUKind::Doron1:
+    Builder.defineMacro("__doron1__");
+    Builder.defineMacro("__gaudi_plus__");
+    Builder.defineMacro("__greco_plus__");
+    Builder.defineMacro("__gaudi2_plus__");
+    break;
   default:
     llvm_unreachable("Invalid processor");
   }
@@ -164,12 +217,24 @@ void TPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     case CPUKind::Gaudi:
       Builder.defineMacro("MAX_SLM", Twine(1024));
       break;
+    case CPUKind::GaudiB:
+      Builder.defineMacro("MAX_SLM", Twine(1024));
+      break;
+    case CPUKind::Greco:
+      Builder.defineMacro("MAX_SLM", Twine(2*1024));
+      break;
+    case CPUKind::Gaudi2:
+    case CPUKind::Doron1:
+      Builder.defineMacro("MAX_SLM", Twine(16*1024));
+      break;
     default:
       llvm_unreachable("Invalid processor");
   }
 
   if (Opts.LongIRF)
     Builder.defineMacro("__LONG_IRF__");
+  if (Opts.CompileForLibrary)
+    Builder.defineMacro("__TPC_IR_LIBRARY__");
 }
 
 bool TPCTargetInfo::initFeatureMap(llvm::StringMap<bool> &Features,
@@ -182,6 +247,16 @@ bool TPCTargetInfo::initFeatureMap(llvm::StringMap<bool> &Features,
     Features["goya"] = true;
   else if (CPU.equals("gaudi"))
     Features["gaudi"] = true;
+  else if (CPU.equals("gaudib"))
+    Features["gaudib"] = true;
+  else if (CPU.equals("greco"))
+    Features["greco"] = true;
+  else if (CPU.equals("goya2"))
+    Features["greco"] = true;
+  else if (CPU.equals("gaudi2"))
+    Features["gaudi2"] = true;
+  else if (CPU.equals("doron1"))
+    Features["doron1"] = true;
 
   return TargetInfo::initFeatureMap(Features, Diags, CPU, FeaturesVec);
 }
@@ -189,7 +264,11 @@ bool TPCTargetInfo::initFeatureMap(llvm::StringMap<bool> &Features,
 bool TPCTargetInfo::hasFeature(StringRef Feature) const {
   return llvm::StringSwitch<bool>(Feature)
     .Case("gaudi", CPU == CPUKind::Gaudi)
+    .Case("gaudib", CPU == CPUKind::GaudiB)
     .Cases("goya", "dali", CPU == CPUKind::Goya)
+    .Cases("greco", "goya2", CPU == CPUKind::Greco)
+    .Case("gaudi2", CPU == CPUKind::Gaudi2)
+    .Case("doron1", CPU == CPUKind::Doron1)
     .Default(false);
 }
 
@@ -230,6 +309,14 @@ ArrayRef<Builtin::Info> TPCTargetInfo::getTargetBuiltins() const {
 
 ArrayRef<const char *> TPCTargetInfo::getGCCRegNames() const {
   return llvm::makeArrayRef(GCCRegNames);
+}
+
+TargetInfo::BuiltinVaListKind TPCTargetInfo::getBuiltinVaListKind() const {
+  return TargetInfo::CharPtrBuiltinVaList;
+}
+
+const char *TPCTargetInfo::getBFloat16Mangling() const {
+  return "DH";
 }
 
 }

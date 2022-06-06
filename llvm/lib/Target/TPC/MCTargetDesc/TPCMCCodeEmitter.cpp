@@ -139,6 +139,18 @@ void TPCMCCodeEmitter::EmitInstruction(APInt &Instruction, unsigned Size, raw_os
   curPos += (Size/8);
 }
 
+bool TPCMCCodeEmitter::mayCompress(const MCSubtargetInfo &STI) const {
+  return STI.getFeatureBits()[TPC::FeatureCompress];
+}
+
+bool TPCMCCodeEmitter::isGoya2(const MCSubtargetInfo &STI) const {
+  return STI.getFeatureBits()[TPC::FeatureGreco];
+}
+
+bool TPCMCCodeEmitter::isGaudi2(const MCSubtargetInfo &STI) const {
+  return STI.getFeatureBits()[TPC::FeatureGaudi2];
+}
+
 #ifndef NDEBUG
 
 // Helper dump functions for debug purpose //
@@ -156,6 +168,620 @@ static void dumpInstrNames(const MCInst& MI, const MCInstrInfo &MCII) {
   }
 }
 
+static void dumpTPCBundleGen4(const APInt &Instr, bool lowHalfOnly = true) {
+  unsigned isCompressed1 = (unsigned)(Instr.zextOrTrunc(1).getZExtValue() & 0x01);
+  unsigned isCompressed2;
+  unsigned compressionType1 = 0;
+  unsigned compressionType2 = 0;
+  
+  if (isCompressed1) {
+    compressionType1 = (unsigned)(Instr.lshr(1).zextOrTrunc(1).getZExtValue() & 0x01);
+    if (!lowHalfOnly) {
+      isCompressed2 = (unsigned)(Instr.lshr(TPCII::cmpr2Start).zextOrTrunc(1).getZExtValue() & 0x01);
+      assert (isCompressed2);
+      compressionType2 = (unsigned)(Instr.lshr(TPCII::cmpr2Start+1).zextOrTrunc(1).getZExtValue() & 0x01);
+    }
+  }
+
+#define MASK(Len) ((1<<Len)-1)
+  uint64_t slot1;
+  uint64_t spu_opc;
+  uint64_t spu_srcA;
+  uint64_t spu_srcB;
+  uint64_t spu_dst;
+  uint64_t spu_op_tp;
+  uint64_t spu_pp;
+  uint64_t spu_pr;
+  uint64_t spu_sw;
+
+  uint64_t slot2;
+  uint64_t vpu_opc;
+  uint64_t vpu_srcA;
+  uint64_t vpu_srcB;
+  uint64_t vpu_dest;
+  uint64_t vpu_sw;
+  uint64_t vpu_op_tp;
+  uint64_t vpu_pp;
+  uint64_t vpu_pr;
+
+  uint64_t ld_srcA;
+  uint64_t ld_dst;
+  uint64_t ld_opc;
+  uint64_t ld_srcB;
+  uint64_t ld_pp;
+  uint64_t ld_pr;
+  uint64_t ld_sw;
+
+  uint64_t st_srcA;
+  uint64_t st_srcB;
+  uint64_t st_opc;
+  uint64_t st_srcC;
+  uint64_t st_pp;
+  uint64_t st_pr;
+  uint64_t st_sw;
+
+  uint64_t vpu_srcC;
+  uint64_t vpu_srcD;
+  uint64_t vpu_srcE;
+
+  if (isCompressed1) {
+    uint64_t imm1 = Instr.lshr(TPCII::imm1Start).zextOrTrunc(TPCII::Gen3ImmSize).getZExtValue();
+    fprintf(stderr, "Compressed = %d\n", isCompressed1);
+    fprintf(stderr, "Compression type = %d\n", compressionType1);
+    if (compressionType1 == 0) {
+      slot1 = Instr.lshr(TPCII::slot1Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+      spu_opc    = slot1         & MASK(6);
+      spu_srcA   = (slot1 >>  6) & MASK(7);
+      spu_srcB   = (slot1 >> 13) & MASK(7);
+      spu_dst    = (slot1 >> 20) & MASK(7);
+      spu_op_tp  = (slot1 >> 27) & MASK(4);
+      spu_pp     = (slot1 >> 31) & 0x01;
+      spu_pr     = (slot1 >> 32) & MASK(4);
+      spu_sw     = (slot1 >> 36) & MASK(7);
+
+      slot2 = Instr.lshr(TPCII::slot2Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+      vpu_opc    = (slot2 >> 0)  & MASK(6);
+      vpu_srcA   = (slot2 >> 6)  & MASK(8);
+      vpu_srcB   = (slot2 >> 14) & MASK(8);
+      vpu_dest   = (slot2 >> 22) & MASK(8);
+      vpu_op_tp  = (slot2 >> 30) & MASK(4);
+      vpu_pp     = (slot2 >> 34) & MASK(1);
+      vpu_pr     = (slot2 >> 35) & MASK(5);
+      vpu_sw     = (slot2 >> 40) & MASK(7);
+
+      fprintf(stderr, "SPU slot:\n");
+      fprintf(stderr, "  spu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_opc, spu_opc);
+      fprintf(stderr, "  spu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcA, spu_srcA);
+      fprintf(stderr, "  spu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcB, spu_srcB);
+      fprintf(stderr, "  spu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_dst, spu_dst);
+      fprintf(stderr, "  spu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", spu_op_tp, spu_op_tp);
+      fprintf(stderr, "  spu_pp    = %" PRIu64 "      \n", spu_pp);
+      fprintf(stderr, "  spu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_pr, spu_pr);
+      fprintf(stderr, "  spu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_sw, spu_sw);
+      fprintf(stderr, "VPU slot:\n");
+      fprintf(stderr, "  vpu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_opc, vpu_opc);
+      fprintf(stderr, "  vpu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcA, vpu_srcA);
+      fprintf(stderr, "  vpu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcB, vpu_srcB);
+      fprintf(stderr, "  vpu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_dest, vpu_dest);
+      fprintf(stderr, "  vpu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_op_tp, vpu_op_tp);
+      fprintf(stderr, "  vpu_pp    = %" PRIu64 "      \n", vpu_pp);
+      fprintf(stderr, "  vpu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_pr, vpu_pr);
+      fprintf(stderr, "  vpu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_sw, vpu_sw);
+    }
+    else if (compressionType1 == 1) {
+      slot1 = Instr.lshr(TPCII::slot1Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+      ld_srcA    = (slot1 >> 0)  & MASK(8);
+      ld_dst     = (slot1 >> 8)  & MASK(8);
+      ld_opc     = (slot1 >> 16) & MASK(5);
+      ld_srcB    = (slot1 >> 21) & MASK(9);
+      ld_pp      = (slot1 >> 30) & 0x01;
+      ld_pr      = (slot1 >> 31) & MASK(5);
+      ld_sw      = (slot1 >> 36) & MASK(7);
+
+      slot2 = Instr.lshr(TPCII::slot2Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+      st_srcA    = (slot2 >> 0)  & MASK(8);
+      st_srcB    = (slot2 >> 8)  & MASK(8);
+      st_opc     = (slot2 >> 16) & MASK(5);
+      st_srcC    = (slot2 >> 21) & MASK(8);
+      st_pp      = (slot2 >> 29) & 0x01;
+      st_pr      = (slot2 >> 30) & MASK(5);
+      st_sw      = (slot2 >> 35) & MASK(7);
+
+      fprintf(stderr, "Load slot:\n");
+      fprintf(stderr, "  ld_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcA, ld_srcA);
+      fprintf(stderr, "  ld_dst    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_dst, ld_dst);
+      fprintf(stderr, "  ld_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_opc, ld_opc);
+      fprintf(stderr, "  ld_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcB, ld_srcB);
+      fprintf(stderr, "  ld_pp     = %" PRIu64 "     \n", ld_pp);
+      fprintf(stderr, "  ld_pr     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_pr, ld_pr);
+      fprintf(stderr, "  ld_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_sw, ld_sw);
+      fprintf(stderr, "Store slot:\n");
+      fprintf(stderr, "  st_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcA, st_srcA);
+      fprintf(stderr, "  st_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcB, st_srcB);
+      fprintf(stderr, "  st_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", st_opc, st_opc);
+      fprintf(stderr, "  st_srcC   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcC, st_srcC);
+      fprintf(stderr, "  st_pp     = %" PRIu64 "     \n", st_pp);
+      fprintf(stderr, "  st_pr     = %" PRIu64 " (0x%" PRIX64 ")\n", st_pr, st_pr);
+      fprintf(stderr, "  st_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", st_sw, st_sw);
+    }
+    fprintf(stderr, "Imm       = %" PRIu64 " (0x%" PRIX64 ")\n", imm1, imm1);
+
+    if (!lowHalfOnly) {
+      //
+      // Second part of compressed instruction
+      //
+      imm1 = Instr.lshr(TPCII::imm2Start).zextOrTrunc(TPCII::Gen3ImmSize).getZExtValue();
+      fprintf(stderr, "Compressed = %d\n", isCompressed2);
+      fprintf(stderr, "Compression type = %d\n", compressionType2);
+      if (compressionType2 == 0) {
+        slot1 = Instr.lshr(TPCII::slot3Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+        spu_opc    = slot1         & MASK(6);
+        spu_srcA   = (slot1 >>  6) & MASK(7);
+        spu_srcB   = (slot1 >> 13) & MASK(7);
+        spu_dst    = (slot1 >> 20) & MASK(7);
+        spu_op_tp  = (slot1 >> 27) & MASK(4);
+        spu_pp     = (slot1 >> 31) & 0x01;
+        spu_pr     = (slot1 >> 32) & MASK(4);
+        spu_sw     = (slot1 >> 36) & MASK(7);
+
+        slot2 = Instr.lshr(TPCII::slot4Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+        vpu_opc    = (slot2 >> 0)  & MASK(6);
+        vpu_srcA   = (slot2 >> 6)  & MASK(8);
+        vpu_srcB   = (slot2 >> 14) & MASK(8);
+        vpu_dest   = (slot2 >> 22) & MASK(8);
+        vpu_op_tp  = (slot2 >> 30) & MASK(4);
+        vpu_pp     = (slot2 >> 34) & MASK(1);
+        vpu_pr     = (slot2 >> 35) & MASK(5);
+        vpu_sw     = (slot2 >> 40) & MASK(7);
+
+        fprintf(stderr, "SPU slot:\n");
+        fprintf(stderr, "  spu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_opc, spu_opc);
+        fprintf(stderr, "  spu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcA, spu_srcA);
+        fprintf(stderr, "  spu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcB, spu_srcB);
+        fprintf(stderr, "  spu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_dst, spu_dst);
+        fprintf(stderr, "  spu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", spu_op_tp, spu_op_tp);
+        fprintf(stderr, "  spu_pp    = %" PRIu64 "      \n", spu_pp);
+        fprintf(stderr, "  spu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_pr, spu_pr);
+        fprintf(stderr, "  spu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_sw, spu_sw);
+        fprintf(stderr, "VPU slot:\n");
+        fprintf(stderr, "  vpu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_opc, vpu_opc);
+        fprintf(stderr, "  vpu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcA, vpu_srcA);
+        fprintf(stderr, "  vpu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcB, vpu_srcB);
+        fprintf(stderr, "  vpu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_dest, vpu_dest);
+        fprintf(stderr, "  vpu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_op_tp, vpu_op_tp);
+        fprintf(stderr, "  vpu_pp    = %" PRIu64 "      \n", vpu_pp);
+        fprintf(stderr, "  vpu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_pr, vpu_pr);
+        fprintf(stderr, "  vpu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_sw, vpu_sw);
+      }
+      else if (compressionType2 == 1) {
+        slot1 = Instr.lshr(TPCII::slot3Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+        ld_srcA    = (slot1 >> 0)  & MASK(8);
+        ld_dst     = (slot1 >> 8)  & MASK(8);
+        ld_opc     = (slot1 >> 16) & MASK(5);
+        ld_srcB    = (slot1 >> 21) & MASK(9);
+        ld_pp      = (slot1 >> 30) & 0x01;
+        ld_pr      = (slot1 >> 31) & MASK(5);
+        ld_sw      = (slot1 >> 36) & MASK(7);
+
+        slot2 = Instr.lshr(TPCII::slot4Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+        st_srcA    = (slot2 >> 0)  & MASK(8);
+        st_srcB    = (slot2 >> 8)  & MASK(8);
+        st_opc     = (slot2 >> 16) & MASK(5);
+        st_srcC    = (slot2 >> 21) & MASK(8);
+        st_pp      = (slot2 >> 29) & 0x01;
+        st_pr      = (slot2 >> 30) & MASK(5);
+        st_sw      = (slot2 >> 35) & MASK(7);
+
+        fprintf(stderr, "Load slot:\n");
+        fprintf(stderr, "  ld_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_opc, ld_opc);
+        fprintf(stderr, "  ld_dst    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_dst, ld_dst);
+        fprintf(stderr, "  ld_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcA, ld_srcA);
+        fprintf(stderr, "  ld_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcB, ld_srcB);
+        fprintf(stderr, "  ld_pp     = %" PRIu64 "     \n", ld_pp);
+        fprintf(stderr, "  ld_pr     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_pr, ld_pr);
+        fprintf(stderr, "  ld_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_sw, ld_sw);
+        fprintf(stderr, "Store slot:\n");
+        fprintf(stderr, "  st_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", st_opc, st_opc);
+        fprintf(stderr, "  st_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcA, st_srcA);
+        fprintf(stderr, "  st_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcB, st_srcB);
+        fprintf(stderr, "  st_srcC   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcC, st_srcC);
+        fprintf(stderr, "  st_pp     = %" PRIu64 "     \n", st_pp);
+        fprintf(stderr, "  st_pr     = %" PRIu64 " (0x%" PRIX64 ")\n", st_pr, st_pr);
+        fprintf(stderr, "  st_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", st_sw, st_sw);
+      }
+      fprintf(stderr, "Imm       = %" PRIu64 " (0x%" PRIX64 ")\n", imm1, imm1);
+    }
+  }
+  else {
+    slot1 = Instr.lshr(TPCII::Gen3SPUStart).zextOrTrunc(TPCII::Gen3SPUSize).getZExtValue();
+    spu_opc    = slot1         & MASK(6);
+    spu_srcA   = (slot1 >>  6) & MASK(7);
+    spu_srcB   = (slot1 >> 13) & MASK(7);
+    spu_dst    = (slot1 >> 20) & MASK(7);
+    spu_op_tp  = (slot1 >> 27) & MASK(4);
+    spu_pp     = (slot1 >> 31) & 0x01;
+    spu_pr     = (slot1 >> 32) & MASK(4);
+    spu_sw     = (slot1 >> 36) & MASK(7);
+
+    slot2 = Instr.lshr(TPCII::Gen3VPUStart).zextOrTrunc(TPCII::Gen3VPUSize).getZExtValue();
+    vpu_opc    = (slot2 >> 0)  & MASK(6);
+    vpu_srcA   = (slot2 >> 6)  & MASK(8);
+    vpu_srcB   = (slot2 >> 14) & MASK(8);
+    vpu_dest   = (slot2 >> 22) & MASK(8);
+    vpu_op_tp  = (slot2 >> 30) & MASK(4);
+    vpu_pp     = (slot2 >> 34) & MASK(1);
+    vpu_pr     = (slot2 >> 35) & MASK(5);
+    vpu_sw     = (slot2 >> 40) & MASK(7);
+
+    uint64_t slot3 = Instr.lshr(TPCII::Gen3LDStart).zextOrTrunc(TPCII::Gen3LDSize).getZExtValue();
+    ld_srcA    = (slot3 >> 0)  & MASK(8);
+    ld_dst     = (slot3 >> 8)  & MASK(8);
+    ld_opc     = (slot3 >> 16) & MASK(5);
+    ld_srcB    = (slot3 >> 21) & MASK(9);
+    ld_pp      = (slot3 >> 30) & 0x01;
+    ld_pr      = (slot3 >> 31) & MASK(5);
+    ld_sw      = (slot3 >> 36) & MASK(7);
+
+    uint64_t slot4 = Instr.lshr(TPCII::Gen3STStart).zextOrTrunc(TPCII::Gen3STSize).getZExtValue();
+    st_srcA    = (slot4 >> 0)  & MASK(8);
+    st_srcB    = (slot4 >> 8)  & MASK(8);
+    st_opc     = (slot4 >> 16) & MASK(5);
+    st_srcC    = (slot4 >> 21) & MASK(8);
+    st_pp      = (slot4 >> 29) & 0x01;
+    st_pr      = (slot4 >> 30) & MASK(5);
+    st_sw      = (slot4 >> 35) & MASK(7);
+
+    uint64_t imm = Instr.lshr(TPCII::Gen3ImmStart).zextOrTrunc(TPCII::Gen3ImmSize).getZExtValue();
+
+    vpu_srcC = Instr.lshr(TPCII::Gen3VPUSrcCStart).zextOrTrunc(TPCII::Gen3VPUSrcCSize).getZExtValue();
+    vpu_srcD = Instr.lshr(TPCII::Gen3VPUSrcDStart).zextOrTrunc(TPCII::Gen3VPUSrcDSize).getZExtValue();
+    vpu_srcE = Instr.lshr(TPCII::Gen3VPUSrcEStart).zextOrTrunc(TPCII::Gen3VPUSrcESize).getZExtValue();
+
+    fprintf(stderr, "Compressed= %d\n", isCompressed1);
+    fprintf(stderr, "SPU slot:\n");
+    fprintf(stderr, "  spu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_opc, spu_opc);
+    fprintf(stderr, "  spu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcA, spu_srcA);
+    fprintf(stderr, "  spu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcB, spu_srcB);
+    fprintf(stderr, "  spu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_dst, spu_dst);
+    fprintf(stderr, "  spu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", spu_op_tp, spu_op_tp);
+    fprintf(stderr, "  spu_pp    = %" PRIu64 "      \n", spu_pp);
+    fprintf(stderr, "  spu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_pr, spu_pr);
+    fprintf(stderr, "  spu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_sw, spu_sw);
+    fprintf(stderr, "VPU slot:\n");
+    fprintf(stderr, "  vpu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_opc, vpu_opc);
+    fprintf(stderr, "  vpu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcA, vpu_srcA);
+    fprintf(stderr, "  vpu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcB, vpu_srcB);
+    fprintf(stderr, "  vpu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_dest, vpu_dest);
+    fprintf(stderr, "  vpu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_op_tp, vpu_op_tp);
+    fprintf(stderr, "  vpu_pp    = %" PRIu64 "      \n", vpu_pp);
+    fprintf(stderr, "  vpu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_pr, vpu_pr);
+    fprintf(stderr, "  vpu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_sw, vpu_sw);
+    fprintf(stderr, "Load slot:\n");
+    fprintf(stderr, "  ld_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_opc, ld_opc);
+    fprintf(stderr, "  ld_dst    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_dst, ld_dst);
+    fprintf(stderr, "  ld_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcA, ld_srcA);
+    fprintf(stderr, "  ld_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcB, ld_srcB);
+    fprintf(stderr, "  ld_pp     = %" PRIu64 "     \n", ld_pp);
+    fprintf(stderr, "  ld_pr     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_pr, ld_pr);
+    fprintf(stderr, "  ld_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_sw, ld_sw);
+    fprintf(stderr, "Store slot:\n");
+    fprintf(stderr, "  st_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", st_opc, st_opc);
+    fprintf(stderr, "  st_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcA, st_srcA);
+    fprintf(stderr, "  st_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcB, st_srcB);
+    fprintf(stderr, "  st_srcC   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcC, st_srcC);
+    fprintf(stderr, "  st_pp     = %" PRIu64 "     \n", st_pp);
+    fprintf(stderr, "  st_pr     = %" PRIu64 " (0x%" PRIX64 ")\n", st_pr, st_pr);
+    fprintf(stderr, "  st_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", st_sw, st_sw);
+
+    // Out-of-slot fields
+    fprintf(stderr, "Vpu_srcC  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcC, vpu_srcC);
+    fprintf(stderr, "Vpu_srcD  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcD, vpu_srcD);
+    fprintf(stderr, "Vpu_srcE  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcE, vpu_srcE);
+    fprintf(stderr, "Imm       = %" PRIu64 " (0x%" PRIX64 ")\n", imm, imm);
+  }
+#undef MASK
+}
+
+
+static void dumpTPCBundleGen3(const APInt &Instr, bool lowHalfOnly = true) {
+  unsigned isCompressed1 = (unsigned)(Instr.zextOrTrunc(1).getZExtValue() & 0x01);
+  unsigned isCompressed2;
+  unsigned compressionType1 = 0;
+  unsigned compressionType2 = 0;
+  
+  if (isCompressed1) {
+    compressionType1 = (unsigned)(Instr.lshr(1).zextOrTrunc(1).getZExtValue() & 0x01);
+    if (!lowHalfOnly) {
+      isCompressed2 = (unsigned)(Instr.lshr(TPCII::cmpr2Start).zextOrTrunc(1).getZExtValue() & 0x01);
+      assert (isCompressed2);
+      compressionType2 = (unsigned)(Instr.lshr(TPCII::cmpr2Start+1).zextOrTrunc(1).getZExtValue() & 0x01);
+    }
+  }
+
+#define MASK(Len) ((1<<Len)-1)
+  uint64_t slot1;
+  uint64_t spu_opc;
+  uint64_t spu_srcA;
+  uint64_t spu_srcB;
+  uint64_t spu_dst;
+  uint64_t spu_op_tp;
+  uint64_t spu_pp;
+  uint64_t spu_pr;
+  uint64_t spu_sw;
+
+  uint64_t slot2;
+  uint64_t vpu_opc;
+  uint64_t vpu_srcA;
+  uint64_t vpu_srcB;
+  uint64_t vpu_dest;
+  uint64_t vpu_sw;
+  uint64_t vpu_op_tp;
+  uint64_t vpu_pp;
+  uint64_t vpu_pr;
+
+  uint64_t ld_srcA;
+  uint64_t ld_dst;
+  uint64_t ld_opc;
+  uint64_t ld_srcB;
+  uint64_t ldst_pp;
+  uint64_t ldst_pr;
+  uint64_t ld_sw;
+
+  uint64_t st_srcA;
+  uint64_t st_srcB;
+  uint64_t st_opc;
+  uint64_t st_srcC;
+  uint64_t st_sw;
+
+  uint64_t vpu_srcC;
+  uint64_t vpu_srcD;
+  uint64_t vpu_srcE;
+
+  if (isCompressed1) {
+    uint64_t imm1 = Instr.lshr(TPCII::imm1Start).zextOrTrunc(TPCII::Gen3ImmSize).getZExtValue();
+    fprintf(stderr, "Compressed = %d\n", isCompressed1);
+    fprintf(stderr, "Compression type = %d\n", compressionType1);
+    if (compressionType1 == 0) {
+      slot1 = Instr.lshr(TPCII::slot1Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+      spu_opc    = slot1         & MASK(6);
+      spu_srcA   = (slot1 >>  6) & MASK(7);
+      spu_srcB   = (slot1 >> 13) & MASK(7);
+      spu_dst    = (slot1 >> 20) & MASK(7);
+      spu_op_tp  = (slot1 >> 27) & MASK(4);
+      spu_pp     = (slot1 >> 31) & 0x01;
+      spu_pr     = (slot1 >> 32) & MASK(4);
+      spu_sw     = (slot1 >> 36) & MASK(7);
+
+      slot2 = Instr.lshr(TPCII::slot2Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+      vpu_opc    = (slot2 >> 0)  & MASK(6);
+      vpu_srcA   = (slot2 >> 6)  & MASK(8);
+      vpu_srcB   = (slot2 >> 14) & MASK(8);
+      vpu_dest   = (slot2 >> 22) & MASK(8);
+      vpu_op_tp  = (slot2 >> 30) & MASK(4);
+      vpu_pp     = (slot2 >> 34) & MASK(1);
+      vpu_pr     = (slot2 >> 35) & MASK(5);
+      vpu_sw     = (slot2 >> 40) & MASK(7);
+
+      fprintf(stderr, "SPU slot:\n");
+      fprintf(stderr, "  spu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_opc, spu_opc);
+      fprintf(stderr, "  spu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcA, spu_srcA);
+      fprintf(stderr, "  spu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcB, spu_srcB);
+      fprintf(stderr, "  spu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_dst, spu_dst);
+      fprintf(stderr, "  spu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", spu_op_tp, spu_op_tp);
+      fprintf(stderr, "  spu_pp    = %" PRIu64 "      \n", spu_pp);
+      fprintf(stderr, "  spu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_pr, spu_pr);
+      fprintf(stderr, "  spu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_sw, spu_sw);
+      fprintf(stderr, "VPU slot:\n");
+      fprintf(stderr, "  vpu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_opc, vpu_opc);
+      fprintf(stderr, "  vpu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcA, vpu_srcA);
+      fprintf(stderr, "  vpu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcB, vpu_srcB);
+      fprintf(stderr, "  vpu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_dest, vpu_dest);
+      fprintf(stderr, "  vpu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_op_tp, vpu_op_tp);
+      fprintf(stderr, "  vpu_pp    = %" PRIu64 "      \n", vpu_pp);
+      fprintf(stderr, "  vpu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_pr, vpu_pr);
+      fprintf(stderr, "  vpu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_sw, vpu_sw);
+    }
+    else if (compressionType1 == 1) {
+      slot1 = Instr.lshr(TPCII::slot1Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+      ld_srcA    = (slot1 >> 0)  & MASK(8);
+      ld_dst     = (slot1 >> 8)  & MASK(8);
+      ld_opc     = (slot1 >> 16) & MASK(5);
+      ld_srcB    = (slot1 >> 21) & MASK(9);
+      ldst_pp    = (slot1 >> 30) & 0x01;
+      ldst_pr    = (slot1 >> 31) & MASK(5);
+      ld_sw      = (slot1 >> 36) & MASK(6);
+
+      slot2 = Instr.lshr(TPCII::slot2Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+      st_srcA    = (slot2 >> 0)  & MASK(8);
+      st_srcB    = (slot2 >> 8)  & MASK(8);
+      st_opc     = (slot2 >> 16) & MASK(5);
+      st_srcC    = (slot2 >> 21) & MASK(8);
+      st_sw      = (slot2 >> 29) & MASK(6);
+
+      fprintf(stderr, "Load slot:\n");
+      fprintf(stderr, "  ld_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcA, ld_srcA);
+      fprintf(stderr, "  ld_dst    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_dst, ld_dst);
+      fprintf(stderr, "  ld_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_opc, ld_opc);
+      fprintf(stderr, "  ld_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcB, ld_srcB);
+      fprintf(stderr, "  ldst_pp   = %" PRIu64 "     \n", ldst_pp);
+      fprintf(stderr, "  ldst_pr   = %" PRIu64 " (0x%" PRIX64 ")\n", ldst_pr, ldst_pr);
+      fprintf(stderr, "  ld_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_sw, ld_sw);
+      fprintf(stderr, "Store slot:\n");
+      fprintf(stderr, "  st_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcA, st_srcA);
+      fprintf(stderr, "  st_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcB, st_srcB);
+      fprintf(stderr, "  st_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", st_opc, st_opc);
+      fprintf(stderr, "  st_srcC   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcC, st_srcC);
+      fprintf(stderr, "  st_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", st_sw, st_sw);
+    }
+    fprintf(stderr, "Imm       = %" PRIu64 " (0x%" PRIX64 ")\n", imm1, imm1);
+
+    if (!lowHalfOnly) {
+      //
+      // Second part of compressed instruction
+      //
+      imm1 = Instr.lshr(TPCII::imm2Start).zextOrTrunc(TPCII::Gen3ImmSize).getZExtValue();
+      fprintf(stderr, "Compressed = %d\n", isCompressed2);
+      fprintf(stderr, "Compression type = %d\n", compressionType2);
+      if (compressionType2 == 0) {
+        slot1 = Instr.lshr(TPCII::slot3Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+        spu_opc    = slot1         & MASK(6);
+        spu_srcA   = (slot1 >>  6) & MASK(7);
+        spu_srcB   = (slot1 >> 13) & MASK(7);
+        spu_dst    = (slot1 >> 20) & MASK(7);
+        spu_op_tp  = (slot1 >> 27) & MASK(4);
+        spu_pp     = (slot1 >> 31) & 0x01;
+        spu_pr     = (slot1 >> 32) & MASK(4);
+        spu_sw     = (slot1 >> 36) & MASK(7);
+
+        slot2 = Instr.lshr(TPCII::slot4Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+        vpu_opc    = (slot2 >> 0)  & MASK(6);
+        vpu_srcA   = (slot2 >> 6)  & MASK(8);
+        vpu_srcB   = (slot2 >> 14) & MASK(8);
+        vpu_dest   = (slot2 >> 22) & MASK(8);
+        vpu_op_tp  = (slot2 >> 30) & MASK(4);
+        vpu_pp     = (slot2 >> 34) & MASK(1);
+        vpu_pr     = (slot2 >> 35) & MASK(5);
+        vpu_sw     = (slot2 >> 40) & MASK(7);
+
+        fprintf(stderr, "SPU slot:\n");
+        fprintf(stderr, "  spu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_opc, spu_opc);
+        fprintf(stderr, "  spu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcA, spu_srcA);
+        fprintf(stderr, "  spu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcB, spu_srcB);
+        fprintf(stderr, "  spu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_dst, spu_dst);
+        fprintf(stderr, "  spu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", spu_op_tp, spu_op_tp);
+        fprintf(stderr, "  spu_pp    = %" PRIu64 "      \n", spu_pp);
+        fprintf(stderr, "  spu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_pr, spu_pr);
+        fprintf(stderr, "  spu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_sw, spu_sw);
+        fprintf(stderr, "VPU slot:\n");
+        fprintf(stderr, "  vpu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_opc, vpu_opc);
+        fprintf(stderr, "  vpu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcA, vpu_srcA);
+        fprintf(stderr, "  vpu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcB, vpu_srcB);
+        fprintf(stderr, "  vpu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_dest, vpu_dest);
+        fprintf(stderr, "  vpu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_op_tp, vpu_op_tp);
+        fprintf(stderr, "  vpu_pp    = %" PRIu64 "      \n", vpu_pp);
+        fprintf(stderr, "  vpu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_pr, vpu_pr);
+        fprintf(stderr, "  vpu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_sw, vpu_sw);
+      }
+      else if (compressionType2 == 1) {
+        slot1 = Instr.lshr(TPCII::slot3Start).zextOrTrunc(TPCII::slot1Size).getZExtValue();
+        ld_srcA    = (slot1 >> 0)  & MASK(8);
+        ld_dst     = (slot1 >> 8)  & MASK(8);
+        ld_opc     = (slot1 >> 16) & MASK(5);
+        ld_srcB    = (slot1 >> 21) & MASK(9);
+        ldst_pp    = (slot1 >> 30) & 0x01;
+        ldst_pr    = (slot1 >> 31) & MASK(5);
+        ld_sw      = (slot1 >> 36) & MASK(6);
+
+        slot2 = Instr.lshr(TPCII::slot4Start).zextOrTrunc(TPCII::slot2Size).getZExtValue();
+        st_srcA    = (slot2 >> 0)  & MASK(8);
+        st_srcB    = (slot2 >> 8)  & MASK(8);
+        st_opc     = (slot2 >> 16) & MASK(5);
+        st_srcC   = (slot2 >> 21) & MASK(8);
+        st_sw      = (slot2 >> 29) & MASK(6);
+
+        fprintf(stderr, "Load slot:\n");
+        fprintf(stderr, "  ld_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_opc, ld_opc);
+        fprintf(stderr, "  ld_dst    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_dst, ld_dst);
+        fprintf(stderr, "  ld_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcA, ld_srcA);
+        fprintf(stderr, "  ld_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcB, ld_srcB);
+        fprintf(stderr, "  ldst_pp   = %" PRIu64 "     \n", ldst_pp);
+        fprintf(stderr, "  ldst_pr   = %" PRIu64 " (0x%" PRIX64 ")\n", ldst_pr, ldst_pr);
+        fprintf(stderr, "  ld_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_sw, ld_sw);
+        fprintf(stderr, "Store slot:\n");
+        fprintf(stderr, "  st_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", st_opc, st_opc);
+        fprintf(stderr, "  st_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcA, st_srcA);
+        fprintf(stderr, "  st_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcB, st_srcB);
+        fprintf(stderr, "  st_srcC   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcC, st_srcC);
+        fprintf(stderr, "  st_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", st_sw, st_sw);
+      }
+      fprintf(stderr, "Imm       = %" PRIu64 " (0x%" PRIX64 ")\n", imm1, imm1);
+    }
+  }
+  else {
+    slot1 = Instr.lshr(TPCII::Gen3SPUStart).zextOrTrunc(TPCII::Gen3SPUSize).getZExtValue();
+    spu_opc    = slot1         & MASK(6);
+    spu_srcA   = (slot1 >>  6) & MASK(7);
+    spu_srcB   = (slot1 >> 13) & MASK(7);
+    spu_dst    = (slot1 >> 20) & MASK(7);
+    spu_op_tp  = (slot1 >> 27) & MASK(4);
+    spu_pp     = (slot1 >> 31) & 0x01;
+    spu_pr     = (slot1 >> 32) & MASK(4);
+    spu_sw     = (slot1 >> 36) & MASK(7);
+
+    slot2 = Instr.lshr(TPCII::Gen3VPUStart).zextOrTrunc(TPCII::Gen3VPUSize).getZExtValue();
+    vpu_opc    = (slot2 >> 0)  & MASK(6);
+    vpu_srcA   = (slot2 >> 6)  & MASK(8);
+    vpu_srcB   = (slot2 >> 14) & MASK(8);
+    vpu_dest   = (slot2 >> 22) & MASK(8);
+    vpu_op_tp  = (slot2 >> 30) & MASK(4);
+    vpu_pp     = (slot2 >> 34) & MASK(1);
+    vpu_pr     = (slot2 >> 35) & MASK(5);
+    vpu_sw     = (slot2 >> 40) & MASK(7);
+
+    uint64_t slot3 = Instr.lshr(TPCII::Gen3LDStart).zextOrTrunc(TPCII::Gen3LDSize).getZExtValue();
+    ld_srcA    = (slot3 >> 0)  & MASK(8);
+    ld_dst     = (slot3 >> 8)  & MASK(8);
+    ld_opc     = (slot3 >> 16) & MASK(5);
+    ld_srcB    = (slot3 >> 21) & MASK(9);
+    ldst_pp    = (slot3 >> 30) & 0x01;
+    ldst_pr    = (slot3 >> 31) & MASK(5);
+    ld_sw      = (slot3 >> 36) & MASK(6);
+
+    uint64_t slot4 = Instr.lshr(TPCII::Gen3STStart).zextOrTrunc(TPCII::Gen3STSize).getZExtValue();
+    st_srcA    = (slot4 >> 0)  & MASK(8);
+    st_srcB    = (slot4 >> 8)  & MASK(8);
+    st_opc     = (slot4 >> 16) & MASK(5);
+    st_srcC    = (slot4 >> 21) & MASK(8);
+    st_sw      = (slot4 >> 29) & MASK(6);
+
+    uint64_t imm = Instr.lshr(TPCII::Gen3ImmStart).zextOrTrunc(TPCII::Gen3ImmSize).getZExtValue();
+
+    vpu_srcC = Instr.lshr(TPCII::Gen3VPUSrcCStart).zextOrTrunc(TPCII::Gen3VPUSrcCSize).getZExtValue();
+    vpu_srcD = Instr.lshr(TPCII::Gen3VPUSrcDStart).zextOrTrunc(TPCII::Gen3VPUSrcDSize).getZExtValue();
+    vpu_srcE = Instr.lshr(TPCII::Gen3VPUSrcEStart).zextOrTrunc(TPCII::Gen3VPUSrcESize).getZExtValue();
+
+    fprintf(stderr, "Compressed= %d\n", isCompressed1);
+    fprintf(stderr, "SPU slot:\n");
+    fprintf(stderr, "  spu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_opc, spu_opc);
+    fprintf(stderr, "  spu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcA, spu_srcA);
+    fprintf(stderr, "  spu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", spu_srcB, spu_srcB);
+    fprintf(stderr, "  spu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", spu_dst, spu_dst);
+    fprintf(stderr, "  spu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", spu_op_tp, spu_op_tp);
+    fprintf(stderr, "  spu_pp    = %" PRIu64 "      \n", spu_pp);
+    fprintf(stderr, "  spu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_pr, spu_pr);
+    fprintf(stderr, "  spu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", spu_sw, spu_sw);
+    fprintf(stderr, "VPU slot:\n");
+    fprintf(stderr, "  vpu_opc   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_opc, vpu_opc);
+    fprintf(stderr, "  vpu_srcA  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcA, vpu_srcA);
+    fprintf(stderr, "  vpu_srcB  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcB, vpu_srcB);
+    fprintf(stderr, "  vpu_dst   = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_dest, vpu_dest);
+    fprintf(stderr, "  vpu_op_tp = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_op_tp, vpu_op_tp);
+    fprintf(stderr, "  vpu_pp    = %" PRIu64 "      \n", vpu_pp);
+    fprintf(stderr, "  vpu_pr    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_pr, vpu_pr);
+    fprintf(stderr, "  vpu_sw    = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_sw, vpu_sw);
+    fprintf(stderr, "Load slot:\n");
+    fprintf(stderr, "  ld_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_opc, ld_opc);
+    fprintf(stderr, "  ld_dst    = %" PRIu64 " (0x%" PRIX64 ")\n", ld_dst, ld_dst);
+    fprintf(stderr, "  ld_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcA, ld_srcA);
+    fprintf(stderr, "  ld_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", ld_srcB, ld_srcB);
+    fprintf(stderr, "  ldst_pp   = %" PRIu64 "     \n", ldst_pp);
+    fprintf(stderr, "  ldst_pr   = %" PRIu64 " (0x%" PRIX64 ")\n", ldst_pr, ldst_pr);
+    fprintf(stderr, "  ld_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", ld_sw, ld_sw);
+    fprintf(stderr, "Store slot:\n");
+    fprintf(stderr, "  st_opc    = %" PRIu64 " (0x%" PRIX64 ")\n", st_opc, st_opc);
+    fprintf(stderr, "  st_srcA   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcA, st_srcA);
+    fprintf(stderr, "  st_srcB   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcB, st_srcB);
+    fprintf(stderr, "  st_srcC   = %" PRIu64 " (0x%" PRIX64 ")\n", st_srcC, st_srcC);
+    fprintf(stderr, "  st_sw     = %" PRIu64 " (0x%" PRIX64 ")\n", st_sw, st_sw);
+
+    // Out-of-slot fields
+    fprintf(stderr, "Vpu_srcC  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcC, vpu_srcC);
+    fprintf(stderr, "Vpu_srcD  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcD, vpu_srcD);
+    fprintf(stderr, "Vpu_srcE  = %" PRIu64 " (0x%" PRIX64 ")\n", vpu_srcE, vpu_srcE);
+    fprintf(stderr, "Imm       = %" PRIu64 " (0x%" PRIX64 ")\n", imm, imm);
+  }
+#undef MASK
+}
 
 static void dumpTPCBundleGen2(const APInt &Instr) {
 
@@ -238,6 +864,15 @@ static void dumpTPCBundle(const APInt &Instr, const FeatureBitset &Features) {
   }
   else if (Features[TPC::FeatureGaudi]) {
     dumpTPCBundleGen2(Instr);
+  } else if (Features[TPC::FeatureGaudiB]) {
+    dumpTPCBundleGen2(Instr);
+  } else if (Features[TPC::FeatureGreco]) {
+    dumpTPCBundleGen3(Instr);
+  } else if (Features[TPC::FeatureGaudi2]) {
+    dumpTPCBundleGen4(Instr);
+  } else if (Features[TPC::FeatureDoron1]) {
+    //dumpTPCBundleGen4(Instr);
+    fprintf(stderr, "TODO dumpTPCBundleDoron1\n");
   }
 }
 #endif
@@ -287,6 +922,7 @@ void TPCMCCodeEmitter::fillInstrBits(const MCInst& MI,
                                      bool isSingle,
                                      const Optional<uint64_t> &StoreSrcC) const
 {
+  bool isDoron1 = STI.getFeatureBits()[TPC::FeatureDoron1];
   const unsigned opcode = MI.getOpcode();
   if (isSingle) {
     Bits.MI = &MI;
@@ -297,7 +933,15 @@ void TPCMCCodeEmitter::fillInstrBits(const MCInst& MI,
     for (auto &I : TPCMCInstrInfo::bundleInstructions(MI)) {
       MCInst &BundleMI = const_cast<MCInst &>(*I.getInst());
       if (TPCII::getSrcCIsStoreSrcC(MCII.get(BundleMI.getOpcode()))) {
-        llvm_unreachable("Unhandled arch");
+
+        assert(isDoron1 || STI.getFeatureBits()[TPC::FeatureGaudi2]);
+        const Field VPUSrcCField =
+            TPCInstrLayout::getVPUInstrLayout(false, STI.getFeatureBits())
+                .at(VPU_SRC_C);
+
+        APInt Inst(64, getInstrBits(BundleMI, Fixups, STI));
+        StoreSrcCLocal = Inst.lshr(VPUSrcCField.startLLVM)
+            .zextOrTrunc(VPUSrcCField.sizeBin).getZExtValue();
       }
     }
 
@@ -315,9 +959,26 @@ void TPCMCCodeEmitter::fillInstrBits(const MCInst& MI,
                       ignoreNops, false, StoreSrcCLocal);
       }
       SlotCount++;
+
+      if (isDoron1 &&
+          TPCMCInstrInfo::HasPredicate(BundleMI, MCII.get(MI.getOpcode()),
+                                       isDoron1)) {
+        if (isSPUInst(BundleMI)) {
+          assert(Bits.SPUPredicated);
+        } else if (isVPUInst(BundleMI)) {
+          assert(Bits.VPUPredicated);
+        } else if (isStoreInst(BundleMI)) {
+          assert(Bits.StorePredicated);
+        } else if (isLoadInst(BundleMI)) {
+          assert(Bits.LoadPredicated);
+        }
+      }
     }
 
-    if (!Bits.hasVPU && !Bits.hasSPU && !Bits.hasLD && !Bits.hasST && ignoreNops) {
+    if (!STI.getFeatureBits()[TPC::FeatureCompress]) {
+      Bits.compress = 0;
+    }
+    else if (!Bits.hasVPU && !Bits.hasSPU && !Bits.hasLD && !Bits.hasST && ignoreNops) {
       // Instruction is a full NOP - do not compress it
       if (TPCCompressNops) {
         Bits.compress = 1;
@@ -347,12 +1008,17 @@ void TPCMCCodeEmitter::fillInstrBits(const MCInst& MI,
       if (MI.getOpcode() == TPC::LOOPEND) return; // Don't encode pseudos
       Bits.VPUInst = TPCII::vpuNOP;
       Bits.SPUInst = TPCII::spuNOP;
-      Bits.LDInst  = TPCII::ldNOP << (LDInstrLayout.at(Fields::LOAD_OPCODE).startLLVM);
-      Bits.STInst  = TPCII::stNOP << (STInstrLayout.at(Fields::STORE_OPCODE).startLLVM);
+      Bits.LDInst = TPCII::ldNOP << (TPCInstrLayout::getLDInstrLayoutUnsafe()
+                                         .at(Fields::LOAD_OPCODE)
+                                         .startLLVM);
+      Bits.STInst = TPCII::stNOP << (TPCInstrLayout::getSTInstrLayoutUnsafe()
+                                         .at(Fields::STORE_OPCODE)
+                                         .startLLVM);
       Bits.compress = 0;
     }
 
     uint64_t Inst = getInstrBits(MI, Fixups, STI);
+    const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
 
     if (isSingle) {
       if (isVPUInst(MI) && MI.getOpcode() == TPC::HALTv) {
@@ -369,28 +1035,55 @@ void TPCMCCodeEmitter::fillInstrBits(const MCInst& MI,
       Bits.VPUInst = Inst;
       if (MI.getOpcode() != TPC::NOPv || !ignoreNops) {
         Bits.hasVPU = true;
+        if (isDoron1 && TPCMCInstrInfo::HasPredicate(MI, Desc, isDoron1)) {
+          Bits.VPUPredicated = 1;
+        }
       }
     }
     else if (isSPUInst(MI)) {
       Bits.SPUInst = Inst;
       if (MI.getOpcode() != TPC::NOPs || !ignoreNops) {
         Bits.hasSPU = true;
+        if (isDoron1 && TPCMCInstrInfo::HasPredicate(MI, Desc, isDoron1)) {
+          Bits.SPUPredicated = 1;
+        }
       }
     }
     else if (isLoadInst(MI)) {
       Bits.LDInst = Inst;
       if (MI.getOpcode() != TPC::NOPld || !ignoreNops) {
         Bits.hasLD = true;
+        if (isDoron1 && TPCMCInstrInfo::HasPredicate(MI, Desc, isDoron1)) {
+            Bits.LoadPredicated = 1;
+        }
       }
     }
     else if (isStoreInst(MI)) {
       if (StoreSrcC) {
-          llvm_unreachable("Unhandled arch");
+        assert(isDoron1 || STI.getFeatureBits()[TPC::FeatureGaudi2]);
+        const Field StoreSrcCField =
+            TPCInstrLayout::getSTInstrLayout(false, STI.getFeatureBits())
+                .at(STORE_SRC_C);
+
+        APInt StoreSrcCMask = APInt(64, 0);
+         StoreSrcCMask.setBits(
+               StoreSrcCField.startLLVM,
+               StoreSrcCField.startLLVM + StoreSrcCField.sizeBin + 1);
+        StoreSrcCMask.flipAllBits();
+
+        APInt StoreSrcCValue = APInt(64, StoreSrcC.getValue())
+            .shl(StoreSrcCField.startLLVM);
+
+        Inst &= StoreSrcCMask.getZExtValue();
+        Inst |= StoreSrcCValue.getZExtValue();
       }
 
       Bits.STInst = Inst;
       if (MI.getOpcode() != TPC::NOPst || !ignoreNops) {
         Bits.hasST = true;
+        if (isDoron1 && TPCMCInstrInfo::HasPredicate(MI, Desc, isDoron1)) {
+          Bits.StorePredicated = 1;
+        }
       }
     }
     else {
@@ -407,7 +1100,6 @@ void TPCMCCodeEmitter::fillInstrBits(const MCInst& MI,
     }
     else {
       int64_t opImm = 0;
-      const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
       unsigned opNum = TPCMCInstrInfo::getImmFieldOpNum(MCII, MI);
       assert(MI.getOperand(opNum).isImm() || MI.getOperand(opNum).isFPImm());
 
@@ -419,16 +1111,20 @@ void TPCMCCodeEmitter::fillInstrBits(const MCInst& MI,
          void *Storage = static_cast<void *>(&fimm);
          opImm= *static_cast<uint64_t *>(Storage);
       }
+      const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
       const MCOperandInfo &Info = Desc.OpInfo[opNum];
-      // encode immediate in the IMM slot (otherwise, it is encoded in place of the operand)
-      if (Bits.immSlotBusy) {
-        if ((Bits.Imm != (uint64_t)opImm) && TPCAssertOnImmConflict) {
-          dbgs() << "Imm conflict: imm1(" << Bits.Imm << "), imm2(" << (uint64_t)opImm << ")\n";
-          assert (0 && "Too many immediates in one bundle");
+      if (!STI.getFeatureBits()[TPC::FeatureShortImm]
+        || TPCMCInstrInfo::useImmSlotForImm(Info, opImm, TPCMCInstrInfo::isInstTypeSigned(Desc, MI))) {
+        // encode immediate in the IMM slot (otherwise, it is encoded in place of the operand)
+        if (Bits.immSlotBusy) {
+          if ((Bits.Imm != (uint64_t)opImm) && TPCAssertOnImmConflict) {
+            dbgs() << "Imm conflict: imm1(" << Bits.Imm << "), imm2(" << (uint64_t)opImm << ")\n";
+            assert (0 && "Too many immediates in one bundle");
+	      }
         }
+        Bits.Imm = (uint64_t)opImm;
+        Bits.immSlotBusy = true;
       }
-      Bits.Imm = (uint64_t)opImm;
-      Bits.immSlotBusy = true;
     }
   }
   Bits.inited = true;
@@ -439,7 +1135,8 @@ void TPCMCCodeEmitter::emitBits(raw_ostream& OS, TPCInstrBits *Bits, const MCSub
   CompressionType CT = Bits->compress == 1 ? CompressionType::SPU_VPU : CompressionType::LD_ST;
 
   TPCInstrComposer composer(Bits->SPUInst, Bits->VPUInst, Bits->LDInst, Bits->STInst, Bits->Imm,
-          STI.getFeatureBits(), (Bits->compress != 0), CT);
+          STI.getFeatureBits(), (Bits->compress != 0), CT,
+          Bits->SPUPredicated, Bits->VPUPredicated, Bits->LoadPredicated, Bits->StorePredicated);
 
   APInt Instruction = composer.createBundle();
 
@@ -465,22 +1162,34 @@ void TPCMCCodeEmitter::encodeInstruction(const MCInst& MI, raw_ostream& OS,
   emitBits(OS, &Bits, STI);
 }
 
+#define MASK(Len) ((1<<Len)-1)
+
 void TPCMCCodeEmitter::encodeLoop(const MCInst &Inst, raw_ostream& OS, uint64_t Bin, SmallVectorImpl<MCFixup> &Fixups, const MCSubtargetInfo& STI) const {
-  unsigned loop_enc_start       = TPCII::LOOPEncStart;
-  unsigned loop_enc_size        = TPCII::LoopEncSize;
-  unsigned loop_cmp_start       = TPCII::LoopCmpStart;
-  unsigned loop_start_imm_start = TPCII::LoopStartImmStart;
-  unsigned loop_bound_imm_start = TPCII::LoopBoundaryImmStart;
-  unsigned loop_step_imm_start  = TPCII::LoopStepImmStart;
-  unsigned loop_offset_start    = TPCII::LoopOffsetStart;
+  bool isDoron1 = STI.getFeatureBits()[TPC::FeatureDoron1];
+
+  unsigned loop_start_imm_start = isDoron1 ? TPCII::Gen4LoopStartImmStart : (mayCompress(STI) ? TPCII::Gen3LoopStartImmStart    : TPCII::LoopStartImmStart);
+  unsigned loop_bound_imm_start = isDoron1 ? TPCII::Gen4LoopBoundaryImmStart : (mayCompress(STI) ? TPCII::Gen3LoopBoundaryImmStart : TPCII::LoopBoundaryImmStart);
+  unsigned loop_step_imm_start  = isDoron1 ? TPCII::Gen4LoopStepImmStart : (mayCompress(STI) ? TPCII::Gen3LoopStepImmStart     : TPCII::LoopStepImmStart);
+  unsigned loop_offset_start    = isDoron1 ? TPCII::Gen4LoopOffsetStart : (mayCompress(STI) ? TPCII::Gen3LoopOffsetStart      : TPCII::LoopOffsetStart);
+  const std::map<Fields, Field> &Layout = TPCInstrLayout::getLoopInstrLayout(
+      mayCompress(STI), STI.getFeatureBits());
 
   APInt Instruction(TPCII::InstructionSize, 0);
-  APInt RegPart(loop_enc_size, Bin);
 
-  uint8_t CmpMode = Bin >> loop_enc_size;
-  Instruction |= RegPart.zext(TPCII::InstructionSize).shl(loop_enc_start);
-  APInt CmpEnc(3, CmpMode);
-  Instruction |= CmpEnc.zext(TPCII::InstructionSize).shl(loop_cmp_start);
+  uint64_t Bits = 0;
+  APInt Field;
+  for (auto FieldLayout : Layout) {
+    Bits = Bin >> FieldLayout.second.startLLVM;
+    Bits &= MASK(FieldLayout.second.sizeBin);
+    Field = APInt(TPCII::InstructionSize, Bits);
+    Instruction |= Field.shl(FieldLayout.second.startBin);
+  }
+
+  if (isDoron1 &&
+      TPCMCInstrInfo::HasPredicate(Inst, MCII.get(Inst.getOpcode()), isDoron1)) {
+    APInt ImmValue(TPCII::InstructionSize, 1);
+    Instruction |= ImmValue.shl(Layout.at(LOOP_IS_PREDICATED).startBin);
+  }
 
   // Start immediate
   if (Inst.getOperand(0).isImm()) {
@@ -533,6 +1242,28 @@ unsigned TPCMCCodeEmitter::getRrMemoryOpValue(
   return Encoding;
 }
 
+unsigned TPCMCCodeEmitter::getRiMemoryOpValue(
+    const MCInst &Inst, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &SubtargetInfo) const {
+  const MCRegisterInfo * TRI = Ctx.getRegisterInfo();
+  unsigned Encoding;
+  const MCOperand Op1 = Inst.getOperand(OpNo + 0);
+  const MCOperand Op2 = Inst.getOperand(OpNo + 1);
+
+  assert(Op1.isReg() && "First operand is not register.");
+  assert(TRI->getRegClass(TPC::SRFRegClassID).contains(Op1.getReg()) && "Register for Base must be SRF");
+  Encoding = (TRI->getEncodingValue(Op1.getReg()) + 64);
+  assert(Op2.isImm() && "Second operand is not immediate.");
+  unsigned ImmBits;
+  if (SubtargetInfo.getFeatureBits()[TPC::FeatureDoron1])
+    ImmBits = 0xff;
+  else
+    ImmBits = 0x7f;
+  Encoding |= ImmBits << 8;
+
+  return Encoding;
+}
+
 unsigned TPCMCCodeEmitter::encodePredicate(
     const MCInst &Inst, unsigned OpNo,
     SmallVectorImpl<MCFixup> &Fixups,
@@ -550,10 +1281,18 @@ unsigned TPCMCCodeEmitter::encodePredicate(
   (void)IsScalar;
   assert((IsVector || IsScalar) && "Predicate register must be of SPRF or VPRF class");
 
-  unsigned Encoding = TRI->getEncodingValue(PredReg.getReg());
+  // For unpredicate instruction emit SP0/VP0 register
+  unsigned Encoding = 0;
+  if (PredReg.getReg() == TPC::SPRF_TRUE)
+    Encoding = TRI->getEncodingValue(TPC::SP0);
+  else if (PredReg.getReg() == TPC::VPRF_TRUE)
+    Encoding = TRI->getEncodingValue(TPC::VP0);
+  else
+    Encoding = TRI->getEncodingValue(PredReg.getReg());
+  
   if (IsVector)
     Encoding += 16;
-  Encoding |= (Polarity.getImm() << 5);
+  Encoding |= ((Polarity.getImm() & 0x1) << 5);
 
   return Encoding;
 }
@@ -569,7 +1308,29 @@ unsigned TPCMCCodeEmitter::encodeTPCImm(
 
   const MCInstrDesc &Desc = MCII.get(Inst.getOpcode());
   const MCOperandInfo &Info = Desc.OpInfo[OpNo];
-  return 0x7f;
+  if (!STI.getFeatureBits()[TPC::FeatureShortImm]
+    || TPCMCInstrInfo::useImmSlotForImm(Info, Imm, TPCMCInstrInfo::isInstTypeSigned(Desc, Inst)))
+  {
+    // encoded in a separate imm slot
+    if (STI.getFeatureBits()[TPC::FeatureDoron1])
+      return 0xff;
+    else
+      return 0x7f;
+  }
+
+  unsigned Encoding = ((uint64_t)Imm & 0xF);
+  unsigned Prefix = 0;
+  if (STI.getFeatureBits()[TPC::FeatureDoron1]) {
+    Prefix = 0xf0; // 0b11110000;
+    if (Encoding == 0xFu)
+      Prefix = 0xE0; // 0b11100000;
+  } else {
+    Prefix = 0x70; // 0b01110000;
+    if (Encoding == 0xFu)
+      Prefix = 0x60; // 0b01100000;
+    }
+
+  return Encoding | Prefix;
 }
 
 unsigned TPCMCCodeEmitter::
@@ -577,10 +1338,70 @@ getMachineOpValue(const MCInst &MI, const MCOperand &MO,
                   SmallVectorImpl<MCFixup> &Fixups,
                   const MCSubtargetInfo &STI) const {
   if (MO.isReg()) {
+    const auto &IsHWMovFromToSRF = [](unsigned Opcode) {
+      return Opcode == TPC::MOVhsp || Opcode == TPC::MOV_ld_hsp ||
+        Opcode == TPC::MOVhsip || Opcode == TPC::MOV_ld_hsip ||
+        Opcode == TPC::MOVshp || Opcode == TPC::MOV_ld_shp ||
+        // Assembler Opcode
+        Opcode == TPC::MOVghspDoron1 || Opcode == TPC::MOV_ld_ghspDoron1 ||
+        Opcode == TPC::MOVgshpDoron1 || Opcode == TPC::MOV_ld_gshpDoron1 ||
+        Opcode == TPC::MOVghspPriorDoron1 || Opcode == TPC::MOV_ld_ghspPriorDoron1 ||
+        Opcode == TPC::MOVgshpPriorDoron1 || Opcode == TPC::MOV_ld_gshpPriorDoron1;
+    };
     unsigned Reg = MO.getReg();
     const MCRegisterInfo * TRI = Ctx.getRegisterInfo();
     unsigned RegNo = TRI->getEncodingValue(Reg);
-    if (isVPUInst(MI)) {
+    bool UnifiedOpEncoding = STI.getFeatureBits()[TPC::FeatureDoron1];
+    if (UnifiedOpEncoding) {
+      if (TRI->getRegClass(TPC::SRFRegClassID).contains(Reg)) {
+        return RegNo + 64;
+      }
+      else if (TRI->getRegClass(TPC::ZRFRegClassID).contains(Reg)) {
+        return RegNo + 64;
+      }
+      else if (TRI->getRegClass(TPC::VRFRegClassID).contains(Reg)) {
+        return RegNo;
+      }
+      else if (TRI->getRegClass(TPC::DRFRegClassID).contains(Reg)) {
+        return RegNo;
+      }
+      else if (TRI->getRegClass(TPC::VPRFRegClassID).contains(Reg)) {
+        return RegNo + 48;
+      }
+      else if (TRI->getRegClass(TPC::SPRFRegClassID).contains(Reg)) {
+        return RegNo + 192;
+      }
+      else if (TRI->getRegClass(TPC::ARFRegClassID).contains(Reg)) {
+        return RegNo;
+      }
+      else if (TRI->getRegClass(TPC::IRFRegClassID).contains(Reg)) {
+        return RegNo + 128;
+      }
+      else if (TRI->getRegClass(TPC::ADRFRegClassID).contains(Reg)) {
+        return RegNo + 208;
+      }
+      else if (TRI->getRegClass(TPC::MRFRegClassID).contains(Reg)){
+        // Process MRF separately from other HW registers. It is encoded
+        // differently if it represents a mask or is a destination in MOV.
+        if (IsHWMovFromToSRF(MI.getOpcode()))
+          return RegNo;
+        return RegNo - 4;
+      }
+      else if (TRI->getRegClass(TPC::HVRFDoron1RegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HSRFDoron1RegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HVPRFRegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HSPRFRegClassID).contains(Reg)) {
+        return RegNo;
+      }
+      // Some fake register for Doron1
+      else if (TRI->getRegClass(TPC::HWSqzCntrRegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HWSqzCntrSubRegClassID).contains(Reg)) {
+        return RegNo;
+      }
+      else {
+        llvm_unreachable("Wrong register for Doron1");
+      }
+    } else if (isVPUInst(MI)) {
       if (TRI->getRegClass(TPC::SRFRegClassID).contains(Reg)) {
         return RegNo + 64;
       }
@@ -608,6 +1429,8 @@ getMachineOpValue(const MCInst &MI, const MCOperand &MO,
       else if (TRI->getRegClass(TPC::ADRFRegClassID).contains(Reg)) {
         return RegNo + 160;
       } else if (TRI->getRegClass(TPC::HSRFRegClassID).contains(Reg)  ||
+                 TRI->getRegClass(TPC::HVRFRegClassID).contains(Reg)  ||
+                 TRI->getRegClass(TPC::HVPRFRegClassID).contains(Reg) ||
                  TRI->getRegClass(TPC::HSPRFRegClassID).contains(Reg)) {
         return RegNo;
       } else {
@@ -628,10 +1451,19 @@ getMachineOpValue(const MCInst &MI, const MCOperand &MO,
         return RegNo + 64;
       }
       else if (TRI->getRegClass(TPC::ADRFRegClassID).contains(Reg)) {
-              return RegNo+96;
+              return RegNo + 96;
       }
-      else if (TRI->getRegClass(TPC::HSRFRegClassID).contains(Reg)  ||
-                 TRI->getRegClass(TPC::HSPRFRegClassID).contains(Reg)) {
+      else if (TRI->getRegClass(TPC::MRFRegClassID).contains(Reg)) {
+        // Process MRF separately from other HW registers. It is encoded
+        // differently if it represents a mask or is a destination in MOV.
+        if (IsHWMovFromToSRF(MI.getOpcode()))
+          return RegNo;
+        return RegNo - 4;
+      } else if (TRI->getRegClass(TPC::HSRFRegClassID).contains(Reg)  ||
+                 TRI->getRegClass(TPC::HVRFRegClassID).contains(Reg)  ||
+                 TRI->getRegClass(TPC::HVPRFRegClassID).contains(Reg) ||
+                 TRI->getRegClass(TPC::HSPRFRegClassID).contains(Reg) ||
+                 TRI->getRegClass(TPC::HWSqzCntrRegClassID).contains(Reg)) {
         return RegNo;
       } else {
         llvm_unreachable("Wrong register class for a spu instruction");
@@ -662,8 +1494,14 @@ getMachineOpValue(const MCInst &MI, const MCOperand &MO,
       else if (TRI->getRegClass(TPC::ADRFRegClassID).contains(Reg)) {
         return RegNo + 160;
       }
+      else if (TRI->getRegClass(TPC::MRFRegClassID).contains(Reg)) {
+        return RegNo - 4;
+      }
       else if (TRI->getRegClass(TPC::HSRFRegClassID).contains(Reg)  ||
-               TRI->getRegClass(TPC::HSPRFRegClassID).contains(Reg)) {
+               TRI->getRegClass(TPC::HVRFRegClassID).contains(Reg)  ||
+               TRI->getRegClass(TPC::HVPRFRegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HSPRFRegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HWSqzCntrRegClassID).contains(Reg)) {
         return RegNo;
       } else {
         llvm_unreachable("Wrong register class for a store instruction");
@@ -693,8 +1531,16 @@ getMachineOpValue(const MCInst &MI, const MCOperand &MO,
       }
       else if (TRI->getRegClass(TPC::ADRFRegClassID).contains(Reg)) {
         return RegNo + 160;
+      } else if (TRI->getRegClass(TPC::MRFRegClassID).contains(Reg)) {
+        // Process MRF separately from other HW registers. It is encoded
+        // differently if it represents a mask or is a destination in MOV.
+        if (IsHWMovFromToSRF(MI.getOpcode()))
+          return RegNo;
+        return RegNo - 4;
       }
-      else if (TRI->getRegClass(TPC::HSRFRegClassID).contains(Reg)  ||
+      else if (TRI->getRegClass(TPC::HSRFRegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HVRFRegClassID).contains(Reg) ||
+               TRI->getRegClass(TPC::HVPRFRegClassID).contains(Reg) ||
                TRI->getRegClass(TPC::HSPRFRegClassID).contains(Reg)) {
         return RegNo;
       } else {

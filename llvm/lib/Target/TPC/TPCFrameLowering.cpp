@@ -21,6 +21,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/TypeSize.h"
 #include "llvm/Target/TargetOptions.h"
 
 using namespace llvm;
@@ -58,20 +59,22 @@ bool TPCFrameLowering::hasFP(const MachineFunction &MF) const {
 }
 
 
-int TPCFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
-                                             unsigned &FrameReg) const {
+StackOffset
+TPCFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
+                                         Register &FrameReg) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+
   // Return "frame register".
   const TPCTargetLowering &TL = *MF.getSubtarget<TPCSubtarget>().getTargetLowering();
   FrameReg = TL.getZeroReg();
 
   // Resolve spill slots.
   if (static_cast<unsigned>(FI) < FrameObjects.size() && !FrameObjects[FI].isEmpty())
-    return getFrameObjectOffset(FI);
+    return StackOffset::getFixed(getFrameObjectOffset(FI));
 
   // Resolve locals.
-  const MachineFrameInfo &MFI = MF.getFrameInfo();
   // TODO: synchronize with GlobalResolver.
-  return MFI.getObjectOffset(FI);
+  return StackOffset::getFixed(MFI.getObjectOffset(FI));
 }
 
 

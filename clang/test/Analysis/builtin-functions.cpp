@@ -1,5 +1,5 @@
 // RUN: %clang_analyze_cc1 -triple x86_64-apple-darwin10 -analyzer-checker=core,debug.ExprInspection %s -std=c++11 -verify
-// XFAIL: *
+
 void clang_analyzer_eval(bool);
 void clang_analyzer_warnIfReached();
 

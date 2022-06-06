@@ -1,10 +1,9 @@
 //===- Disassembler.cpp - TPC LLVM disassembler entry point ---------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
+// Copyright (C) 2020 HabanaLabs, Ltd.
+// All Rights Reserved.
+// Unauthorized copying of this file, via any medium is strictly prohibited.
+// Proprietary and confidential.
 //
 //===----------------------------------------------------------------------===//
 
