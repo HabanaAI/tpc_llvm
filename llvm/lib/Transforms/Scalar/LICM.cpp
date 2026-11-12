@@ -1260,6 +1260,15 @@ bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
     }
 
     if (Behavior.onlyWritesMemory()) {
+#ifdef LLVM_TPC_COMPILER
+      // TPC: moving a write-only call (new in LLVM 22) runs it once instead of
+      // on every iteration. TPC store intrinsics are write-only but not all
+      // idempotent: st_tnsr_rmw adds to memory, so an RMW add in a loop of n
+      // iterations added only once. Keep them in the loop, like LLVM 12 and
+      // Habana's compiler.
+      if (CI->getModule()->getTargetTriple().getArch() == Triple::tpc)
+        return false;
+#endif
       // can hoist or sink if there are no conflicting read/writes to the
       // memory location written to by the call.
       return noConflictingReadWrites(CI, MSSA, AA, CurLoop, Flags);
