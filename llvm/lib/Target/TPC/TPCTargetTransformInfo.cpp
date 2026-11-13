@@ -15,6 +15,8 @@
 #undef _MSC_EXTENSIONS // Turn off iso646 mapping
 #include "TPCTargetTransformInfo.h"
 #include "MCTargetDesc/InstructionDB.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
@@ -25,6 +27,82 @@ unsigned TPCTTIImpl::getNumberOfRegisters(bool Vector) const {
   if (Vector)
     return 40;
   return 32;
+}
+
+// Height of the loop nest rooted at L: 1 for an innermost loop.
+static unsigned getLoopNestHeight(const Loop *L) {
+  unsigned Height = 0;
+  for (const Loop *Sub : *L)
+    Height = std::max(Height, getLoopNestHeight(Sub));
+  return Height + 1;
+}
+
+// TPCHardwareLoops turns a loop into a LOOP instruction when the exit compare
+// tests the loop counter against a value from outside the loop. LSR may
+// rewrite that compare in terms of an induction variable of its own, such as
+// `start + iv < end`, and then the machine pass no longer finds the counter
+// and the loop keeps a compare and a jump on every iteration. Ask LSR to leave
+// the compare alone in loops that pass converts. The checks are the ones of
+// TPCHardwareLoops::calculateLoop that can be made on IR; the layout and size
+// checks cannot, so the answer is a prediction.
+bool TPCTTIImpl::canSaveCmp(Loop *L, CondBrInst **BI, ScalarEvolution *SE,
+                            LoopInfo *LI, DominatorTree *DT,
+                            AssumptionCache *AC,
+                            TargetLibraryInfo *LibInfo) const {
+  // Only the 4 innermost levels of a loop nest become hardware loops.
+  if (getLoopNestHeight(L) > 4)
+    return false;
+
+  BasicBlock *Header = L->getHeader();
+  BasicBlock *Latch = L->getLoopLatch();
+  if (!Latch || L->getExitingBlock() != Latch || !L->getExitBlock())
+    return false;
+  auto *Br = dyn_cast<CondBrInst>(Latch->getTerminator());
+  if (!Br)
+    return false;
+  // LSR rewrites an equality compare to count down to zero, which the machine
+  // pass converts too, and Habana's compiler emits that form. Only relational
+  // compares lose the counter.
+  auto *Cmp = dyn_cast<ICmpInst>(Br->getCondition());
+  if (!Cmp || Cmp->isEquality() || !L->contains(Cmp))
+    return false;
+
+  // The counter on one side, a boundary from outside the loop on the other.
+  Value *Iter = Cmp->getOperand(0);
+  Value *Bound = Cmp->getOperand(1);
+  if (L->isLoopInvariant(Iter))
+    std::swap(Iter, Bound);
+  if (!L->isLoopInvariant(Bound) || !Iter->getType()->isIntegerTy(32))
+    return false;
+
+  // The counter is the header phi (pre-increment) or the add that feeds it
+  // back (post-increment), and the add steps the phi by a loop invariant.
+  auto *Phi = dyn_cast<PHINode>(Iter);
+  if (Phi && Phi->getParent() != Header)
+    return false;
+  auto *Inc = dyn_cast<BinaryOperator>(
+      Phi ? Phi->getIncomingValueForBlock(Latch) : Iter);
+  if (!Inc || Inc->getOpcode() != Instruction::Add || !L->contains(Inc))
+    return false;
+  auto *IncPhi = dyn_cast<PHINode>(Inc->getOperand(0));
+  Value *Step = Inc->getOperand(1);
+  if (!IncPhi) {
+    IncPhi = dyn_cast<PHINode>(Inc->getOperand(1));
+    Step = Inc->getOperand(0);
+  }
+  if (!IncPhi || IncPhi->getParent() != Header ||
+      IncPhi->getIncomingValueForBlock(Latch) != Inc ||
+      !L->isLoopInvariant(Step))
+    return false;
+  if (Phi) {
+    // TPCHardwareLoops converts the pre-increment form only with a constant
+    // boundary and step.
+    if (IncPhi != Phi || !isa<ConstantInt>(Bound) || !isa<ConstantInt>(Step))
+      return false;
+  }
+
+  *BI = Br;
+  return true;
 }
 
 // TPC default latency measured in cycles

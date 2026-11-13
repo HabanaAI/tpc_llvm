@@ -67,6 +67,10 @@ public:
     return false;
   }
 
+  bool canSaveCmp(Loop *L, CondBrInst **BI, ScalarEvolution *SE, LoopInfo *LI,
+                  DominatorTree *DT, AssumptionCache *AC,
+                  TargetLibraryInfo *LibInfo) const override;
+
   InstructionCost getInstructionLatency(const Instruction *I);
   InstructionCost getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
                                         TTI::TargetCostKind CostKind) const override;
