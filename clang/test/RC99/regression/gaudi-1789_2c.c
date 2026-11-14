@@ -13,7 +13,9 @@ void main(int x0, int x3, int dest0)
     *res0 = temp_res0.v1;
 }
 
+// GAUDI2_0012: one cache_invalidate lu at the start covers both x2 lookups,
+// since no plain lookup runs between them (as in Habana's compiler).
 // CHECK: cache_invalidate lu
 // CHECK: lookup_2c BV32 x2 %D0, %V2, 0x1, %SP{{[0-9]+}}
-// CHECK: cache_invalidate lu
+// CHECK-NOT: cache_invalidate
 // CHECK: lookup_2c BV32 x2 %D0, %V2, 0x1, %SP{{[0-9]+}}

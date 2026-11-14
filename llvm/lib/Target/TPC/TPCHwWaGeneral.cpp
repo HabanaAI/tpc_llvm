@@ -283,6 +283,111 @@ bool TPCHWWAGeneral::runOnMachineFunction(MachineFunction &Func) {
   return Status;
 }
 
+// A plain LOOKUP, not LOOKUP_1C/2C and not the GAUDI2_0010 dummy lookup.
+static bool isPlainLookup(const MachineInstr &MI) {
+  return MI.getOpcode() != TPC::LOOKUPnodce && TPCII::isLoadInst(MI.getDesc()) &&
+         TPCII::getSlotOpCode(MI.getDesc()) == TPCII::LOOKUP;
+}
+
+static bool isLookupX2(const MachineInstr &MI) {
+  const MCInstrDesc &Desc = MI.getDesc();
+  if (!TPCII::isLoadInst(Desc))
+    return false;
+  unsigned Opc = TPCII::getSlotOpCode(Desc);
+  return (Opc == TPCII::LOOKUP_1C || Opc == TPCII::LOOKUP_2C) &&
+         (MI.getOperand(3).getImm() & TPCII::SW_X2_ARITHMETIC);
+}
+
+// GAUDI2_0012: LUT cache tags may be wrong when a LOOKUP.X2 follows a plain
+// LOOKUP, so a CACHE_INVALIDATE.LU must come between the two. Like Habana's
+// compiler, add one before an x2 lookup only when a plain LOOKUP may have run
+// since the last invalidate added here, or since the kernel started (the
+// cache may hold an earlier kernel's lookups). LOOKUP_1C/2C, the GAUDI2_0010
+// dummy lookup, CACHE_INVALIDATE.RST_LU and invalidates written in the source
+// leave that state alone. The invalidate goes
+//   - at the start of the kernel, if only the start reaches the x2 lookup,
+//   - right after the plain LOOKUP, if that is the only one reaching it and
+//     the start does not,
+//   - right before the x2 lookup otherwise.
+// TPCDAGMutation keeps it in place relative to the lookups.
+static bool invalidateBeforeLookupX2(MachineFunction &MF) {
+  using Sources = SmallPtrSet<void *, 4>;
+  void *const KernelStart = &MF;
+  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
+  SmallPtrSet<const MachineInstr *, 8> Added;
+
+  auto Transfer = [&](MachineInstr &MI, Sources &S) {
+    if (Added.count(&MI)) {
+      S.clear();
+    } else if (isPlainLookup(MI)) {
+      S.clear();
+      S.insert(&MI);
+    }
+  };
+
+  bool Changed = false;
+  while (true) {
+    // The plain lookups (and the kernel start) that reach the start of each
+    // block with no invalidate added on the way.
+    std::vector<Sources> In(MF.getNumBlockIDs()), Out(MF.getNumBlockIDs());
+    for (bool Again = true; Again;) {
+      Again = false;
+      for (MachineBasicBlock &MBB : MF) {
+        Sources S;
+        if (&MBB == &MF.front())
+          S.insert(KernelStart);
+        for (MachineBasicBlock *Pred : MBB.predecessors())
+          S.insert(Out[Pred->getNumber()].begin(), Out[Pred->getNumber()].end());
+        In[MBB.getNumber()] = S;
+        for (MachineInstr &MI : MBB)
+          Transfer(MI, S);
+        if (S != Out[MBB.getNumber()]) {
+          Out[MBB.getNumber()] = S;
+          Again = true;
+        }
+      }
+    }
+
+    // The first x2 lookup that still needs an invalidate.
+    MachineInstr *X2 = nullptr;
+    Sources Reaching;
+    for (MachineBasicBlock &MBB : MF) {
+      Sources S = In[MBB.getNumber()];
+      for (MachineInstr &MI : MBB) {
+        if (isLookupX2(MI) && !S.empty()) {
+          X2 = &MI;
+          Reaching = S;
+          break;
+        }
+        Transfer(MI, S);
+      }
+      if (X2)
+        break;
+    }
+    if (!X2)
+      return Changed;
+
+    MachineInstr *CI = MF.CreateMachineInstr(TII->get(TPC::CACHE_INVALIDATE),
+                                             X2->getDebugLoc(), true);
+    CI->addOperand(MF, MachineOperand::CreateImm(TPCII::SW_LU));
+    CI->addOperand(MF, MachineOperand::CreateReg(TPC::SPRF_TRUE, false));
+    CI->addOperand(MF, MachineOperand::CreateImm(0));
+    void *Only = Reaching.size() == 1 ? *Reaching.begin() : nullptr;
+    if (Only == KernelStart) {
+      // It belongs to the kernel prologue (TPCPrologueMMIO.cpp).
+      CI->setFlag(MachineInstr::FrameSetup);
+      MF.front().insert(MF.front().begin(), CI);
+    } else if (Only) {
+      auto *Plain = static_cast<MachineInstr *>(Only);
+      Plain->getParent()->insertAfter(Plain->getIterator(), CI);
+    } else {
+      X2->getParent()->insert(X2->getIterator(), CI);
+    }
+    Added.insert(CI);
+    Changed = true;
+  }
+}
+
 bool TPCHWWAGeneral::gen4PlusHwWA(MachineFunction &Func) {
   MachineFunction *MF = &Func;
   const TargetInstrInfo *TII = MF->getSubtarget().getInstrInfo();
@@ -292,22 +397,7 @@ bool TPCHWWAGeneral::gen4PlusHwWA(MachineFunction &Func) {
       MCInstrDesc Desc = (*mi).getDesc();
       auto OpCode = TPCII::getSlotOpCode(Desc);
       MachineInstr *MI = &*mi;
-      if (TPCII::isLoadInst(Desc)) {
-        if ((OpCode == TPCII::LOOKUP_1C) || (OpCode == TPCII::LOOKUP_2C)) {
-          if (MI->getOperand(3).getImm() & TPCII::SW_X2_ARITHMETIC) {
-            // GAUDI2_0012: Before using LOOKUP.X2, must do CACHE_INVALIDATE.LU
-            // Problem:     Tags might be wrong during transition from normal LOOKUP to LOOKUP.X2
-            // Implication: Can't do LOOKUP.X2 after LOOKUP
-            // Workaround:  Perform CACHE_INVALIDATE.LU before using LOOKUP.X2
-            RestrictionReleased = true;
-            MachineInstr *cacheIns = MF->CreateMachineInstr(TII->get(TPC::CACHE_INVALIDATE), MI->getDebugLoc(), true);
-            cacheIns->addOperand(*MF, MachineOperand::CreateImm(TPCII::SW_LU));
-            cacheIns->addOperand(*MF, MachineOperand::CreateReg(TPC::SPRF_TRUE, false));
-            cacheIns->addOperand(*MF, MachineOperand::CreateImm(0));
-            MBB.insert(MI, cacheIns);
-          }
-        }
-      } else if (TPCII::isStoreInst(Desc)) {
+      if (TPCII::isStoreInst(Desc)) {
         if (OpCode == TPCII::CACHE_INVALIDATE && MI->getOperand(0).isImm() && (MI->getOperand(0).getImm() & TPCII::SW_RST_LU)) {
           // GAUDI2_0010 : CACHE_INVALIDATE.RST_LU is not resetting LUT$ pLRU
           // Problem     : Can't reset LUT$ pLRU using simple CACHE_INVALIDATE.RST_LU
@@ -328,10 +418,13 @@ bool TPCHWWAGeneral::gen4PlusHwWA(MachineFunction &Func) {
           MBB.insertAfter(MI, dummyLookup);
           RestrictionReleased = true;
         }
-      } 
+      }
     }
   }
 
+  // Habana's compiler applies GAUDI2_0012 on gaudi2 only.
+  if (Func.getSubtarget<TPCSubtarget>().hasGaudi2ISA())
+    RestrictionReleased |= invalidateBeforeLookupX2(Func);
   return RestrictionReleased;
 }
 

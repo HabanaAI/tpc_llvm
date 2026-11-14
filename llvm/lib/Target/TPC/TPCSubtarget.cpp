@@ -239,6 +239,31 @@ void TPCSubtarget::TPCDAGMutation::apply(ScheduleDAGInstrs *DAG) {
   unsigned DefMsk = 0;
   unsigned UseMsk = 0;
 
+  // Keep each CACHE_INVALIDATE.LU/RST_LU in program order with the lookups
+  // around it (GAUDI2_0012 needs the invalidate between a plain LOOKUP and a
+  // LOOKUP.X2). Nothing else orders them: lookups do not access memory and
+  // have no side effects. SUnits are numbered in program order.
+  if (Subtarget.hasGaudi2ISA()) {
+    SmallVector<SUnit *, 8> Lookups, Invalidates;
+    for (SUnit &SU : DAG->SUnits) {
+      if (!SU.isInstr())
+        continue;
+      const MachineInstr &MI = *SU.getInstr();
+      if (MI.getOpcode() == TPC::CACHE_INVALIDATE && MI.getOperand(0).isImm() &&
+          (MI.getOperand(0).getImm() & (TPCII::SW_LU | TPCII::SW_RST_LU)))
+        Invalidates.push_back(&SU);
+      else if (TPCII::isLookup(MI.getDesc()))
+        Lookups.push_back(&SU);
+    }
+    for (SUnit *CI : Invalidates)
+      for (SUnit *L : Lookups) {
+        if (L->NodeNum < CI->NodeNum)
+          CI->addPred(SDep(L, SDep::Artificial));
+        else
+          L->addPred(SDep(CI, SDep::Artificial));
+      }
+  }
+
   for (auto &SU : DAG->SUnits) {
     if (!SU.isInstr())
       continue;
