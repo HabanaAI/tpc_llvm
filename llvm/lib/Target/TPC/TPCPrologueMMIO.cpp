@@ -5,8 +5,8 @@
 //   event            vpu 0xff            ; every -O level
 //   cache_invalidate lu                  ; only in kernels without a lookup
 //   ld_l             mmio %Sx, 0x538     ; -O1 and above
-//   or.i32           %Sx, %Sx, 0x1000000
-//   st_l             mmio 0x538, %Sx
+//   or.i32           %Sx, %Sx, 0x1000000 ; and.i32 %Sx, %Sx, 0xfeffffff
+//   st_l             mmio 0x538, %Sx     ;   with -long-irf
 //
 // each in a bundle of its own, ahead of any kernel code, and this pass does the
 // same. %Sx is the lowest scalar register that does not hold a kernel argument.
@@ -22,9 +22,13 @@
 // EventSupport.rst). -tpc-insert-event-instruction=false leaves it out, as it
 // does on Habana's compiler. 0x538 is the KERNEL_CONFIG register.
 //
-// TODO: bit 24 of KERNEL_CONFIG is set only because Habana's compiler sets it.
-// Nothing we have names the bit, and the simulator gives the same results
-// without it. Find out what it does once we can run on gaudi2 hardware.
+// Bit 24 of KERNEL_CONFIG selects 32-bit IRF arithmetic; with it clear, IRF
+// adds carry past bit 31 (the field is IRF_32BIT_COMPATIBILTY in the
+// habanalabs driver's gaudi3 register masks, bit 25 there). The runtime
+// already sets it for normal kernels and clears it for -long-irf ones, so the
+// write only makes sure, and a -long-irf kernel must clear it rather than
+// set it. Tested on the simulator and on gaudi2 hardware: the new mode applies
+// to the very next bundle and is reset at the next kernel launch.
 //
 //===----------------------------------------------------------------------===//
 
@@ -49,8 +53,8 @@ static cl::opt<bool>
 
 static cl::opt<bool> SetKernelConfig(
     "tpc-prologue-kernel-config", cl::init(true), cl::Hidden,
-    cl::desc("Set bit 24 of KERNEL_CONFIG at the start of every gaudi2 kernel "
-             "at -O1 and above"));
+    cl::desc("Set the IRF mode bit (24) of KERNEL_CONFIG at the start of "
+             "every gaudi2 kernel at -O1 and above (clear it with -long-irf)"));
 
 namespace llvm {
 FunctionPass *createTPCPrologueMMIO();
@@ -62,7 +66,7 @@ namespace {
 constexpr unsigned EventData = 0xff;
 constexpr unsigned EventVPU = 1;
 constexpr unsigned KernelConfigAddr = 0x538;
-constexpr unsigned KernelConfigBits = 0x1000000;
+constexpr unsigned KernelConfigIRF32 = 0x1000000;
 
 class TPCPrologueMMIO : public MachineFunctionPass {
 public:
@@ -157,9 +161,10 @@ bool TPCPrologueMMIO::runOnMachineFunction(MachineFunction &MF) {
         .addReg(TPC::SPRF_TRUE)
         .addImm(0)
         .setMIFlag(MachineInstr::FrameSetup);
-    BuildMI(Entry, Pos, DL, TII->get(TPC::ORsip), Tmp)
+    bool LongIRF = MF.getTarget().Options.LongIRF;
+    BuildMI(Entry, Pos, DL, TII->get(LongIRF ? TPC::ANDsip : TPC::ORsip), Tmp)
         .addReg(Tmp)
-        .addImm(KernelConfigBits)
+        .addImm(LongIRF ? int32_t(~KernelConfigIRF32) : KernelConfigIRF32)
         .addImm(TPCII::OpType::INT32)
         .addImm(0)                    // switches
         .addReg(Tmp, RegState::Undef) // income
