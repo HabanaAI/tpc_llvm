@@ -1,4 +1,4 @@
-; RUN: opt -S -iter-ilv < %s | FileCheck %s
+; RUN: opt -S -passes=iter-ilv < %s | FileCheck %s
 
 target triple = "tpc"
 

@@ -1,4 +1,4 @@
-;RUN: opt < %s -cast-swizzle-opt -mcpu=gaudi -S | FileCheck %s
+;RUN: opt < %s -passes=cast-swizzle-opt -mcpu=gaudi -S | FileCheck %s
 
 
 ; CHECK-NOT:    call <256 x float> @llvm.tpc.convert.v256f32.v256i8.i1
