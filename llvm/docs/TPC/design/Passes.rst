@@ -1057,9 +1057,6 @@ instructions leave the loop, as upstream LICM does. ``llvm.read_register`` is
 
 **Maintainer notes.**
 
-* ``searchSource(inst, ...)`` is called before the ``!inst`` check, so a lookup
-  whose first operand is not an ``Instruction`` (argument or constant) causes a
-  null dereference.
 * ``searchSource`` adds an instruction as soon as one of its operand chains
   reaches ``read_register``. It does not check that its other operands are
   available at the target block, for example operands defined in another block

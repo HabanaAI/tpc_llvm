@@ -144,9 +144,11 @@ bool TPCLicmImpl::run(Loop *Lp) {
         /// Only the first operand can not be constant
         Instruction *inst =
             dyn_cast<llvm::Instruction>(IntrinsicsTpc->getOperand(0));
+        if (!inst)
+          continue;
         std::vector<Instruction *> chin;
         searchSource(inst, BB, chin);
-        if (chin.size() == 0 || !inst)
+        if (chin.size() == 0)
           continue;
         for (auto instInChin : chin) {
           if (std::find(std::begin(movIns), std::end(movIns), instInChin) ==
