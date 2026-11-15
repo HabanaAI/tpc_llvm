@@ -778,11 +778,6 @@ hidden): turns on the ``fptrunc`` → ``st.tnsr`` store-pack pattern (the
 
 **Maintainer notes.**
 
-- Use after free in ``replaceInstWithIntrinsic``
-  (``EliminateSwizzleCast.cpp:901-907``): after ``eraseFromParent()``, the
-  code still calls ``InstrToReplace->getOpcode()`` and
-  ``isStoreIntrinsic(InstrToReplace)``. The NPM port did not fix this, to
-  keep behaviour identical.
 - The legacy ``runOnFunction`` always returns ``false``, even after it
   transforms the IR. The port keeps this (``EliminateSwizzleCast.cpp:1073``).
 - ``marker`` is a ``std::unordered_multimap``, so the order in which it is

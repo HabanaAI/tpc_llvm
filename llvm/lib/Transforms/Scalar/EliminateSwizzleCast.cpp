@@ -893,8 +893,10 @@ void EliminateSwizzleCast::replaceInstWithIntrinsic(
     IntrinsicCall = createConvertIntrinsic(InstrToReplace, Switch);
   }
   if (IntrinsicCall) {
+    // A replaced instruction is a conversion, never a store.
     InstrToReplace->replaceAllUsesWith(IntrinsicCall);
     InstrToReplace->eraseFromParent();
+    return;
   }
 
   if (InstrToReplace->getOpcode() == Instruction::Call &&
