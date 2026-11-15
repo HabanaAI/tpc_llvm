@@ -706,8 +706,13 @@ bool EliminateSwizzleCast::isLegalToTransform(void) {
   // Post dominator nodes must have only path ending operation, i.e
   // 'EndOpCode' while the dominated node can only have path starting
   // operation i.e 'StartOpCode'.
-  for (auto IT : PostDomSet) {
-    const DDGNode *PDomNode = IT.getFirst();
+  // The loop erases the entry it is looking at, so it walks the keys, in the
+  // map's order, rather than the map itself.
+  SmallVector<const DDGNode *, 8> PDomNodes;
+  for (auto &Entry : PostDomSet)
+    PDomNodes.push_back(Entry.getFirst());
+  for (const DDGNode *PDomNode : PDomNodes) {
+    const NodeSetType Dominated = PostDomSet.find(PDomNode)->second;
     unsigned int OpEnd = 0;
 
     // Handle fptrunc/store-pack pattern, when it overlaps with fprunc/fpext
@@ -764,26 +769,17 @@ bool EliminateSwizzleCast::isLegalToTransform(void) {
     }
 
     if (OpEnd != EndOpCode && !(IsLoadIntrin(PDomNode))) {
-      for (auto ItBegin : PostDomSet) {
-        if (ItBegin.getFirst() == PDomNode) {
-          PostDomSet.erase(PDomNode);
-        }
-      }
+      PostDomSet.erase(PDomNode);
       continue;
     }
 
-    for (const auto *DomNode : IT.second) {
+    for (const auto *DomNode : Dominated) {
       LLVM_DEBUG(dbgs() << "Legality check 3\n");
       unsigned OpStart = getIntrestingOpCode(DomNode);
       // if both start and End are load and store instruction simply drop them
       if ((OpStart != StartOpCode && !(IsLoadIntrin(DomNode))) ||
-          (OpEnd == Instruction::Call && OpStart == Instruction::Call)) {
-        for (auto ItBegin : PostDomSet) {
-          if (ItBegin.getFirst() == PDomNode) {
-            PostDomSet.erase(PDomNode);
-          }
-        }
-      }
+          (OpEnd == Instruction::Call && OpStart == Instruction::Call))
+        PostDomSet.erase(PDomNode);
     }
   }
 
