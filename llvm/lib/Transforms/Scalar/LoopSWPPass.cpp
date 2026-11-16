@@ -211,9 +211,6 @@ private:
   // insert the Instruction I into the given BasicBlock at the insertion point
   bool insertIntoBlock(BlockType BT, Instruction *I, std::string DebugTag = "");
 
-  // create/clear Instruction List Containers
-  void resetInstContainers();
-
   void cleanup();
 
   // get the preheader clone of the given instruction
@@ -375,37 +372,6 @@ Value *LoopSWPImpl::getNonConstAddend(Instruction *I) {
 }
 
 // TODO : cluster info dep
-void LoopSWPImpl::resetInstContainers() {
-  NumClusters = 0;
-  IsAccumulationLoop = false;
-
-  LoopClusters.clear();
-
-  UnclusteredInstructions.clear();
-
-  PreToHeaderPhiMap.clear();
-  ExitToHeaderPhiMap.clear();
-
-  for (unsigned i = 0; i < BlockType::NumBlocks; i++) {
-    AccumPhis[i].clear();
-    LoadToPhiMap[i].clear();
-    AccumToPhiMap[i].clear();
-    PhiLastUpdateMap[i].clear();
-    InstCloneMap[i].clear();
-    LoadToPhiMap[i].clear();
-    InstToAlphaMap[i].clear();
-    InstUpdateMap[i].clear();
-  }
-
-  InstSeqMap.clear();
-  InstLoadStoreSeqMap.clear();
-
-  InsertedBlockInsts.clear();
-  InductionPhiSet.clear();
-  LoopStructureInsts.clear();
-  InductionInsts.clear();
-}
-
 void LoopSWPImpl::cleanup() {
   for (unsigned i = 0; i < LoopClusters.size(); i++) {
     // free the load inst sequence objects
@@ -1304,9 +1270,6 @@ bool LoopSWPImpl::isPipeliningPossible() {
   LOOP_SWP_DEBUG("PreheaderBlock = " << PreheaderBlock->getName())
   LOOP_SWP_DEBUG("HeaderBlock = " << HeaderBlock->getName())
   LOOP_SWP_DEBUG("ExitBlock = " << ExitBlock->getName())
-
-  // clear the data
-  resetInstContainers();
 
   if (!TPCOptUtils::populateInductionInsts(WorkingLoop, SE, InductionInsts)) {
     LOOP_SWP_DEBUG(DebugTag
@@ -2496,11 +2459,6 @@ void LoopSWPImpl::updateLoopBounds() {
   return;
 }
 
-LoopSWPPass::LoopSWPPass() : Impl(std::make_unique<LoopSWPImpl>()) {}
-LoopSWPPass::LoopSWPPass(LoopSWPPass &&) = default;
-LoopSWPPass &LoopSWPPass::operator=(LoopSWPPass &&) = default;
-LoopSWPPass::~LoopSWPPass() = default;
-
 PreservedAnalyses LoopSWPPass::run(Loop &L, LoopAnalysisManager &AM,
                                    LoopStandardAnalysisResults &AR,
                                    LPMUpdater &U) {
@@ -2509,7 +2467,9 @@ PreservedAnalyses LoopSWPPass::run(Loop &L, LoopAnalysisManager &AM,
   bool HadPreheaderExitEdge =
       Preheader && Exit && is_contained(successors(Preheader), Exit);
 
-  if (!Impl->run(&L, AR.SE, AR.LI, AR.DT))
+  // A new LoopSWPImpl for every loop, so that nothing found in one loop is
+  // used for the next.
+  if (!LoopSWPImpl().run(&L, AR.SE, AR.LI, AR.DT))
     return PreservedAnalyses::all();
 
   // updateLoopBounds() makes the preheader branch to the exit block as well,

@@ -131,8 +131,6 @@ private:
 
   void dumpLoopBlocks(std::string HeaderNote);
 
-  void resetContainers();
-
   PHINode *getBaseVal(Instruction *I) {
     return dyn_cast<PHINode>(I->getOperand(0));
   }
@@ -200,12 +198,6 @@ void CoordUpdateSimplifyImpl::dumpLoopBlocks(std::string HeaderNote) {
              CSP_DEBUG(*PreheaderBlock << "\n----");
              CSP_DEBUG(*HeaderBlock << "\n----");
              CSP_DEBUG(*ExitBlock << "\n----"););
-}
-
-void CoordUpdateSimplifyImpl::resetContainers() {
-  TargetInsts.clear();
-  LoopStructureInsts.clear();
-  NonComputeIntrinIDs.clear();
 }
 
 // Since the Intrinsics structure do not contain information on whether they
@@ -747,34 +739,24 @@ bool CoordUpdateSimplifyImpl::run(Loop *L, ScalarEvolution &SE_) {
 
   if (!isSimplifyPossible()) {
     CSP_DEBUG("Coordinate Simplification is not possible; not applied")
-    resetContainers();
     return false;
   }
 
   if (!isSimplifyProfitable()) {
     CSP_DEBUG("Coordinate Simplification is not profitable; not applied")
-    resetContainers();
     return false;
   }
 
   simplifyCoordUpdates();
-  resetContainers();
-
   return true;
 }
-
-CoordUpdateSimplifyPass::CoordUpdateSimplifyPass()
-    : Impl(std::make_unique<CoordUpdateSimplifyImpl>()) {}
-CoordUpdateSimplifyPass::CoordUpdateSimplifyPass(CoordUpdateSimplifyPass &&) =
-    default;
-CoordUpdateSimplifyPass &
-CoordUpdateSimplifyPass::operator=(CoordUpdateSimplifyPass &&) = default;
-CoordUpdateSimplifyPass::~CoordUpdateSimplifyPass() = default;
 
 PreservedAnalyses CoordUpdateSimplifyPass::run(Loop &L, LoopAnalysisManager &AM,
                                                LoopStandardAnalysisResults &AR,
                                                LPMUpdater &U) {
-  if (!Impl->run(&L, AR.SE))
+  // A new CoordUpdateSimplifyImpl for every loop, so that nothing found in one
+  // loop is used for the next.
+  if (!CoordUpdateSimplifyImpl().run(&L, AR.SE))
     return PreservedAnalyses::all();
   return getLoopPassPreservedAnalyses();
 }

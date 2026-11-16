@@ -683,16 +683,11 @@ is scheduled.
 
 **Maintainer notes.**
 
-* State carried across loops: ``BBInstOrder``, ``InstCloneMap`` and
-  ``ExitLcssaPhiMap`` are never cleared (``resetContainers`` clears only
-  ``TargetInsts``, ``LoopStructureInsts`` and ``NonComputeIntrinIDs``).
-  ``TPCOptUtils::findLastUse`` fills ``BBInstOrder`` only when it is empty, so
-  every loop after the first one that reaches ``findLastUse`` in the same pass
-  instance uses a stale order map (unknown instructions read as 0). This affects
-  the live-range check and where ``add.mask`` is placed. The other two maps keep
-  keys that may dangle after instructions are erased. The new-PM pass keeps the
-  implementation object alive across ``run()`` calls to reproduce the legacy
-  behaviour; fixing this means clearing the maps for both pass managers at once.
+* Every loop gets a new ``CoordUpdateSimplifyImpl``. The legacy pass kept one
+  object for all loops and never cleared ``BBInstOrder``, ``InstCloneMap`` and
+  ``ExitLcssaPhiMap``. ``TPCOptUtils::findLastUse`` fills ``BBInstOrder`` only
+  when it is empty, so later loops read 0 for every instruction in the
+  live-range check and in the placement of ``add.mask``.
 * The step is taken from an arbitrary candidate (``*TargetInsts.begin()`` of a
   pointer-keyed ``std::unordered_set``) and used for all candidates. Whether
   candidates with different induction variables or steps can occur together is
@@ -1149,11 +1144,15 @@ after GlobalDCE/ConstantMerge, before LoopSink.
 * The legacy ``runOnLoop`` always returns ``false``, even after pipelining a
   loop (kept unchanged). The new-PM pass reports changes correctly, including
   bail-outs after ``splitLoadStoreCoords`` already modified the header.
-* ``HasLoadIncome`` and ``HasInductionInCoordSeq`` are never reset (not in
-  ``resetInstContainers``). Once set by one loop, they stay set for every later
-  loop handled by the same pass instance, which changes the prefetch count and
-  load PHI creation. The new-PM pass keeps the implementation alive across
-  ``run()`` calls to reproduce this.
+* Every loop gets a new ``LoopSWPImpl``. The legacy pass kept one object for
+  all loops and never reset ``HasLoadIncome`` and ``HasInductionInCoordSeq``.
+  After a loop whose loads take their income from a PHI, the next pipelined
+  loop without one crashed in ``createHeaderLoadPhi``
+  (``two-loops-one-module.ll``), and ``HasInductionInCoordSeq`` overrode the
+  prefetch count of every later loop.
+* ``createPreheaderLoadClone`` casts a load's preheader income to an
+  ``Instruction``, so a load-income PHI whose preheader value is a constant
+  (``zeroinitializer``) crashes the pass.
 * ``isPipelinePragmaDefined`` checks only that ``llvm.loop.ir.pipeline`` is
   present. Clang emits it with an ``i1 false`` operand for a disabled hint, so
   a "disable" hint also enables pipelining.
@@ -1325,16 +1324,10 @@ coordinates are advanced with ``tpc_add`` on int5 values.
 
 **Maintainer notes.**
 
-* Most state lives in members that are never reset between loops, so one
-  pass object carries it across all loops and functions it runs on.
-
-  * Never reset: ``Diagnostic``, ``LoadId``/``StoreId``, ``CycleSize``,
-    ``IRFLocation``, ``InducationPhi``, ``InstructionBufferArray``,
-    ``CloneInstruction`` and ``DuplicateInstruction``.
-  * Reset per loop: only ``LoadPtrList``/``StorePtrList``.
-  * The new PM version keeps this state in one ``TpcLoopOptImpl`` per pass
-    object to match the legacy pass exactly. Fixing it would change
-    behavior.
+* Every loop gets a new ``TpcLoopOptImpl``. The legacy pass kept one object
+  for all loops and reset only ``LoadPtrList``/``StorePtrList``, so
+  ``InstructionBufferArray`` (which ``cleanUp`` indexes from 0), ``CycleSize``,
+  ``IRFLocation``/``InducationPhi`` and ``Diagnostic`` came from earlier loops.
 
 * It modifies blocks of the parent loop, not only the current loop, yet
   claims DT/LoopInfo/SCEV are preserved, as the legacy pass did.

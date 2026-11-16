@@ -19,19 +19,9 @@ namespace llvm {
 class LPMUpdater;
 class Module;
 
-class TpcLoopOptImpl;
-
-/// Pass "tpcopt". One pass object keeps its transformation state across all
-/// loops it is run on.
+/// Pass "tpcopt".
 class TpcLoopOptPass : public PassInfoMixin<TpcLoopOptPass> {
-  std::unique_ptr<TpcLoopOptImpl> Impl;
-
 public:
-  TpcLoopOptPass();
-  TpcLoopOptPass(TpcLoopOptPass &&);
-  TpcLoopOptPass &operator=(TpcLoopOptPass &&);
-  ~TpcLoopOptPass();
-
   PreservedAnalyses run(Loop &L, LoopAnalysisManager &AM,
                         LoopStandardAnalysisResults &AR, LPMUpdater &U);
   // Never skipped.

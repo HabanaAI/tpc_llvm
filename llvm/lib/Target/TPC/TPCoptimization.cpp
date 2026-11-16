@@ -66,9 +66,7 @@ static cl::opt<bool> tpcoptDebug("TPCOPT_DEBUG",cl::init(false), cl::Hidden);
 using namespace std;
 
 namespace llvm {
-/// Transformation state and logic of TpcLoopOptPass. One object is used for all
-/// loops the pass runs on, and most of the state below is not reset between
-/// loops.
+/// Transformation state and logic of TpcLoopOptPass, for one loop.
 class TpcLoopOptImpl {
 public:
     bool run(Loop *Lp, ScalarEvolution *SE);
@@ -114,15 +112,12 @@ private:
 };
 } // namespace llvm
 
-TpcLoopOptPass::TpcLoopOptPass() : Impl(std::make_unique<TpcLoopOptImpl>()) {}
-TpcLoopOptPass::TpcLoopOptPass(TpcLoopOptPass &&) = default;
-TpcLoopOptPass &TpcLoopOptPass::operator=(TpcLoopOptPass &&) = default;
-TpcLoopOptPass::~TpcLoopOptPass() = default;
-
 PreservedAnalyses TpcLoopOptPass::run(Loop &L, LoopAnalysisManager &AM,
                                       LoopStandardAnalysisResults &AR,
                                       LPMUpdater &U) {
-  if (!Impl->run(&L, &AR.SE))
+  // A new TpcLoopOptImpl for every loop, so that nothing found in one loop is
+  // used for the next.
+  if (!TpcLoopOptImpl().run(&L, &AR.SE))
     return PreservedAnalyses::all();
   return getLoopPassPreservedAnalyses();
 }
@@ -179,10 +174,6 @@ bool TpcLoopOptImpl::run(Loop *lp, ScalarEvolution *SE) {
   // The loop is the inner loop with one control flow.
   if (lp->getNumBlocks() > 1)
     return false;
-
-  // Clear the lists
-  LoadPtrList.clear();
-  StorePtrList.clear();
 
   // The pattern of the loop correspond to the file's comment. If there is no
   // induction return false.
