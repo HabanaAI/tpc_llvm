@@ -19,20 +19,17 @@ using namespace llvm::opt;
 const bool Default_load_tpc_library = false;
 
 void clang::driver::addCommonTPCTargetArgs(const ArgList &Args, ArgStringList &CmdArgs) {
-  // If no options -instr-compress and -no-option-compress specified, turn the
-  // compression on if -O2 is specified and target supports compression.
+  // If neither -instr-compress nor -no-instr-compress is given, compress as
+  // Habana's driver does: when there is no -O option, or when the last one is
+  // -O2 and the target is not gaudi or gaudib. -O3, -Os, -Oz, -Og, -Ofast and
+  // -O4 do not compress.
   if (!Args.hasArg(options::OPT_instr_compress, options::OPT_no_instr_compress)) {
-    bool NeedCompression = llvm::StringSwitch<bool>(StringRef(tpc::getTPCTargetCPU(Args)))
-                                    .Case("goya", false)
-                                    .Case("gaudi", false)
-                                    .Case("gaudib", false)
-                                    .Default(true);
-    if (NeedCompression) {
-      // -O2 is default, check if overridden
-      if (Arg *A = Args.getLastArg(options::OPT_O_Group))
-        if (A->getOption().matches(options::OPT_O0) ||
-            (A->getNumValues() && StringRef(A->getValue()) == "1"))
-          NeedCompression = false;
+    bool NeedCompression = true;
+    if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+      StringRef CPU = tpc::getTPCTargetCPU(Args);
+      NeedCompression = CPU != "gaudi" && CPU != "gaudib" &&
+                        A->getOption().matches(options::OPT_O) &&
+                        StringRef(A->getValue()) == "2";
     }
     if (NeedCompression)
       CmdArgs.push_back("-instr-compress");

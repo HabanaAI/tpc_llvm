@@ -63,7 +63,7 @@ Optimization levels: -O2 and -O0 are max and min levels supported, -O2 is the de
 **-disable-lut-warn** Suppress performance warning when used LUT size exceeds LUT cache<br/>
 **-mllvm -ignore-mem-overflow=1** 		Do not abort compilation if local memory limit is exceeded. Warning message is still issued.<br/>
 **-mllvm -loop-unswitch-threshold=N**	Enable transformation of loops that contain branches on loop-invariant conditions to multiple loops. This can increase the size of the code exponentially (doubling it every time a loop is unswitched) so we only unswitch if the resultant code will be smaller than a threshold. Working values usually start from 500.<br/>
-**-instr-compress**		Force instruction compression (Greco and later architectures). Enabled for -O2 level by default and disabled for -O1/-O0.<br/>
+**-instr-compress**		Force instruction compression (Greco and later architectures). Enabled by default when no -O option is given or the last one is -O2, and disabled at every other level, as in Habana's driver.<br/>
 **-no-instr-compress**	Disable instruction compression.<br/>
 **--tpcversion**		Print TPC version information (git revision hash).<br/>
 
