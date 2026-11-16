@@ -116,7 +116,12 @@ static bool runImpl(Function &F, LoopInfo &LI, ScalarEvolution &SE,
   appendLoopsToWorklist(LI, Worklist);
   while (!Worklist.empty()) {
     Loop *L = Worklist.pop_back_val();
-    InsertP = &L->getLoopPreheader()->back();
+    // simplifyLoop() cannot give every loop a preheader, for example one
+    // entered from an indirectbr.
+    BasicBlock *Preheader = L->getLoopPreheader();
+    if (!Preheader)
+      continue;
+    InsertP = &Preheader->back();
     Ret |= processLoopTaken(L, SE, InsertP);
   }
   return Ret;

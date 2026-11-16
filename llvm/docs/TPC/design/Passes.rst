@@ -982,9 +982,6 @@ anything, and ``all()`` otherwise.
 - ``Direction::Unknown`` is handled like ``Decreasing`` (``slt``). The
   predicate is always signed, whatever the signedness of the loop's exit
   compare (``LoopTaken.cpp:79-82``).
-- ``L->getLoopPreheader()->back()`` dereferences without a null check
-  (``LoopTaken.cpp:150``). It crashes if ``simplifyLoop`` could not create a
-  preheader, for example with indirectbr predecessors.
 - The legacy return value covers only inserted assumes. It ignores CFG
   changes made by ``simplifyLoop`` (``LoopTaken.cpp:164-168``, kept as is).
   The NPM version reports those changes too. Without that, the NPM CFG
