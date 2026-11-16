@@ -152,7 +152,7 @@ public:
   TransformItem(ExtractElementInst *Ext, Instruction *Op, InsertElementInst *Ins)
   : Extract(Ext), Operation(Op), InsertOrExtract(Ins) {
     assert(areSameInt5Values(Ext->getOperand(0), Ins->getOperand(0)));
-    assert(Operation->getOperand(0) == Ext);
+    assert(Operation->getOperand(0) == Ext || Operation->getOperand(1) == Ext);
     assert(Ext->getOperand(1) == Ins->getOperand(2));
     assert(Ins->getOperand(1) == Op);
   }
@@ -176,8 +176,14 @@ public:
     return Extract->getOperand(0);
   }
 
+  // The operand of the operation that is not the vector element.
   Value *getScalar() const {
-    return Operation->getOperand(1);
+    return Operation->getOperand(isScalarFirst() ? 0 : 1);
+  }
+
+  // True if the scalar is operand 0, as in 'k - c[0]'.
+  bool isScalarFirst() const {
+    return Operation->getOperand(1) == Extract;
   }
 
   unsigned getIndex() const {
@@ -218,61 +224,24 @@ public:
       return erase(Operation) && erase(Extract) && erase(InsertOrExtract);
   }
 
-  // To determine if two IRF operations can be merged, we need to determine if
-  // they operate on the same vector. This function checks if this item uses the
-  // same int5 value as the item 'Base', which must be defined in the IR
-  // earlier.
+  // Two IRF operations can be merged into one if this item updates the vector
+  // that the item 'Base' produces, and nothing else uses that vector:
   //
-  // Example of correct chain:
-  //
-  // Item1:
+  // Base:
   //   %vecext = extractelement <5 x i32> %1, i32 0
   //   %add = add nsw i32 %vecext, %src
   //   %vecins = insertelement <5 x i32> %1, i32 %add, i32 0
-  // Item2:
+  // This item:
   //   %vecext2 = extractelement <5 x i32> %vecins, i32 1
   //   %add2 = add nsw i32 %vecext2, %src
   //   %vecins2 = insertelement <5 x i32> %vecins, i32 %add2, i32 1
-  // Item3:
-  //   %vecext3 = extractelement <5 x i32> %vecins2, i32 2
-  //   %add3 = add nsw i32 %vecext3, %src
-  //   %vecins3 = insertelement <5 x i32> %vecins2, i32 %add2, i32 2
   //
-  // If this function is called:
-  // \code
-  //     Item3->areInTheSameChainAs(Item1)
-  // \endcode
-  // it must return true.
-  //
+  // Two items that each update %1 itself are not a chain: each result keeps
+  // the other lane of %1 unchanged.
   bool isInTheSameChainAs(TransformItem *Base) const {
-    // Scan assignment chain looking through InsertElementInst.
-    Value *Vector = getVector();
-    Value *BaseVector = Base->getVector();
-    while (Vector != BaseVector) {
-      if (auto Insert = dyn_cast<InsertElementInst>(Vector)) {
-        // The source int5 value must have exactly 2 uses, this InsertElementInst
-        // and this ExtractElementInst.
-        if (!Insert->hasNUses(2))
-          return false;
-        bool HasExtract = false, HasInsert = false;
-        for (auto U : Insert->users())
-          if (isa<ExtractElementInst>(U)) {
-            if (HasExtract)
-              return false;
-            HasExtract = true;
-          } else if (isa<InsertElementInst>(U)) {
-            if (HasInsert)
-              return false;
-            HasInsert = true;
-          } else {
-            return false;
-          }
-        Vector = Insert->getOperand(0);
-      } else {
-        return false;
-      }
-    }
-    return true;
+    InsertElementInst *BaseInsert = Base->getInsert();
+    return getVector() == BaseInsert && BaseInsert->hasNUses(2) &&
+           BaseInsert->getOperand(0) == Base->getVector();
   }
 
   void dump() {
@@ -329,8 +298,9 @@ struct WorkItem {
            (
            (Items.back()->getOpCode() == TI->getOpCode()) &&
            (Items.back()->getScalar() == TI->getScalar()) &&
+           (Items.back()->isScalarFirst() == TI->isScalarFirst()) &&
            (TI->isInTheSameChainAs(Items.back())) &&
-           (Items.back()->getIndex() != TI->getIndex())
+           !(Mask & (1u << TI->getIndex()))
            );
   }
 
@@ -378,7 +348,7 @@ static bool runOnBasicBlock(BasicBlock &BB, bool FoldComparisons) {
     Value *Vect;
     ConstantInt *Idx;
     if (match(Inst, m_ExtractElt(m_Value(Vect), m_ConstantInt(Idx))) &&
-        isInt5(*Vect) &&
+        isInt5(*Vect) && Idx->getValue().ult(5) &&
         Inst->hasOneUse()) {
       LLVM_DEBUG(dbgs() << "Analyzing: " << *Inst << "\n");
       // Look at the user of this vector element. If it is used in an operation
@@ -407,7 +377,12 @@ static bool runOnBasicBlock(BasicBlock &BB, bool FoldComparisons) {
                                 cast<ExtractElementInst>(Operand1),
                                 cast<ExtractElementInst>(Operand2)));
               }
-            } else if (Operation->hasOneUse()) {
+            } else if (Operation->hasOneUse() &&
+                       (Operation->getOperand(0) == Inst ||
+                        Operation->isCommutative() ||
+                        Operation->getOpcode() == Instruction::Sub)) {
+              // The element may be operand 1 only if the operands can be
+              // swapped, or for sub, which has an IRF form for 'k - c[0]'.
               Value *Vect2;
               Value *Elt2;
               ConstantInt *Idx2;
@@ -487,9 +462,23 @@ static bool runOnBasicBlock(BasicBlock &BB, bool FoldComparisons) {
       // As arguments of IRF operation go in opposite order (Scalar-Vector), we
       // have to treat subtraction separately.
       if (ReplacementOpCode == Instruction::Sub) {
-        // If this is a subtraction of immediate value, try replacing it with
-        // addition.
-        if (auto CInt = dyn_cast<ConstantInt>(Scalar)) {
+        if (WI.getLast()->isScalarFirst()) {
+          // 'k - c[0]' is exactly the IRF subtraction.
+          if (Function *Func = getIRFIntrinsic(M, ReplacementOpCode))
+            Replacement = Builder.CreateCall(
+              Func,
+              { Scalar,
+                Vector,
+                ConstantInt::get(Type::getInt32Ty(BB.getContext()), WI.getMask()),
+                ConstantInt::get(Type::getInt8Ty(BB.getContext()), TPCII::OpType::INT32),
+                ConstantInt::get(Type::getInt32Ty(BB.getContext()), 0),
+                Vector,
+                ConstantInt::get(Type::getInt1Ty(BB.getContext()), 1),
+                ConstantInt::get(Type::getInt1Ty(BB.getContext()), 0)
+              });
+        } else if (auto CInt = dyn_cast<ConstantInt>(Scalar)) {
+          // If this is a subtraction of immediate value, try replacing it with
+          // addition.
           APInt C = CInt->getValue();
           if (!C.isMinSignedValue()) {
             C.negate();

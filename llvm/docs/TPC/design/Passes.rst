@@ -379,12 +379,15 @@ dimensions in one instruction.
 
   * Non-compare: the operation must have one use, an ``insertelement`` of
     the same vector (same value or a load from the same pointer) at the same
-    index.
+    index. The extract is operand 0, or operand 1 of a commutative operation
+    or of ``sub``.
   * Compare: both operands must be single-use extracts at the same index.
 
-* Merges non-compare candidates into one work item when they have the same
-  opcode, the same scalar operand, a different lane, and are chained through
-  single-use ``insertelement`` values. The lane bits are ORed into a mask.
+* Merges a non-compare candidate into the previous one when it has the same
+  opcode, the same scalar operand in the same position, a lane not yet in the
+  mask, and reads the previous candidate's ``insertelement``, which has no
+  other use. The lane bits are ORed into a mask. Two updates of the same
+  vector into different results are not merged.
 
 * Rewrites each work item:
 
@@ -392,6 +395,8 @@ dimensions in one instruction.
   * ``add`` becomes ``llvm.tpc.add.mask``.
   * ``sub`` of a constant (other than ``INT_MIN``) becomes ``add.mask`` of
     the negated constant.
+  * ``k - c[i]``: one ``llvm.tpc.sub.mask(k, c)``; the IRF subtraction is
+    scalar minus vector.
   * Other ``sub``: two ``llvm.tpc.sub.mask`` calls, because the IRF operand
     order is reversed ("0 - (b - a)").
   * The replaced chain is erased where it has no remaining uses.
@@ -413,6 +418,12 @@ legacy pipeline passes ``Subtarget->hasGen3Plus()``.
   (``mul`` is commented out). So those candidates are never rewritten.
 
 * Pre-existing warning: ``ICmp`` is set but not used.
+* Habana 1.24.2 merges two updates of the same vector into different results
+  (``right[0] = c[0] + 1; down[1] = c[1] + 1`` gives ``down`` the mask
+  ``b00011``), and takes operand 1 as the scalar when the extract is operand 1
+  (``c[0] + c[1]`` into lane 1 becomes ``c[1] + c[1]``, ``k - c[0]`` becomes
+  ``c[0] - k``). The fork does neither, so its output differs from Habana's
+  there. ``irf-chain-and-operand-order.ll`` covers these cases.
 * Legacy placement: ``EP_EarlyAsPossible`` at ``-O1`` and above, after SROA.
 * The new PM class name follows the ``<Legacy>Pass`` rule, hence the doubled
   ``PassPass``.
