@@ -697,6 +697,29 @@ bool EliminateSwizzleCast::CheckFinalList(const Instruction *I1) {
   return true;
 }
 
+// Returns false if replaceInstWithIntrinsic cannot turn \p I into a convert
+// intrinsic: the switch table has no entry for its types, or it is a *_swch
+// intrinsic whose switch is not a constant. Loads and stores are not
+// converted.
+static bool hasConvertForm(const Instruction *I) {
+  switch (I->getOpcode()) {
+  case Instruction::FPExt:
+  case Instruction::FPTrunc:
+  case Instruction::SIToFP:
+  case Instruction::FPToSI:
+  case Instruction::UIToFP:
+  case Instruction::FPToUI:
+    return canCreateConvertIntrinsic(I);
+  default:
+    break;
+  }
+  if (isFpExtIntrinsic(I) || isFpTruncIntrinsic(I) || isSiToFpIntrinsic(I) ||
+      isUiToFpIntrinsic(I) || isFpToUiIntrinsic(I) || isFpToSiIntrinsic(I))
+    return isa<ConstantInt>(cast<CallInst>(I)->getArgOperand(1)) &&
+           canCreateConvertIntrinsic(I);
+  return true;
+}
+
 bool EliminateSwizzleCast::isLegalToTransform(void) {
   LLVM_DEBUG(dbgs() << "Legality check\n");
   if (PostDomSet.empty()) {
@@ -803,6 +826,24 @@ bool EliminateSwizzleCast::isLegalToTransform(void) {
         }
       }
     }
+  }
+
+  // Every instruction of the entries left is replaced, so drop an entry with
+  // one that has no convert form. This runs last so that it only changes the
+  // result where the replacement would have failed.
+  SmallVector<const DDGNode *, 8> NoConvert;
+  for (auto &Entry : PostDomSet) {
+    bool Convertible =
+        hasConvertForm(getIntrestingInst(Entry.getFirst(), nullptr));
+    for (const auto *DomNode : Entry.getSecond())
+      Convertible =
+          Convertible && hasConvertForm(getIntrestingInst(DomNode, nullptr));
+    if (!Convertible)
+      NoConvert.push_back(Entry.getFirst());
+  }
+  for (const DDGNode *PDomNode : NoConvert) {
+    LLVM_DEBUG(dbgs() << "isLegalToTransform: No convert form\n");
+    PostDomSet.erase(PDomNode);
   }
 
   return true;

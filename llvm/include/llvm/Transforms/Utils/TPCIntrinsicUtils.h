@@ -33,6 +33,10 @@ class Instruction;
 CallInst *createConvertIntrinsic(Instruction *InstrToReplace,
                                  unsigned int Switch);
 
+/// Returns true if createConvertIntrinsic can replace \p I: the switch table
+/// has an entry for its source and result element types.
+bool canCreateConvertIntrinsic(const Instruction *I);
+
 /// Get the tpc intrinsic corresponding to IDNum and FType.
 std::string getTPCIntrinsicName(const Intrinsic::ID IDNum,
                                 FunctionType *FType);

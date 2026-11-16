@@ -750,7 +750,10 @@ the default lowering of these casts swizzles lanes (unclear). With
     - drop fptrunc/store-pack entries whose fptrunc has several uses and no
       valid fptrunc/fpext partner;
     - reject the whole set if it overlaps instructions that an earlier pair
-      already accepted.
+      already accepted;
+    - otherwise drop entries with a cast that has no ``llvm.tpc.convert``
+      form: the switch table has no entry for its types (for example
+      ``i32``/``f16``), or a ``*_swch`` switch is not a constant.
 
   - When a pair is accepted, ``CheckLegal`` skips the reversed pair that
     follows it (for example, ``fptrunc→fpext`` after ``fpext→fptrunc``).
@@ -786,11 +789,6 @@ hidden): turns on the ``fptrunc`` → ``st.tnsr`` store-pack pattern (the
 - ``computeAllBWPath`` is only ever called with ``IsStorePackSpl=false``
   (``EliminateSwizzleCast.cpp:202``), so the "trivial store-pack" branch
   never runs.
-- ``getOrSetSwitch`` returns ``-1`` for a switch operand that is not a
-  constant. ``createConvertIntrinsic`` takes the switch as ``unsigned`` and
-  ORs it in, which sets every switch bit. ``createConvertIntrinsic``
-  dereferences the result of ``SwitchTableLookup`` without a null check
-  (``TPCIntrinsicUtils.cpp:217``).
 - ``#include "llvm/Passes/PassBuilder.h"`` in a Transforms/Scalar file is a
   layering inversion that predates the port.
 - Pipeline (legacy): the pass is scheduled only for TPC targets with

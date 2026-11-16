@@ -179,7 +179,7 @@ static ValueType getIntegerVT(unsigned BitWidth) {
 static ValueType getVT(Type *Ty) {
   switch (Ty->getTypeID()) {
   default:
-    llvm_unreachable("Unknown type!");
+    return ValueType::INVALID_VALUE_TYPE;
   case Type::IntegerTyID:
     return getIntegerVT(cast<IntegerType>(Ty)->getBitWidth());
   case Type::BFloatTyID:
@@ -191,6 +191,18 @@ static ValueType getVT(Type *Ty) {
   case Type::DoubleTyID:
     return ValueType::f64;
   }
+}
+
+// Returns the switch table entry for converting operand 0 of \p I to the type
+// of \p I, or null if the table has none.
+static const SwitchTbl *getConvertSwitches(const Instruction *I) {
+  ValueType SrcTy = getVT(I->getOperand(0)->getType()->getScalarType());
+  ValueType DstTy = getVT(I->getType()->getScalarType());
+  return SwitchTableLookup(SwTbl, SrcTy, DstTy);
+}
+
+bool canCreateConvertIntrinsic(const Instruction *I) {
+  return getConvertSwitches(I) != nullptr;
 }
 
 // Creates the required intrinsic instruction corresponding the instruction \p
@@ -210,9 +222,9 @@ CallInst *createConvertIntrinsic(Instruction *InstrToReplace,
   Type *ToType = InstrToReplace->getType();
 
   // Get switch entry corresponding to \p SrcTy and \p DstTy
-  ValueType SrcTy = getVT(FromType->getScalarType());
-  ValueType DstTy = getVT(ToType->getScalarType());
-  auto *Entry = SwitchTableLookup(SwTbl, SrcTy, DstTy);
+  const SwitchTbl *Entry = getConvertSwitches(InstrToReplace);
+  assert(Entry && "No convert switches for these types: check "
+                  "canCreateConvertIntrinsic first");
 
   // Define intrinsic signature
   SmallVector<Type *, 7> ArgTypes{FromType, I8Type, I32Type,
