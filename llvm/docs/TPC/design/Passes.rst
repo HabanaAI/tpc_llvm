@@ -447,9 +447,11 @@ defined.
   ``fmul(n, llvm.tpc.reciprocal(d))``.
 - Scan ``main``:
 
-  - With ``-ILTO``: for each ``call`` to a function whose name starts with
-    ``tpc_``, call ``<SUBARCH>_<name>_Func`` from the library to get the IR
-    text. Link it, and queue the call for replacement.
+  - With ``-ILTO``: for each direct ``call`` to a function whose name starts
+    with ``tpc_``, call ``<SUBARCH>_<name>_Func`` from the library to get the
+    IR text. Link it, and queue the call for replacement. A call the library
+    has no symbol for is left as it is. If the kernel's declaration does not
+    match the linked definition's type, the pass stops with a fatal error.
   - Otherwise: for each intrinsic call whose key is in ``KeyToInfo``, parse
     and link that IR text once (``LinkedIRs``), and queue the call. Calls
     whose IR is already linked are queued without linking again. A link
@@ -491,11 +493,6 @@ the current working directory when relative.
   (``LinkTPCHeaders.cpp:874``) replaces a scalar with the vector-returning
   linked call. That looks like a type mismatch (unclear whether this case can
   occur).
-- ``callInstructionToSearch`` and ``replaceWithCallDynamic`` dereference
-  ``getCalledFunction()`` without a null check, which breaks on indirect
-  calls (``LinkTPCHeaders.cpp:748``, ``804``). In ``-ILTO`` mode, a missing
-  symbol only asserts. In a build without assertions, the code then calls a
-  null function pointer (``LinkTPCHeaders.cpp:762``, ``1071``).
 - The ``Arch`` parameter of ``expandSpecialCaseLLVMIR`` is unused. A
   ``todo`` notes the missing Windows support (``LinkTPCHeaders.cpp:270``).
 - ``LinkTPCHeadersPass::ArchTy`` is also used by

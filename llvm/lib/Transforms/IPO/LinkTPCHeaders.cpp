@@ -744,7 +744,11 @@ bool LinkTPCHeadersImpl::callInstructionToSearch(const Instruction &I,
     return false;
   // Check first if instruction is a call instruction.
   if (const CallInst *II = dyn_cast<CallInst>(&I)) {
-    std::string CallName = std::string(II->getCalledFunction()->getName());
+    // Indirect calls and inline asm have no called function.
+    const Function *Callee = II->getCalledFunction();
+    if (!Callee)
+      return false;
+    std::string CallName = std::string(Callee->getName());
     // tpc function namespace begin with tpc_
     if (CallName.find("tpc_") != 0)
       return false;
@@ -756,6 +760,10 @@ bool LinkTPCHeadersImpl::callInstructionToSearch(const Instruction &I,
       CallName = SubArchName.upper() + "_" + CallName + "_Func";
       // There is a function with above name in the so.
       SymbolValue = GetLibFunction(Query, CallName.c_str());
+      // The library does not have it: leave the call as it would be without
+      // -ILTO.
+      if (!SymbolValue)
+        return false;
       typedef int (*pFunc)(const char **);
       const char *Ptr;
       int Val = ((pFunc)(SymbolValue))(&Ptr);
@@ -800,9 +808,15 @@ bool LinkTPCHeadersImpl::instructionNeedsLinking(const Instruction &I,
 bool LinkTPCHeadersImpl::replaceWithCallDynamic(Instruction *I) {
   Module *M = I->getModule();
   if (CallInst *II = dyn_cast<CallInst>(I)) {
-    std::string callName = std::string(II->getCalledFunction()->getName());
+    // Linking replaced the callee with the library's definition, so the callee
+    // is a function, though getCalledFunction() is null if its type differs
+    // from the call's.
+    std::string callName = std::string(II->getCalledOperand()->getName());
     Function *Special = M->getFunction(callName);
     assert(Special && "The special function should have been linked.");
+    if (Special->getFunctionType() != II->getFunctionType())
+      reportFatalUsageError(Twine("the declaration of ") + callName +
+                            " does not match the -ILTO library's definition");
     // Set available externally attribute for the special function as it doesn't
     // link using the link API.
     Special->setLinkage(GlobalValue::AvailableExternallyLinkage);
@@ -1024,17 +1038,15 @@ llvm::LibHandle llvm::LoadLib(const char *path) {
  * This pointer allow to access to the symbol that is a function or variable.
  * @param handle: void * type indicate the handler pointer to referent to.
  * @param name:  symbolName to query.
- * @return FnHandle:  void * type indicate the handler pointer to referent to.
+ * @return FnHandle:  void * type indicate the handler pointer to referent to,
+ * or null if the library has no such symbol.
  */
 llvm::FnHandle llvm::GetLibFunction(LibHandle MLibHandle,
                                     const char *symbolName) {
-  char *Error;
+  dlerror(); // Clear an earlier error.
   FnHandle FHandle = dlsym(MLibHandle, symbolName);
-  if ((Error = dlerror()) != NULL) {
-    fputs(Error, stderr);
-    fputc('\n', stderr);
-    assert(false && "Could not find symbol.");
-  }
+  if (dlerror() != NULL)
+    return nullptr;
   return FHandle;
 }
 #endif
