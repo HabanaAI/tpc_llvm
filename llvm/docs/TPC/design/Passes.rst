@@ -1008,8 +1008,12 @@ TPCLicmPass
 ``lookup.c1c2``). It hoists such a call out of the loop, together with the
 instructions that compute its first operand from ``llvm.read_register``, when
 all other operands are constants. The file comment describes it as "a simple
-LICM for moving a list of known intrinsics". The code does not say why the
-generic LICM pass is not sufficient.
+LICM for moving a list of known intrinsics". The generic LICM pass does not
+hoist these lookups: ``llvm.read_register`` reads memory, and the loop's stores
+keep it in place. On a nested-loop kernel without this pass, the lookups stay
+in the inner loop. Habana's 1.24.2 compiler does not run this pass but hoists
+the same lookups; its pipeline has a machine-level ``tpc-lookup-licm-pass``,
+which the fork does not.
 
 **How it works.**
 
@@ -1021,7 +1025,11 @@ generic LICM pass is not sufficient.
   callee).
 * ``searchSource`` walks back from operand 0 through non-PHI instructions in
   the same block until it reaches ``llvm.read_register``. Each instruction on a
-  path that reaches it is collected; an empty result means the call is skipped.
+  path that reaches it is collected, and once one has, so is every instruction
+  the walk visits after it; an empty result means the call is skipped.
+* The chain moves only if every value its instructions use is computed by the
+  chain or dominates the target block's terminator. Otherwise, for example when
+  the index also adds the induction variable, the lookup stays in the loop.
 * After each block is scanned, the collected chain and the intrinsics are moved
   in order (definitions first) before the target block's terminator.
 * Loops are visited inner loops first, so a lookup hoisted into a parent header
@@ -1044,15 +1052,13 @@ instructions leave the loop, as upstream LICM does. ``llvm.read_register`` is
 
 **Maintainer notes.**
 
-* ``searchSource`` adds an instruction as soon as one of its operand chains
-  reaches ``read_register``. It does not check that its other operands are
-  available at the target block, for example operands defined in another block
-  of the loop. Hoisting such an instruction would produce invalid SSA.
 * There is no memory-dependence or aliasing check before hoisting
   ``read_register``. The target block is either the parent loop's header or
   ``getLoopPredecessor()``, which, unlike ``getLoopPreheader()``, may have
   other successors. Hoisted code can therefore run on paths that never enter
-  the loop.
+  the loop. A read of the ``lfsr`` register, which changes on every read, is
+  hoisted out of a loop even without this pass, by the fork, LLVM 12 and
+  Habana alike.
 * The legacy pass never calls ``skipLoop()``, so the new-PM pass is marked
   ``isRequired()`` and also runs on ``optnone`` functions.
 * Legacy placement: ``addVectorPasses``, right after ``createLoopUnrollPass``

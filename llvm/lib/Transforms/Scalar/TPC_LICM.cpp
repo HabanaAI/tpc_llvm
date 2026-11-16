@@ -18,6 +18,7 @@
 #include "llvm/Transforms/Scalar/TPCLICM.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsTPC.h"
@@ -45,7 +46,7 @@ public:
     LicmIntrinsics.push_back(Intrinsic::tpc_lookup_c1c2);
     sourceIntrinsics.push_back(Intrinsic::read_register);
   }
-  bool run(Loop *Lp);
+  bool run(Loop *Lp, DominatorTree &DT);
   void searchSource(Instruction *II, BasicBlock *BB,
                     std::vector<Instruction *> &chin);
 
@@ -102,10 +103,25 @@ void TPCLicmImpl::searchSource(Instruction *II, BasicBlock *BB,
   return;
 }
 
+// Returns true if every operand of the instructions in Chain is computed by
+// Chain itself or is available at InsertPt, so Chain can move there.
+static bool isChainAvailableAt(const std::vector<Instruction *> &Chain,
+                               Instruction *InsertPt, DominatorTree &DT) {
+  for (Instruction *I : Chain)
+    for (Value *Op : I->operands()) {
+      auto *OpI = dyn_cast<Instruction>(Op);
+      if (!OpI || is_contained(Chain, OpI))
+        continue;
+      if (!DT.dominates(OpI, InsertPt))
+        return false;
+    }
+  return true;
+}
+
 ///
 /// \param Lp Current loop
 /// \return true if runOnLoop end with transformation or not.
-bool TPCLicmImpl::run(Loop *Lp) {
+bool TPCLicmImpl::run(Loop *Lp, DominatorTree &DT) {
 
   if(!TPCLICM)
     return false;
@@ -150,6 +166,10 @@ bool TPCLicmImpl::run(Loop *Lp) {
         searchSource(inst, BB, chin);
         if (chin.size() == 0)
           continue;
+        // The chain may also use values computed in the loop, such as the
+        // induction variable; then it cannot move.
+        if (!isChainAvailableAt(chin, &*BBp, DT))
+          continue;
         for (auto instInChin : chin) {
           if (std::find(std::begin(movIns), std::end(movIns), instInChin) ==
               std::end(movIns)) {
@@ -173,7 +193,7 @@ bool TPCLicmImpl::run(Loop *Lp) {
 PreservedAnalyses TPCLICMPass::run(Loop &L, LoopAnalysisManager &AM,
                                    LoopStandardAnalysisResults &AR,
                                    LPMUpdater &U) {
-  if (!TPCLicmImpl().run(&L))
+  if (!TPCLicmImpl().run(&L, AR.DT))
     return PreservedAnalyses::all();
 
   // Instructions were hoisted out of L, so the cached loop dispositions are
