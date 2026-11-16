@@ -181,6 +181,10 @@ bool TPCTransformIntrin::runImpl(Function &Func) {
                 if (auto shins = dyn_cast<ShuffleVectorInst>(op0)) {
                   ArrayRef<int> Mask = shins->getShuffleMask();
                   if (ShuffleVectorInst::isZeroEltSplatMask(Mask, Mask.size())) {
+                    // The operands are swapped below, which sub cannot do:
+                    // k - c is not c - k. Leave it, it is one IRF instruction.
+                    if (inid == Intrinsic::tpc_sub_mask)
+                      continue;
                     Constant *CI = ConstantInt::get(I32Type, 0);
                     auto sav0 = op0;
                     op0 = op1;
@@ -203,169 +207,34 @@ bool TPCTransformIntrin::runImpl(Function &Func) {
                 if (apint == 0) { //dimmask ?
                   continue;
                 }
-                // ready to emit code for int5
-                if (inid == Intrinsic::tpc_add_mask) {
-                  if ((apint & 1) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 0);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWAdd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
+                // ready to emit code for int5: each lane in the dimmask gets
+                // the operation, and the lanes outside it keep the income.
+                uint64_t DimMask = apint.getZExtValue();
+                newins = op5;
+                for (unsigned Lane = 0; Lane < 5; ++Lane) {
+                  if (!(DimMask & (1u << Lane)))
+                    continue;
+                  Constant *CI = ConstantInt::get(I32Type, Lane);
+                  Value *Elt = Builder.CreateExtractElement(op0, CI);
+                  Value *Res;
+                  switch (inid) {
+                  case Intrinsic::tpc_add_mask:
+                    Res = Builder.CreateNSWAdd(Elt, op1);
+                    break;
+                  case Intrinsic::tpc_sub_mask:
+                    Res = Builder.CreateNSWSub(Elt, op1);
+                    break;
+                  case Intrinsic::tpc_and_mask:
+                    Res = Builder.CreateAnd(Elt, op1);
+                    break;
+                  case Intrinsic::tpc_or_mask:
+                    Res = Builder.CreateOr(Elt, op1);
+                    break;
+                  default:
+                    Res = Builder.CreateXor(Elt, op1);
+                    break;
                   }
-                  if ((apint & 2) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 1);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWAdd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 4) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 2);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWAdd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 8) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 3);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWAdd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 16) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 4);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWAdd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                }
-                else if (inid == Intrinsic::tpc_sub_mask) {
-                  if ((apint & 1) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 0);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWSub(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 2) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 1);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWSub(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 4) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 2);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWSub(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 8) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 3);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWSub(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 16) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 4);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateNSWSub(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                }
-                else if (inid == Intrinsic::tpc_or_mask) {
-                  if ((apint & 1) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 0);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateOr(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 2) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 1);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateOr(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 4) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 2);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateOr(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 8) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 3);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateOr(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 16) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 4);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateOr(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                }
-                else if (inid == Intrinsic::tpc_and_mask) {
-                  if ((apint & 1) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 0);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateAnd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 2) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 1);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateAnd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 4) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 2);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateAnd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 8) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 3);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateAnd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 16) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 4);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateAnd(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                }
-                else if (inid == Intrinsic::tpc_xor_mask) {
-                  if ((apint & 1) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 0);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateXor(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 2) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 1);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateXor(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 4) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 2);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateXor(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 8) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 3);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateXor(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                  if ((apint & 16) != 0) {
-                    Constant *CI = ConstantInt::get(I32Type, 4);
-                    newins = Builder.CreateExtractElement(op0, CI);
-                    newins = Builder.CreateXor(newins, op1);
-                    newins = Builder.CreateInsertElement(op0, newins, CI);
-                  }
-                }
-                else {
-                  continue;
+                  newins = Builder.CreateInsertElement(newins, Res, CI);
                 }
                 I.replaceAllUsesWith(newins);
                 I.eraseFromParent();

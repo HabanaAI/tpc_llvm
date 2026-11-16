@@ -289,8 +289,12 @@ replaced (RAUW and erase):
   * Only when ``-tpc-trans-intr-int5`` is set (off by default).
   * Operand 0 must be ``<5 x i32>``, data type ``2`` and switches ``0``.
   * Each set bit of the constant dimmask becomes
-    ``extractelement``/op/``insertelement``. A zero-splat
-    ``shufflevector`` first operand is swapped and turned into a scalar.
+    ``extractelement``/op/``insertelement``. The ``insertelement``\ s form
+    one chain that starts from the income, so the lanes outside the mask keep
+    the income.
+  * A zero-splat ``shufflevector`` first operand is swapped and turned into
+    a scalar, except for ``sub``, which is left alone (``k - c`` cannot be
+    swapped).
 
 * Binary ops ``tpc_{add,sub,mul,and,or,xor,min,max,shl,shr}`` and
   ``tpc_cmp_{eq,neq,less,leq,grt,geq}`` (7 call arguments). The switches must
@@ -337,16 +341,16 @@ pass calls ``skipFunction``. The whole file is compiled only with
 
 **Maintainer notes.**
 
-* The int5 masked-op lowering looks wrong for dimmasks with more than one bit
-  set: each lane's ``insertelement`` starts from the original operand 0
-  (``TPCTransformIntrin.cpp:248-272`` and the matching sub/or/and/xor blocks).
-  So only the highest selected lane's update reaches the result. It is off
-  by default.
+* The int5 lowering used to insert each lane into operand 0, so only the
+  last lane's update was kept and the income was ignored, and it turned
+  ``i_i32_sub(k, c, ...)`` into ``c - k``. Habana 1.24.2 does the same with
+  ``-tpc-trans-intr-int5``. Clang emits ``and``/``or``/``xor`` with the
+  scalar as operand 0, so those never reach this lowering.
 
 * Some paths create instructions and then give up with ``continue``. Examples
-  are the widening casts at ``:853-854`` followed by ``continue`` at ``:865``,
-  and the splat ``extractelement`` at ``:223``. They leave dead instructions
-  without reporting a change.
+  are the widening casts of the 8/16-bit integer paths and the splat
+  ``extractelement`` of the int5 path. They leave dead instructions without
+  reporting a change.
 
 * The ``-tpc-trans-intr`` cl::opt has the same name as the legacy pass
   argument. With ``opt``'s legacy ``-<pass>`` flags this may conflict (not
