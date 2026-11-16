@@ -191,17 +191,28 @@ bool TpcLoopOptImpl::run(Loop *lp, ScalarEvolution *SE) {
     InductionDescriptor ID;
     vector<BasicBlock *> basicBlockVec = WorkingLoop->getBlocksVector();
     SmallVector<PHINode *, 8> phi = get_list_of<PHINode, 8>(&basicBlockVec[0]);
+    // A loop whose exit test reads memory can have no PHI at all.
+    if (phi.empty())
+      return false;
 
     if (InductionDescriptor::isInductionPHI(phi[0], WorkingLoop, SE, ID)) {
+      // The step must be a constant to split it between the unrolled copies.
+      const ConstantInt *Step = ID.getConstIntStepValue();
+      if (!Step)
+        return false;
       InductionSize = ConstantInt::get(
               Type::getInt32Ty(phi[0]->getContext()),
-              ID.getConstIntStepValue()->getSExtValue() / UnrollSize);
+              Step->getSExtValue() / UnrollSize);
       for (auto users : phi[0]->users()) {
         if (auto insertElement = dyn_cast<InsertElementInst>(users)) {
           for (auto serachLoadUse : insertElement->users())
             if (serachLoadUse == LoadPtrList[0]) {
-              InducationPhi = phi[0];
+              // The IRF location comes from the coordinate index, so it must
+              // be a constant.
               auto CI = dyn_cast<ConstantInt>(insertElement->getOperand(2));
+              if (!CI)
+                return false;
+              InducationPhi = phi[0];
               IRFLocation =
                       ConstantInt::get(Type::getInt32Ty(phi[0]->getContext()),
                                        CI->getSExtValue() + 1);
@@ -314,7 +325,11 @@ bool TpcLoopOptImpl::patternCheck(Loop *L) {
   if (CycleSize > 4 || CycleSize == 0 || UnrollSize > 4 || UnrollSize == 0)
     return false;
 
-  BB = L->getParentLoop()->block_begin();
+  // The pattern needs an outer loop.
+  Loop *ParentLoop = L->getParentLoop();
+  if (!ParentLoop)
+    return false;
+  BB = ParentLoop->block_begin();
 
   // For now the outer loop need to be empty from load.
   return extractIntrinFromList(get_list_of<IntrinsicInst, 16>(BB), LoadId)

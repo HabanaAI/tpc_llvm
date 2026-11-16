@@ -1286,13 +1286,13 @@ coordinates are advanced with ``tpc_add`` on int5 values.
     ``tpc_ld_tnsr``/``tpc_st_tnsr``.
   * The same 1-4 instruction gap between each load and its store, and 1-4
     pairs (the unroll size).
-  * The parent loop's first block contains no such load.
+  * There is a parent loop, and its first block contains no such load.
 
-* The first header PHI must be an induction (``InductionDescriptor`` with
-  SCEV).
+* The header has a PHI, and the first one must be an induction
+  (``InductionDescriptor`` with SCEV) with a constant step.
 
 * The IRF lane comes from the ``insertelement`` that feeds the first load's
-  coordinate.
+  coordinate, so its index must be a constant.
 
 * ``reorder()``:
 
@@ -1333,12 +1333,6 @@ coordinates are advanced with ``tpc_add`` on int5 values.
   * The new PM version keeps this state in one ``TpcLoopOptImpl`` per pass
     object to match the legacy pass exactly. Fixing it would change
     behavior.
-
-* There are missing null checks:
-
-  * ``L->getParentLoop()`` (``TPCoptimization.cpp:347``).
-  * ``ID.getConstIntStepValue()`` (``:228``).
-  * The ``dyn_cast<ConstantInt>`` of the IRF index (``:234``).
 
 * It modifies blocks of the parent loop, not only the current loop, yet
   claims DT/LoopInfo/SCEV are preserved, as the legacy pass did.
