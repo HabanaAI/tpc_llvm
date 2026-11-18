@@ -1,11 +1,11 @@
-; XFAIL: *
 ; no such instr on gaudib, need via LANE_SEL
 
 ; RUN: llc -march=tpc -mcpu=gaudib %s -o - | FileCheck %s
 
 ; CHECK: ld_tnsr  [[V0:%V[0-9]+]], 0x0, [[I2:%I[0-9]+]]
 ; CHECK: ld_tnsr  [[V1:%V[0-9]+]], 0x0, [[I3:%I[0-9]+]]
-; CHECK: convert.f32 all_lanes target_type=f16 rhne [[V2:%V[0-9]+]], %D{{[0-9]+}}
+; CHECK: convert.f32 target_type=f16 rhne [[V2:%V[0-9]+]], [[V0]]
+; CHECK: convert.f32 lane_sel=1 target_type=f16 rhne [[V2]], [[V1]]
 ; CHECK: st_tnsr  0x1, [[I2]], [[V2]]
 ; CHECK: halt
 

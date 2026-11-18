@@ -4,32 +4,26 @@
 ; CHECK: ld_l_v  %V{{[0-9]+}}, 0x200
 ; CHECK: ld_l_v  %V{{[0-9]+}}, 0x100
 ; CHECK: ld_l_v  %V{{[0-9]+}}, 0x0
-; CHECK: convert.f32 all_lanes target_type=f16  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.f32 target_type=f16 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK: convert.f32 all_lanes target_type=f16  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.f32 target_type=f16 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK: mov_dg src=1 dst=0 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=2 dst=1 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=0 dst=2 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=1 dst=2 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=2 dst=3 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=3 dst=3 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: convert.f32 all_lanes target_type=f16  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: mov_dg all sdg0=1 sdg1=2 sdg2=3 sdg3=0 weg0=2 weg1=1 weg2=0 weg3=0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=1 sdg1=3 sdg2=0 sdg3=2 weg0=0 weg1=0 weg2=1 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=0 weg1=0 weg2=2 weg3=2 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: convert.f32 target_type=f16 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK: convert.f32 all_lanes target_type=f16  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.f32 target_type=f16 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: pack.f16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK: mov_dg src=1 dst=0 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=2 dst=1 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=0 dst=2 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=1 dst=2 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=2 dst=3 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
-; CHECK: mov_dg src=3 dst=3 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xb
+; CHECK: mov_dg all sdg0=1 sdg1=2 sdg2=3 sdg3=0 weg0=2 weg1=1 weg2=0 weg3=0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=1 sdg1=3 sdg2=0 sdg3=2 weg0=0 weg1=0 weg2=1 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=0 weg1=0 weg2=2 weg3=2 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
 ; CHECK: st_l_v  0x0, %V{{[0-9]+}}
 ; CHECK: st_l_v  0x100, %V{{[0-9]+}}
 ; CHECK: halt

@@ -7,18 +7,14 @@
 ; CHECK-DAG: mov_g g_en=0b11 dg_en=0b1111 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
 ; CHECK-DAG: mov_dg all sdg0=2 sdg1=0 sdg2=3 sdg3=1 weg0=2 weg1=1 weg2=2 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
 ; CHECK-DAG: unpack.u16 source_group=1 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-DAG: convert.u16 target_type=uint32  %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-DAG: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
 ; CHECK-DAG: unpack.u16 source_group=0 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-DAG: convert.u16 target_type=uint32  %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-DAG: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
 ; CHECK-DAG: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=3 weg1=2 weg2=1 weg3=3 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
 ; CHECK-DAG: mov_dg all sdg0=2 sdg1=0 sdg2=3 sdg3=1 weg0=2 weg1=1 weg2=2 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
 ; CHECK-DAG: unpack.u16 source_group=1 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-DAG: convert.u16 target_type=uint32  %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-DAG: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
 ; CHECK-DAG: unpack.u16 source_group=0 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-DAG: convert.u16 target_type=uint32  %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-DAG: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
 ; CHECK-DAG: st_l_v  0x400, %V{{[0-9]+}}
 ; CHECK-DAG: st_l_v  0x500, %V{{[0-9]+}}

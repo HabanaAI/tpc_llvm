@@ -1,5 +1,4 @@
 ; RUN: llc -march=tpc -mcpu=goya2 -O0 %s -o - | FileCheck %s
-; XFAIL:*
 ; LLVM-938
 
 target triple = "tpc"
@@ -13,6 +12,6 @@ entry:
 }
 
 ; CHECK: convert.f16 target_type=int16  [[S1:%S[0-9]+]], [[S0:%S[0-9]+]]
-; CHECK: convert.i16 target_type=uint16 rhne [[S0]], [[S1]]
+; CHECK: convert.i16 target_type=uint16 [[S0]], [[S1]]
 ; CHECK: st_l  0x100, [[S0]]
 ; CHECK: halt

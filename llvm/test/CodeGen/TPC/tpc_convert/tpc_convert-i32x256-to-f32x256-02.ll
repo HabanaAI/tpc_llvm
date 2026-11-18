@@ -1,6 +1,4 @@
 ; RUN: llc -mcpu greco %s -o - | FileCheck %s
-; XFAIL:*
-; GAUDI-2280
 
 target triple = "tpc"
 
@@ -20,7 +18,7 @@ declare <256 x float> @llvm.tpc.convert.v256f32.v256i32.v256i1(<256 x i32>, i8, 
 
 ; CHECK-DAG: ld_l_v     [[VRF:%V[0-9]+]], %S1
 ; CHECK-DAG: ld_l_v     [[VPRF:%VP[0-9]+]], %S2
-; CHECK:     convert.i32 all_lanes target_type=fp32 rhne %A[[ARF:[0-9]+]],  %A[[ARF]], ![[VPRF]]
+; CHECK:     convert.i32 target_type=fp32 rhne x4 %A[[ARF:[0-9]+]], %A[[ARF]], ![[VPRF]]
 ; CHECK-DAG: st_l_v     %S0, %V[[ARF]]
 ; CHECK-DAG: st_l_v
 ; CHECK-DAG: st_l_v

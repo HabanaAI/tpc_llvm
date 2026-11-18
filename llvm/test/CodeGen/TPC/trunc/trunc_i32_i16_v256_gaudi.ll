@@ -1,32 +1,35 @@
-; XFAIL: *
 ; RUN: llc -O0 -march=tpc -mcpu=gaudi %s -o - | FileCheck %s
 
-; CHECK: ld_l_v  %V{{[0-9]+}}, 0x300, [[SP0:%SP[0-9]+]]
-; CHECK: ld_l_v  %V{{[0-9]+}}, 0x200, [[SP0]]
-; CHECK: ld_l_v  %V{{[0-9]+}}, 0x100, [[SP0]]
-; CHECK: ld_l_v  %V{{[0-9]+}}, 0x0, [[SP0]]
-; CHECK: convert.i32 lane_sel=0 target_type=int16  %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: convert.i32 lane_sel=0 target_type=int16  %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: mov_dg.all src=1 dst=2 wr_lg=0x1 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x7, [[SP0]]
-; CHECK: mov_dg.all src=1 dst=3 wr_lg=0x0 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK: mov_dg.all src=0 dst=2 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK: convert.i32 lane_sel=0 target_type=int16  %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: convert.i32 lane_sel=0 target_type=int16  %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: pack.i16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}, [[SP0]]
-; CHECK: mov_dg.all src=1 dst=2 wr_lg=0x1 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x7, [[SP0]]
-; CHECK: mov_dg.all src=1 dst=3 wr_lg=0x0 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK: mov_dg.all src=0 dst=2 wr_lg=0x1 wr_ug=0x0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1, [[SP0]]
-; CHECK: st_l_v  0x0, %V{{[0-9]+}}, [[SP0]]
-; CHECK: st_l_v  0x100, %V{{[0-9]+}}, [[SP0]]
+; CHECK: ld_l_v  %V{{[0-9]+}}, 0x300
+; CHECK: ld_l_v  %V{{[0-9]+}}, 0x200
+; CHECK: ld_l_v  %V{{[0-9]+}}, 0x100
+; CHECK: ld_l_v  %V{{[0-9]+}}, 0x0
+; CHECK: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
+; CHECK: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
+; CHECK: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
+; CHECK: and.u32  %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
+; CHECK: convert_uint32 lane_sel=0 rhne to_16 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0
+; CHECK: pack.u16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: pack.u16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert_uint32 lane_sel=0 rhne to_16 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0
+; CHECK: pack.u16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: pack.u16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: mov_dg all sdg0=1 sdg1=2 sdg2=3 sdg3=0 weg0=2 weg1=1 weg2=0 weg3=0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=1 sdg1=3 sdg2=0 sdg3=2 weg0=0 weg1=0 weg2=1 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=0 weg1=0 weg2=2 weg3=2 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: convert_uint32 lane_sel=0 rhne to_16 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0
+; CHECK: pack.u16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: pack.u16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert_uint32 lane_sel=0 rhne to_16 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x0
+; CHECK: pack.u16 source_group=0 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: pack.u16 source_group=1 element_stride=2 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: mov_dg all sdg0=1 sdg1=2 sdg2=3 sdg3=0 weg0=2 weg1=1 weg2=0 weg3=0 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=1 sdg1=3 sdg2=0 sdg3=2 weg0=0 weg1=0 weg2=1 weg3=1 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=0 weg1=0 weg2=2 weg3=2 %V{{[0-9]+}}, %V{{[0-9]+}}, -0x1
+; CHECK: st_l_v  0x0, %V{{[0-9]+}}
+; CHECK: st_l_v  0x100, %V{{[0-9]+}}
 ; CHECK: halt
 ;
 

@@ -39,12 +39,12 @@ define dso_local void @main() #0 {
 ; CHECK-NEXT:    unpack.i16 source_group=1 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-NEXT:    unpack.i16 source_group=0 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-NEXT:    NOP
-; CHECK-NEXT:    convert.i16 all_lanes target_type=int32 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-NEXT:    convert.i16 all_lanes target_type=int32 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-NEXT:    convert.i16 all_lanes target_type=int32 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-NEXT:    convert.i16 target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-NEXT:    convert.i16 target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-NEXT:    convert.i16 target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-NEXT:    NOP
 ; CHECK-NEXT:  {
-; CHECK-NEXT:    convert.i16 all_lanes target_type=int32 %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK-NEXT:    convert.i16 target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-NEXT:    st_l_v 0x700, %V{{[0-9]+}}
 ; CHECK-NEXT:  }
 ; CHECK-NEXT:    st_l_v 0x600, %V{{[0-9]+}}

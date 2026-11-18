@@ -1,6 +1,6 @@
 ; RUN: llc -march=tpc -mcpu=goya2 -O1 -ignore-mem-overflow  %s -o - | FileCheck %s
 
-; CHECK: convert.i16 all_lanes target_type=int32  [[V1:%V[0-9]+]], {{%V[0-9]+}}
+; CHECK: convert.i16 target_type=int32 rhne [[V1:%V[0-9]+]], {{%V[0-9]+}}
 ; CHECK: st_tnsr  0x1, {{%I[0-9]+}}, [[V1]]
 
 target triple = "tpc"

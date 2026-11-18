@@ -429,7 +429,8 @@ static SDValue helperExtractSubRegSDValue(unsigned subReg, const SDLoc &DL,
   setOperationAction(ISD::ZERO_EXTEND, MVT::v256i32, Custom);
   setOperationAction(ISD::ZERO_EXTEND, MVT::v256i16, Custom);
 
-  for (auto VT : {MVT::v128f32, MVT::v128f16, MVT::v128bf16, MVT::v256f16})
+  for (auto VT :
+       {MVT::v128f32, MVT::v128f16, MVT::v128bf16, MVT::v256bf16, MVT::v256f16})
     setOperationAction(ISD::FP_ROUND, VT, Custom);
 
   for (auto VT : {MVT::v256bf16, MVT::v256f16, MVT::v128f32, MVT::v256f32})
@@ -4994,33 +4995,48 @@ TPCTargetLowering::extend_8_to_16(SDValue Op, SelectionDAG &DAG,
   MachineSDNode *Node2 = DAG.getMachineNode(TPC::UNPACKp, DL, SrcVT, Ops2);
   SDValue unpack2 = SDValue(Node2, 0);
 
+  // Gen3+ converts take the lane count from the SRCB field; without it they
+  // convert all lanes.
+  unsigned SingleLane =
+      Subtarget->hasGen3Plus() ? TPCII::SW_SINGLE_LANE_SRCB : 0;
+  SDValue convert1, convert2;
+  if (DataType == TPCII::OpType::UINT8 &&
+      (Subtarget->hasGaudiISA() || Subtarget->hasGaudiBISA())) {
+    // Gaudi has no convert from UINT8. Each byte is unpacked into the low
+    // half of a 16-bit element: clearing the upper half extends it.
+    convert1 = helperANDvipNodeCreate(unpack1, DL, DAG, TPCII::OpType::UINT16,
+                                      0xFF, ResultVT);
+    convert2 = helperANDvipNodeCreate(unpack2, DL, DAG, TPCII::OpType::UINT16,
+                                      0xFF, ResultVT);
+  } else {
   // convert-1
   // y.v1 = v_convert_i8_to_i16_v(group0);
   SmallVector<SDValue, 8> Ops3(6);
   Ops3[0] = unpack1;                                      // Source.
   Ops3[1] = DAG.getTargetConstant(DataType, DL, MVT::i8); // DataType.
-  Ops3[2] = DAG.getTargetConstant(TPCII::SW_CSR | DstDataType, DL,
+  Ops3[2] = DAG.getTargetConstant(SingleLane | DstDataType, DL,
                                   MVT::i32);       // Switch.
   Ops3[3] = DAG.getUNDEF(ResultVT);                // Income.
   Ops3[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops3[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
   MachineSDNode *Node3 =
       DAG.getMachineNode(TPC::CONVERTvvp, DL, ResultVT, Ops3);
-  SDValue convert1 = SDValue(Node3, 0);
+  convert1 = SDValue(Node3, 0);
 
   // convert-2
   // y.v2 = v_convert_i8_to_i16_v(group1);
   SmallVector<SDValue, 8> Ops4(6);
   Ops4[0] = unpack2;                                      // Source.
   Ops4[1] = DAG.getTargetConstant(DataType, DL, MVT::i8); // DataType.
-  Ops4[2] = DAG.getTargetConstant(DstDataType, DL,
+  Ops4[2] = DAG.getTargetConstant(SingleLane | DstDataType, DL,
                                   MVT::i32);       // Switch.
   Ops4[3] = DAG.getUNDEF(ResultVT);                // Income.
   Ops4[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops4[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
   MachineSDNode *Node4 =
       DAG.getMachineNode(TPC::CONVERTvvp, DL, ResultVT, Ops4);
-  SDValue convert2 = SDValue(Node4, 0);
+  convert2 = SDValue(Node4, 0);
+  }
 
   // mov-dual-group
   SmallVector<SDValue, 8> Ops5(6);
@@ -5381,13 +5397,17 @@ SDValue TPCTargetLowering::lowerSIGN_EXTEND(SDValue Op,
   if (Op.getValueType() == MVT::v128i32) {
     if (Src.getValueType() == MVT::v128i16) {
       auto ExtArg = extend_16_to_32(Op, DAG, DL, TPCII::OpType::INT16);
+      // Gen3+ converts take the lane count from the SRCB field.
+      unsigned SingleLane = Subtarget->hasGen3Plus()
+                                ? TPCII::SW_SINGLE_LANE_SRCB
+                                : TPCII::SW_SINGLE_LANE;
       SDValue Src0 = helperConvertvvpNodeCreate(
           ExtArg[0], DL, DAG, TPCII::OpType::INT16,
-          TPCII::SW_CSR | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_INT32,
+          TPCII::SW_RHNE | SingleLane | TPCII::SW_TO_INT32,
           MVT::v64i32);
       SDValue Src1 = helperConvertvvpNodeCreate(
           ExtArg[1], DL, DAG, TPCII::OpType::INT16,
-          TPCII::SW_CSR | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_INT32,
+          TPCII::SW_RHNE | SingleLane | TPCII::SW_TO_INT32,
           MVT::v64i32);
       return createTuple({Src0, Src1}, DAG);
 
@@ -5405,9 +5425,18 @@ SDValue TPCTargetLowering::lowerSIGN_EXTEND(SDValue Op,
     }
   } else if (Op.getValueType() == MVT::v256i32) {
     if (Src.getValueType() == MVT::v256i8) {
-      // SmallVector<SDValue, 4> BitCastVec;
+      // The unpacked bytes come out zero-extended. Converting them from INT8
+      // extends the sign, as Habana's compiler does.
       auto ExtArg = extend_8_to_32(Op, DAG, DL, TPCII::OpType::INT8);
-      return createTuple(ExtArg, DAG);
+      unsigned SingleLane = Subtarget->hasGen3Plus()
+                                ? TPCII::SW_SINGLE_LANE_SRCB
+                                : TPCII::SW_SINGLE_LANE;
+      SmallVector<SDValue, 4> Conv;
+      for (SDValue Part : ExtArg)
+        Conv.push_back(helperConvertvvpNodeCreate(
+            Part, DL, DAG, TPCII::OpType::INT8,
+            TPCII::SW_RHNE | SingleLane | TPCII::SW_TO_INT32, MVT::v64i32));
+      return createTuple(Conv, DAG);
     } else if (Src.getValueType() == MVT::v256i16) {
       SDValue S0Val =
           helperExtractSubRegSDValue(TPC::sub_0, DL, DAG, MVT::v128i16, Src);
@@ -5445,15 +5474,23 @@ SDValue TPCTargetLowering::lowerZERO_EXTEND(SDValue Op,
   if (Op.getValueType() == MVT::v128i32) {
     if (Src.getValueType() == MVT::v128i16) {
       auto ExtArg = extend_16_to_32(Op, DAG, DL, TPCII::OpType::UINT16);
-
-      SDValue Conv0 = helperConvertvvpNodeCreate(
-          ExtArg[0], DL, DAG, TPCII::OpType::UINT16,
-          TPCII::SW_CSR | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_UINT32,
-          MVT::v64i32);
-      SDValue Conv1 = helperConvertvvpNodeCreate(
-          ExtArg[1], DL, DAG, TPCII::OpType::UINT16,
-          TPCII::SW_CSR | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_UINT32,
-          MVT::v64i32);
+      SDValue Conv0, Conv1;
+      if (Subtarget->hasGen2Plus() || Subtarget->hasGaudiBISA()) {
+        // The unpacked values are in the low half of each 32-bit lane, and
+        // the AND below clears the rest: no convert is needed, and Gaudi has
+        // none from UINT16.
+        Conv0 = DAG.getNode(ISD::BITCAST, DL, MVT::v64i32, ExtArg[0]);
+        Conv1 = DAG.getNode(ISD::BITCAST, DL, MVT::v64i32, ExtArg[1]);
+      } else {
+        Conv0 = helperConvertvvpNodeCreate(
+            ExtArg[0], DL, DAG, TPCII::OpType::UINT16,
+            TPCII::SW_CSR | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_UINT32,
+            MVT::v64i32);
+        Conv1 = helperConvertvvpNodeCreate(
+            ExtArg[1], DL, DAG, TPCII::OpType::UINT16,
+            TPCII::SW_CSR | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_UINT32,
+            MVT::v64i32);
+      }
 
       SDValue Src0 = helperANDvipNodeCreate(
           Conv0, DL, DAG, TPCII::OpType::UINT32, 0x0000FFFF, MVT::v64i32);
@@ -5531,21 +5568,18 @@ SDValue TPCTargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
       SDValue N1Val =
           helperExtractSubRegSDValue(TPC::sub_1, DL, DAG, MVT::v64f32, Src);
 
+      // Rounding from the CSR, as for v256bf16 and as Habana's compiler does.
       SDValue Src0 = helperConvertvvpNodeCreate(
           N0Val, DL, DAG, TPCII::OpType::FP32,
-          TPCII::SW_RHNE | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
+          InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
           MVT::v128bf16);
       SDValue Src1 = helperConvertvvpNodeCreate(
           N1Val, DL, DAG, TPCII::OpType::FP32,
-          TPCII::SW_RHNE | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
+          InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
           MVT::v128bf16);
 
-      if (Subtarget->hasGaudiISA() || Subtarget->hasGaudiBISA() || Subtarget->hasGaudi2ISA())
-        return truncate_32_to_16(DAG, Src0, Src1, DL, MVT::v128bf16,
-                                 TPCII::OpType::INT16);
-      else
-        return truncate_32_to_16_goya(DAG, Src0, Src1, DL, MVT::v128bf16,
-                                      TPCII::OpType::INT16);
+      return truncate_32_to_16(DAG, Src0, Src1, DL, MVT::v128bf16,
+                               TPCII::OpType::BF16);
     } else {
       assert(false && "Unsupported target type");
     }
@@ -5559,15 +5593,15 @@ SDValue TPCTargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
 
       SDValue Src0 = helperConvertvvpNodeCreate(
           N0Val, DL, DAG, TPCII::OpType::FP32,
-          InputSwitch | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_FP16,
+          InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_FP16,
           MVT::v128f16);
       SDValue Src1 = helperConvertvvpNodeCreate(
           N1Val, DL, DAG, TPCII::OpType::FP32,
-          InputSwitch | TPCII::SW_SINGLE_LANE | TPCII::SW_TO_FP16,
+          InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_FP16,
           MVT::v128f16);
 
-        return truncate_32_to_16_goya(DAG, Src0, Src1, DL, MVT::v128f16,
-                                      TPCII::OpType::FP16);
+        return truncate_32_to_16(DAG, Src0, Src1, DL, MVT::v128f16,
+                                 TPCII::OpType::FP16);
     } else {
       assert(false && "Unsupported target type");
     }
@@ -5585,29 +5619,25 @@ SDValue TPCTargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
 
         SDValue Src0 = helperConvertvvpNodeCreate(
             S0Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_BF16, MVT::v128bf16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
+            MVT::v128bf16);
         SDValue Src1 = helperConvertvvpNodeCreate(
             S1Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_BF16, MVT::v128bf16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
+            MVT::v128bf16);
         SDValue Src2 = helperConvertvvpNodeCreate(
             S2Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_BF16, MVT::v128bf16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
+            MVT::v128bf16);
         SDValue Src3 = helperConvertvvpNodeCreate(
             S3Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_BF16, MVT::v128bf16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_BF16,
+            MVT::v128bf16);
 
-        SDValue mdg0, mdg1;
-        if (Subtarget->hasGaudiISA() || Subtarget->hasGaudiBISA() || Subtarget->hasGaudi2ISA()) {
-          mdg0 = truncate_32_to_16(DAG, Src0, Src1, DL, MVT::v128bf16,
-                                   TPCII::OpType::BF16);
-          mdg1 = truncate_32_to_16(DAG, Src2, Src3, DL, MVT::v128bf16,
-                                   TPCII::OpType::BF16);
-        } else {
-          mdg0 = truncate_32_to_16_goya(DAG, Src0, Src1, DL, MVT::v128bf16,
-                                        TPCII::OpType::BF16);
-          mdg1 = truncate_32_to_16_goya(DAG, Src2, Src3, DL, MVT::v128bf16,
-                                        TPCII::OpType::BF16);
-        }
+        SDValue mdg0 = truncate_32_to_16(DAG, Src0, Src1, DL, MVT::v128bf16,
+                                         TPCII::OpType::BF16);
+        SDValue mdg1 = truncate_32_to_16(DAG, Src2, Src3, DL, MVT::v128bf16,
+                                         TPCII::OpType::BF16);
         return createTuple({mdg0, mdg1}, DAG);
       } else {
         assert(false && "Unsupported vector type");
@@ -5616,7 +5646,7 @@ SDValue TPCTargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
       assert(false && "Unsupported source type");
     }
   } else if (Op.getValueType() == MVT::v256f16) {
-    if (Subtarget->hasGrecoISA()) {
+    if (Subtarget->hasGen3Plus()) {
       if (Src.getValueType() == MVT::v256f32) {
         SDValue S0Val =
             helperExtractSubRegSDValue(TPC::sub_0, DL, DAG, MVT::v64f32, Src);
@@ -5629,22 +5659,26 @@ SDValue TPCTargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
 
         SDValue Src0 = helperConvertvvpNodeCreate(
             S0Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_FP16, MVT::v128f16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_FP16,
+            MVT::v128f16);
         SDValue Src1 = helperConvertvvpNodeCreate(
             S1Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_FP16, MVT::v128f16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_FP16,
+            MVT::v128f16);
         SDValue Src2 = helperConvertvvpNodeCreate(
             S2Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_FP16, MVT::v128f16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_FP16,
+            MVT::v128f16);
         SDValue Src3 = helperConvertvvpNodeCreate(
             S3Val, DL, DAG, TPCII::OpType::FP32,
-            InputSwitch | TPCII::SW_TO_FP16, MVT::v128f16);
+            InputSwitch | TPCII::SW_SINGLE_LANE_SRCB | TPCII::SW_TO_FP16,
+            MVT::v128f16);
 
         SDValue mdg0, mdg1;
-        mdg0 = truncate_32_to_16_goya(DAG, Src0, Src1, DL, MVT::v128f16,
-                                      TPCII::OpType::FP16);
-        mdg1 = truncate_32_to_16_goya(DAG, Src2, Src3, DL, MVT::v128f16,
-                                      TPCII::OpType::FP16);
+        mdg0 = truncate_32_to_16(DAG, Src0, Src1, DL, MVT::v128f16,
+                                 TPCII::OpType::FP16);
+        mdg1 = truncate_32_to_16(DAG, Src2, Src3, DL, MVT::v128f16,
+                                 TPCII::OpType::FP16);
         return createTuple({mdg0, mdg1}, DAG);
       } else {
         assert(false && "Unsupported source type");
@@ -7217,7 +7251,7 @@ SDValue TPCTargetLowering::ConversionEntity(EVT DestVT, SDValue Source,
     return SDValue();
   }
   if (ConvElCoKind == Ban) {
-    report_fatal_error("Conversion uses type banned for cpu");
+    reportFatalUsageError("Conversion uses type banned for cpu");
     return SDValue();
   }
   if (ConvElCoKind == XX) {
@@ -9148,6 +9182,8 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
                                                   SDValue Src0, SDValue Src1,
                                                   const SDLoc &DL, EVT ResultVT,
                                                   uint64_t dataType) const {
+  // The dual group moves take all lanes (mask 0xFFFFFFFF), as in the
+  // v_i16_mov_dual_group_v calls below; dataType is the type of the packs.
   // y = v_i16_pack_v(x0, y, e_group_0, e_every_second_element);
   SmallVector<SDValue, 8> Ops11(6);
   Ops11[0] = Src0;                                         // Source.
@@ -9174,7 +9210,7 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
   // y = v_i16_mov_dual_group_v(y, 0xFFFFFFFF, y, 1, 0, 0, 1);
   SmallVector<SDValue, 8> Ops13(6);
   Ops13[0] = val12;                                         // Source.
-  Ops13[1] = DAG.getTargetConstant(dataType, DL, MVT::i32); // DataType.
+  Ops13[1] = DAG.getSignedTargetConstant(-1, DL, MVT::i32); // Mask.
   Ops13[2] = DAG.getTargetConstant((1 << TPCII::SW_SRC_DUAL_GROUP_SHIFT |
                                     0 << TPCII::SW_DST_DUAL_GROUP_SHIFT |
                                     TPCII::SW_WR_UPPER_GROUP),
@@ -9190,7 +9226,7 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
   // y = v_i16_mov_dual_group_v(y, 0xFFFFFFFF, y, 2, 1, 1, 0);
   SmallVector<SDValue, 8> Ops14(6);
   Ops14[0] = val13;                                         // Source.
-  Ops14[1] = DAG.getTargetConstant(dataType, DL, MVT::i32); // DataType.
+  Ops14[1] = DAG.getSignedTargetConstant(-1, DL, MVT::i32); // Mask.
   Ops14[2] = DAG.getTargetConstant((2 << TPCII::SW_SRC_DUAL_GROUP_SHIFT |
                                     1 << TPCII::SW_DST_DUAL_GROUP_SHIFT |
                                     TPCII::SW_WR_LOWER_GROUP),
@@ -9205,7 +9241,7 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
   // y = v_i16_mov_dual_group_v(y, 0xFFFFFFFF, y, 3, 1, 0, 1);
   SmallVector<SDValue, 8> Ops15(6);
   Ops15[0] = val14;                                         // Source.
-  Ops15[1] = DAG.getTargetConstant(dataType, DL, MVT::i32); // DataType.
+  Ops15[1] = DAG.getSignedTargetConstant(-1, DL, MVT::i32); // Mask.
   Ops15[2] = DAG.getTargetConstant((3 << TPCII::SW_SRC_DUAL_GROUP_SHIFT |
                                     1 << TPCII::SW_DST_DUAL_GROUP_SHIFT |
                                     TPCII::SW_WR_UPPER_GROUP),
@@ -9244,7 +9280,7 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
   // y = v_i16_mov_dual_group_v(t, 0xFFFFFFFF, y, 0, 2, 1, 0);
   SmallVector<SDValue, 8> Ops23(6);
   Ops23[0] = val22;                                         // Source.
-  Ops23[1] = DAG.getTargetConstant(dataType, DL, MVT::i32); // DataType.
+  Ops23[1] = DAG.getSignedTargetConstant(-1, DL, MVT::i32); // Mask.
   Ops23[2] = DAG.getTargetConstant((0 << TPCII::SW_SRC_DUAL_GROUP_SHIFT |
                                     2 << TPCII::SW_DST_DUAL_GROUP_SHIFT |
                                     TPCII::SW_WR_LOWER_GROUP),
@@ -9260,7 +9296,7 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
   // y = v_i16_mov_dual_group_v(t, 0xFFFFFFFF, y, 1, 2, 0, 1);
   SmallVector<SDValue, 8> Ops24(6);
   Ops24[0] = val22;                                         // Source.
-  Ops24[1] = DAG.getTargetConstant(dataType, DL, MVT::i32); // DataType.
+  Ops24[1] = DAG.getSignedTargetConstant(-1, DL, MVT::i32); // Mask.
   Ops24[2] = DAG.getTargetConstant((1 << TPCII::SW_SRC_DUAL_GROUP_SHIFT |
                                     2 << TPCII::SW_DST_DUAL_GROUP_SHIFT |
                                     TPCII::SW_WR_UPPER_GROUP),
@@ -9276,7 +9312,7 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
   // y = v_i16_mov_dual_group_v(t, 0xFFFFFFFF, y, 2, 3, 1, 0);
   SmallVector<SDValue, 8> Ops25(6);
   Ops25[0] = val22;                                         // Source.
-  Ops25[1] = DAG.getTargetConstant(dataType, DL, MVT::i32); // DataType.
+  Ops25[1] = DAG.getSignedTargetConstant(-1, DL, MVT::i32); // Mask.
   Ops25[2] = DAG.getTargetConstant((2 << TPCII::SW_SRC_DUAL_GROUP_SHIFT |
                                     3 << TPCII::SW_DST_DUAL_GROUP_SHIFT |
                                     TPCII::SW_WR_LOWER_GROUP),
@@ -9292,7 +9328,7 @@ SDValue TPCTargetLowering::truncate_32_to_16_goya(SelectionDAG &DAG,
   // y = v_i16_mov_dual_group_v(t, 0xFFFFFFFF, y, 3, 3, 0, 1);
   SmallVector<SDValue, 8> Ops26(6);
   Ops26[0] = val22;                                         // Source.
-  Ops26[1] = DAG.getTargetConstant(dataType, DL, MVT::i32); // DataType.
+  Ops26[1] = DAG.getSignedTargetConstant(-1, DL, MVT::i32); // Mask.
   Ops26[2] = DAG.getTargetConstant((3 << TPCII::SW_SRC_DUAL_GROUP_SHIFT |
                                     3 << TPCII::SW_DST_DUAL_GROUP_SHIFT |
                                     TPCII::SW_WR_UPPER_GROUP),
@@ -9439,6 +9475,9 @@ SDValue TPCTargetLowering::truncate_16_to_8(SelectionDAG &DAG, SDValue Src0,
                                             SDValue Src1, const SDLoc &DL,
                                             EVT ResultVT,
                                             uint64_t dataType) const {
+  // The dual group moves do not depend on the element size.
+  if (Subtarget->hasGen2Plus() || Subtarget->hasGaudiBISA())
+    return truncate_32_to_16(DAG, Src0, Src1, DL, ResultVT, dataType);
   return truncate_32_to_16_goya(DAG, Src0, Src1, DL, ResultVT, dataType);
 }
 
@@ -9902,15 +9941,55 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
   EVT OpType = Op->getValueType(0);
   EVT ResultType = Op->getValueType(0);
   EVT ResultVT = Op->getValueType(0);
-  const SDValue &Src = Op.getOperand(0);
+  SDValue Src = Op.getOperand(0);
   EVT SrcType = Src.getValueType();
+  // A truncation of FP_TO_SINT or FP_TO_UINT finishes a float conversion and
+  // saturates with the signedness of that node.
+  bool IsUnsigned = Src.getOpcode() == ISD::FP_TO_UINT;
+  // A truncation of integers keeps the low bits of each element, but CONVERT
+  // saturates. Clear the bits that do not fit and convert as unsigned, as
+  // Habana's compiler does: the values then fit and nothing saturates. The
+  // AND works on one vector register at a time.
+  if (ResultType.isVector() && SrcType.isVector() &&
+      SrcType.getVectorElementType().isInteger() &&
+      Src.getOpcode() != ISD::FP_TO_SINT &&
+      Src.getOpcode() != ISD::FP_TO_UINT) {
+    unsigned Parts = getMultiplicity(SrcType);
+    EVT PartVT = EVT::getVectorVT(*DAG.getContext(),
+                                  SrcType.getVectorElementType(),
+                                  SrcType.getVectorNumElements() / Parts);
+    unsigned SrcBits = SrcType.getScalarSizeInBits();
+    unsigned Mask = (1U << ResultType.getScalarSizeInBits()) - 1;
+    unsigned AndType = SrcBits == 32 ? TPCII::OpType::UINT32
+                                     : TPCII::OpType::UINT16;
+    assert((SrcBits == 32 || SrcBits == 16) && "Unexpected truncation");
+    if (Parts == 1) {
+      Src = helperANDvipNodeCreate(Src, DL, DAG, AndType, Mask, SrcType);
+    } else {
+      static const unsigned SubRegs[] = {TPC::sub_0, TPC::sub_1, TPC::sub_2,
+                                         TPC::sub_3};
+      assert(Parts <= std::size(SubRegs));
+      SmallVector<SDValue, 4> Masked;
+      for (unsigned I = 0; I < Parts; ++I)
+        Masked.push_back(helperANDvipNodeCreate(
+            helperExtractSubRegSDValue(SubRegs[I], DL, DAG, PartVT, Src), DL,
+            DAG, AndType, Mask, PartVT));
+      Src = createTuple(Masked, DAG);
+    }
+    IsUnsigned = true;
+  }
   if (ResultType.isVector() && SrcType.isVector()) {
     EVT SrcEltVT = SrcType.getVectorElementType();
     EVT DestEltVT = ResultVT.getVectorElementType();
     unsigned SrcMultiplicity = getMultiplicity(SrcType);
     unsigned DestMultiplicity = getMultiplicity(ResultVT);
-        // need split
-    if ((SrcMultiplicity | DestMultiplicity) == 6) {
+    // ConversionEntity picks the convert and the lane moves for the target,
+    // as Habana's compiler does for every size: 4 to 2 registers, and 2 or 4
+    // to 1. It has no lane moves for Dali, which keeps the code below.
+    if ((SrcMultiplicity | DestMultiplicity) == 6 ||
+        (DestMultiplicity == 1 &&
+         (SrcMultiplicity == 2 || SrcMultiplicity == 4) &&
+         (Subtarget->hasGen2Plus() || Subtarget->hasGaudiBISA()))) {
       unsigned sourceType=0, targetType=0;
       if (SrcEltVT == MVT::f32) {
         sourceType = T_FP32;
@@ -9923,11 +10002,11 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
       } else if (SrcEltVT == MVT::f8_152) {
         sourceType = T_FP8_152;
       } else if (SrcEltVT == MVT::i32) {
-        sourceType = (Src.getOpcode() == ISD::FP_TO_UINT) ? T_UINT32 : T_INT32;
+        sourceType = IsUnsigned ? T_UINT32 : T_INT32;
       } else if (SrcEltVT == MVT::i16) {
-        sourceType = (Src.getOpcode() == ISD::FP_TO_UINT) ? T_UINT16 : T_INT16;
+        sourceType = IsUnsigned ? T_UINT16 : T_INT16;
       } else if (SrcEltVT == MVT::i8) {
-        sourceType = (Src.getOpcode() == ISD::FP_TO_UINT) ? T_UINT8 : T_INT8;
+        sourceType = IsUnsigned ? T_UINT8 : T_INT8;
       } else
         assert(false && "Unsupported source trunc type");
 
@@ -9942,13 +10021,13 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
       else if (DestEltVT == MVT::f8_152)
         targetType = TPCII::SW_TO_FP8_152;
       else if (DestEltVT == MVT::i32)
-        targetType = (Src.getOpcode() == ISD::FP_TO_UINT) ? TPCII::SW_TO_UINT32
+        targetType = IsUnsigned ? TPCII::SW_TO_UINT32
                                                           : TPCII::SW_TO_INT32;
       else if (DestEltVT == MVT::i16)
-        targetType = (Src.getOpcode() == ISD::FP_TO_UINT) ? TPCII::SW_TO_UINT16
+        targetType = IsUnsigned ? TPCII::SW_TO_UINT16
                                                           : TPCII::SW_TO_INT16;
       else if (DestEltVT == MVT::i8)
-        targetType = (Src.getOpcode() == ISD::FP_TO_UINT) ? TPCII::SW_TO_UINT8
+        targetType = IsUnsigned ? TPCII::SW_TO_UINT8
                                                           : TPCII::SW_TO_INT8;
       else
         assert(false && "Unsupported target trunc type");
@@ -9969,30 +10048,30 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
     ResultType = MVT::v64i32;
     ResultVT = MVT::v128i16;
     cast32to16 = true;
-    targetType = (Src.getOpcode() == ISD::FP_TO_UINT)
+    targetType = IsUnsigned
                      ? TPCII::OpType::UINT16
                      : TPCII::OpType::INT16;
-    sourceType = (Src.getOpcode() == ISD::FP_TO_UINT)
+    sourceType = IsUnsigned
                      ? TPCII::OpType::UINT32
                      : TPCII::OpType::INT32;
   } else if ((OpType == MVT::v256i8) && (SrcType == MVT::v256i16)) {
     ResultType = MVT::v128i16;
     ResultVT = MVT::v256i8;
     cast16to8 = true;
-    targetType = (Src.getOpcode() == ISD::FP_TO_UINT)
+    targetType = IsUnsigned
                      ? TPCII::OpType::UINT8
                      : TPCII::OpType::INT8;
-    sourceType = (Src.getOpcode() == ISD::FP_TO_UINT)
+    sourceType = IsUnsigned
                      ? TPCII::OpType::UINT16
                      : TPCII::OpType::INT16;
   } else if ((OpType == MVT::v256i8) && (SrcType == MVT::v256i32)) {
     ResultType = MVT::v64i32;
     ResultVT = MVT::v256i8;
     cast32to8 = true;
-    targetType = (Src.getOpcode() == ISD::FP_TO_UINT)
+    targetType = IsUnsigned
                      ? TPCII::OpType::UINT8
                      : TPCII::OpType::INT8;
-    sourceType = (Src.getOpcode() == ISD::FP_TO_UINT)
+    sourceType = IsUnsigned
                      ? TPCII::OpType::UINT32
                      : TPCII::OpType::INT32;
   } else if (OpType == MVT::i32) {
@@ -10014,7 +10093,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
     Ops1[0] = N0Val;                                          // Source.
     Ops1[1] = DAG.getTargetConstant(sourceType, DL, MVT::i8); // DataType.
     Ops1[2] = (cast32to16)
-                  ? (Src.getOpcode() == ISD::FP_TO_UINT
+                  ? (IsUnsigned
                          ? DAG.getTargetConstant(
                                (IsCastIntrinsicWithRoundMode ? InputSwitch : 0) |
                                    TPCII::SW_TO_UINT16,
@@ -10023,7 +10102,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
                                (IsCastIntrinsicWithRoundMode ? InputSwitch : 0) |
                                    TPCII::SW_TO_INT16,
                                DL, MVT::i32))
-                  : (Src.getOpcode() == ISD::FP_TO_UINT
+                  : (IsUnsigned
                          ? DAG.getTargetConstant(
                                (IsCastIntrinsicWithRoundMode ? InputSwitch : 0) |
                                    TPCII::SW_TO_UINT8,
@@ -10044,7 +10123,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
     Ops2[0] = N1Val;                                          // Source.
     Ops2[1] = DAG.getTargetConstant(sourceType, DL, MVT::i8); // DataType.
     Ops2[2] = (cast32to16)
-                  ? (Src.getOpcode() == ISD::FP_TO_UINT
+                  ? (IsUnsigned
                          ? DAG.getTargetConstant(
                                (IsCastIntrinsicWithRoundMode ? InputSwitch : 0) |
                                    TPCII::SW_TO_UINT16,
@@ -10053,7 +10132,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
                                (IsCastIntrinsicWithRoundMode ? InputSwitch : 0) |
                                    TPCII::SW_TO_INT16,
                                DL, MVT::i32))
-                  : (Src.getOpcode() == ISD::FP_TO_UINT
+                  : (IsUnsigned
                          ? DAG.getTargetConstant(
                                (IsCastIntrinsicWithRoundMode ? InputSwitch : 0) |
                                    TPCII::SW_TO_UINT8,
@@ -10070,7 +10149,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
         DAG.getMachineNode(TPC::CONVERTvvp, DL, ResultType, Ops2);
     SDValue Src1 = SDValue(Node2, 0);
     if (cast32to16) {
-      return (Subtarget->hasGaudiISA() || Subtarget->hasGaudiBISA())
+      return (Subtarget->hasGen2Plus() || Subtarget->hasGaudiBISA())
                  ? truncate_32_to_16(DAG, Src0, Src1, DL, ResultVT, targetType)
                  : truncate_32_to_16_goya(DAG, Src0, Src1, DL, ResultVT,
                                           targetType);
@@ -10102,7 +10181,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
     Ops1[0] = N0Val;                                          // Source.
     Ops1[1] = DAG.getTargetConstant(sourceType, DL, MVT::i8); // DataType.
     Ops1[2] =
-        (Src.getOpcode() == ISD::FP_TO_UINT
+        (IsUnsigned
              ? // Switch.
              DAG.getTargetConstant(
                  (IsCastIntrinsicWithRoundMode ? InputSwitch : TPCII::SW_RHNE) |
@@ -10125,7 +10204,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
     Ops2[0] = N1Val;                                          // Source.
     Ops2[1] = DAG.getTargetConstant(sourceType, DL, MVT::i8); // DataType.
     Ops2[2] =
-        (Src.getOpcode() == ISD::FP_TO_UINT
+        (IsUnsigned
              ? // Switch.
              DAG.getTargetConstant(
                  (IsCastIntrinsicWithRoundMode ? InputSwitch : TPCII::SW_RHNE) |
@@ -10146,7 +10225,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
     Ops3[0] = N2Val;                                          // Source.
     Ops3[1] = DAG.getTargetConstant(sourceType, DL, MVT::i8); // DataType.
     Ops3[2] =
-        (Src.getOpcode() == ISD::FP_TO_UINT
+        (IsUnsigned
              ? // Switch.
              DAG.getTargetConstant(
                  (IsCastIntrinsicWithRoundMode ? InputSwitch : TPCII::SW_RHNE) |
@@ -10167,7 +10246,7 @@ SDValue TPCTargetLowering::lowerTRUNCATE(SDValue Op, SelectionDAG &DAG,
     Ops4[0] = N3Val;                                          // Source.
     Ops4[1] = DAG.getTargetConstant(sourceType, DL, MVT::i8); // DataType.
     Ops4[2] =
-        (Src.getOpcode() == ISD::FP_TO_UINT
+        (IsUnsigned
              ? // Switch.
              DAG.getTargetConstant(
                  (IsCastIntrinsicWithRoundMode ? InputSwitch : TPCII::SW_RHNE) |

@@ -1,7 +1,8 @@
 ; RUN: llc -march=tpc -mcpu=goya2 %s -o - | FileCheck %s
 
-; CHECK: convert.i32
-; CHECK: pack.i8
+; CHECK: and.u32 {{.*}}, 0xff
+; CHECK: convert_uint32 lane_sel=0 single_lane rhne to_8
+; CHECK: pack.u8
 ; CHECK: mov_dg
 
 target datalayout = "e-p0:32:32:32-p1:32:32:32-p2:32:32:32-p3:64:64:64-i32:32:32-i16:32:32-i8:32:32-n8:16:32-f16:16:16-f32:32:32-v16:32:32-v32:32:32-v160:32:32-v256:2048:2048-v2048:2048:2048-v4096:2048:2048-v8192:2048:2048"

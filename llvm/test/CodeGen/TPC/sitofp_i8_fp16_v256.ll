@@ -1,15 +1,12 @@
 ; RUN: llc -march=tpc -mcpu=gaudib %s -o - | FileCheck %s
-; XFAIL: * 
 ; now we have another code, may be improved like expected here ?
-; CHECK: convert.i8  target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK: convert.i8  target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: unpack.i8 source_group=0 element_stride=2 group_half=0
+; CHECK: unpack.i8 source_group=1 element_stride=2 group_half=0
+; CHECK: convert.i8 target_type=int16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i16 target_type=int32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: convert.i32 target_type=fp32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK: convert.i32 target_type=fp32 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
-
 ; CHECK: convert.f32 target_type=f16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
-
 ; CHECK: convert.f32 lane_sel=1 target_type=f16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
-
 ; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: halt

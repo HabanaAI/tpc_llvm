@@ -39,14 +39,10 @@ define dso_local void @main() #0 {
 ; CHECK-NEXT:    unpack.u16 source_group=1 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-NEXT:    unpack.u16 source_group=0 element_stride=2 group_half=0 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-NEXT:    NOP
-; CHECK-NEXT:    convert.u16 all_lanes target_type=uint32 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-NEXT:    convert.u16 all_lanes target_type=uint32 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-NEXT:    convert.u16 all_lanes target_type=uint32 %V{{[0-9]+}}, %V{{[0-9]+}}
-; CHECK-NEXT:    convert.u16 all_lanes target_type=uint32 %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK-NEXT:    and.u32 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
 ; CHECK-NEXT:    and.u32 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
 ; CHECK-NEXT:    and.u32 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
-; CHECK-NEXT:    and.u32 %V0, %V{{[0-9]+}}, 0xffff
+; CHECK-NEXT:    and.u32 %V{{[0-9]+}}, %V{{[0-9]+}}, 0xffff
 ; CHECK-NEXT:    st_l_v 0x700, %V{{[0-9]+}}
 ; CHECK-NEXT:    st_l_v 0x600, %V{{[0-9]+}}
 ; CHECK-NEXT:    st_l_v 0x500, %V{{[0-9]+}}

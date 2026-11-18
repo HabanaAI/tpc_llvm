@@ -1,13 +1,17 @@
 ; RUN: llc -march=tpc -mcpu=goya2 %s -o - | FileCheck %s
-; GAUDI-1969
-; XFAIL: *
 
-; CHECK: convert.f32 all_lanes target_type=f16 [[SRC:%V[0-9]+]]
-; CHECK-NOT: convert.f32 all_lanes target_type=f16
-; CHECK: pack.f16 source_group=0 element_stride=2 [[TMP:%V[0-9]+]], [[SRC]]
-; CHECK: pack.f16 source_group=1 element_stride=2 [[TMP]], [[SRC]]
-
-; CHECK: mov_dg src=1 dst=0 wr_lg=0x0 wr_ug=0x1 [[DST:%V[0-9]+]], [[TMP]], 0xb
+; Each half converts on a single lane, and the dual group moves take all lanes.
+; CHECK: convert.f32 target_type=f16 [[SRC0:%V[0-9]+]], %V{{[0-9]+}}
+; CHECK: convert.f32 target_type=f16 [[SRC1:%V[0-9]+]], %V{{[0-9]+}}
+; CHECK: pack.f16 source_group=0 element_stride=2 [[TMP0:%V[0-9]+]], [[SRC0]]
+; CHECK: pack.f16 source_group=1 element_stride=2 [[TMP0]], [[SRC0]]
+; CHECK: pack.f16 source_group=0 element_stride=2 [[TMP1:%V[0-9]+]], [[SRC1]]
+; CHECK: pack.f16 source_group=1 element_stride=2 [[TMP1]], [[SRC1]]
+; CHECK: mov_dg all sdg0=1 sdg1=2 sdg2=3 sdg3=0 weg0=2 weg1=1 weg2=0 weg3=0 [[DST:%V[0-9]+]], [[DST]], -0x1
+; CHECK: mov_dg src=3 dst=1 wr_lg=0x0 wr_ug=0x1 [[DST]], [[DST]], -0x1
+; CHECK: mov_dg all sdg0=1 sdg1=3 sdg2=0 sdg3=2 weg0=0 weg1=0 weg2=1 weg3=1 [[DST]], %V{{[0-9]+}}, -0x1
+; CHECK: mov_dg all sdg0=0 sdg1=2 sdg2=1 sdg3=3 weg0=0 weg1=0 weg2=2 weg3=2 [[DST]], %V{{[0-9]+}}, -0x1
+; CHECK: st_tnsr 0x2, %I{{[0-9]+}}, [[DST]]
 
 target triple = "tpc"
 
@@ -59,15 +63,6 @@ declare <64 x float> @llvm.tpc.ld.tnsr.v64f32.i1(<5 x i32>, i8, i32, <64 x float
 
 ; Function Attrs: nounwind writeonly
 declare void @llvm.tpc.st.tnsr.v128f16(<5 x i32>, i8, <128 x half>, i32, i1, i1) #2
-
-; Function Attrs: nounwind readnone
-declare <128 x half> @llvm.tpc.convert.v128f16.v64f32.i1(<64 x float>, i8, i32, <128 x half>, i1, i1) #1
-
-; Function Attrs: nounwind readnone
-declare <128 x i16> @llvm.tpc.pack.v128i16.i1(<128 x i16>, i8, i32, <128 x i16>, i1, i1) #1
-
-; Function Attrs: nounwind readnone
-declare <128 x i16> @llvm.tpc.mov.dual.group.v128i16.i1(<128 x i16>, i32, i32, <128 x i16>, i1, i1) #1
 
 attributes #0 = { nounwind "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "no-frame-pointer-elim-non-leaf" "no-infs-fp-math"="false" "no-jump-tables"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="goya2" "target-features"="+goya2" "unsafe-fp-math"="false" "use-soft-float"="false" }
 attributes #1 = { nounwind readnone }

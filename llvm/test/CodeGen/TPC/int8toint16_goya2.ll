@@ -1,7 +1,7 @@
 ; RUN: llc -march=tpc -mcpu=goya2 -O0 %s -o - | FileCheck %s
 
 ; CHECK: halt
-; CHECK: convert.i8 all_lanes target_type=int16  %V{{[0-9]+}}, %V{{[0-9]+}}
+; CHECK: convert.i8 target_type=int16 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
 ; CHECK: st_tnsr  0x1, %I{{[0-9]+}}, %V{{[0-9]+}}
 
 target triple = "tpc"

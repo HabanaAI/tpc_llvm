@@ -1,6 +1,8 @@
 ; RUN: llc -march=tpc -mcpu=dali -O0 %s -o - | FileCheck %s
 ; XFAIL:*
-; LLVM-938
+; LLVM-938: ConversionEntity has no lane moves for a 32 to 16 bit
+; truncation on Dali, which has no mov_dg all, and asserts. Habana's compiler no
+; longer supports Dali; the same IR compiles for Gaudi, Gaudi2 and Goya2.
 
 ; CHECK: convert.f32 all_lanes target_type=int32 %D{{[0-9]+}}, %D{{[0-9]+}}, %SP{{[0-9]+}}
 ; CHECK: convert.i32 all_lanes target_type=uint32 rhne %D{{[0-9]+}}, %D{{[0-9]+}}, %SP{{[0-9]+}}

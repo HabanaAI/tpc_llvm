@@ -1,5 +1,7 @@
-; XFAIL: *
-; RUN: llc -march=tpc -mcpu=gaudi -O2 %s -o - | FileCheck %s
+; RUN: not llc -march=tpc -mcpu=gaudi -O2 %s -o /dev/null 2>&1 | FileCheck %s
+
+; Gaudi has no f16. Habana's compiler stops with the same message.
+; CHECK: LLVM ERROR: Conversion uses type banned for cpu
 
 ; ModuleID = 'fp128xf16tofp128xf32.c'
 source_filename = "fp128xf16tofp128xf32.c"
