@@ -4,8 +4,6 @@
 // RUN: %tpc_clang -c -O1 %s -o %t.o -march=doron1
 // RUN: %disasm --mcpu=doron1 %t.o | FileCheck --check-prefix=DIS %s
 
-// XFAIL: *
-// GAUDI-2175
 void 
 main(int s0, tensor out)
 {

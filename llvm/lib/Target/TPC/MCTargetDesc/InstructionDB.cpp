@@ -1662,7 +1662,7 @@ SwitchInfo { "num_lanes",
                  { "1", TPCII::SW_UNPACK_LANE_1 },
                  { "unpack_lane_0", TPCII::SW_UNPACK_LANE_0 },
                  { "unpack_lane_1", TPCII::SW_UNPACK_LANE_1 } }, 0,
-               {}, OptPrintAlways | OptPrintWithKey },
+               {}, OptPrintWithKey },  // Habana prints lane 0 only on Gen4+
   SwitchInfo { "unpack_lane",
                { { "unpack", S_Vector } },
                TPCII::SW_UNPACK_LANE, TPC::FeatureGen4Plus, T_INT8 | T_UINT8,
@@ -2478,6 +2478,12 @@ static TPCII::OpType getTPCTypeByName(const MCInst *MI) {
 }
 
 std::string TPCII::spellSwitchSet(unsigned SwSet, const MCInst *MI, unsigned OpNum, const MCInstrDesc &MCID, const MCRegisterInfo &MRI) {
+  // convert.i64 has CONVERT's opcode, but its switches are not encoded
+  // (SpuInst_ConvertINT64), so there is nothing to print. Habana's compiler
+  // prints none either.
+  if (MCID.getOpcode() == TPC::CONVERTINT64ssp)
+    return std::string();
+
   // Get mnemonic for this instruction.
   unsigned OpCode = TPCII::getSlotOpCode(MCID);
   unsigned SlotType = TPCII::getInstrType(MCID);

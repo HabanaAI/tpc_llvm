@@ -5,16 +5,14 @@
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 -bfloat16 %s -o - | FileCheck %s
 // RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu doron1 -bfloat16 %s -o - | FileCheck %s
 
-// XFAIL: *
-// GAUDI-2392
             
 
 void main(int dest, float x, _Bool pred) {
   volatile short __local *dest_ptr = (short __local *)dest;
   short income = *dest_ptr;
 
-  // CHECK: mov{{.*}} [[PRED:%SP[0-9]+]], %S2
-  // CHECK: ld_l  [[DEST:%S[0-9]+]], %S0
+  // CHECK-DAG: mov{{.*}} [[PRED:%SP[0-9]+]], %S2
+  // CHECK-DAG: ld_l  [[DEST:%S[0-9]+]], %S0
 
   // s_convert_i32_to_i16
   short res = income;
