@@ -266,6 +266,12 @@ typedef struct _InstructionForLatencyDetermination
           the_isIRFDest(false),
           the_isVectorPipe(false),
           the_isLFSRImplicitDst(false),
+          the_isAccFp32(false),
+          the_idxDst0(0),
+          the_is2SrfDst(false),
+          the_is2xLookup2xDnormAddSub(false),
+          the_isFp16(false),
+          the_isFp8(false),
           the_registerFile(e_rf_imm)
     {
     }

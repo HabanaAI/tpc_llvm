@@ -440,7 +440,16 @@ bool TPCTTIImpl::getLoadStoreConfig(
   return true;
 }
 
-InstructionCost TPCTTIImpl::getInstructionLatency(const Instruction *I) {
+InstructionCost
+TPCTTIImpl::getInstructionCost(const User *U, ArrayRef<const Value *> Operands,
+                               TTI::TargetCostKind CostKind) const {
+  if (CostKind == TTI::TCK_Latency)
+    if (const auto *I = dyn_cast<Instruction>(U))
+      return getInstructionLatency(I);
+  return BaseT::getInstructionCost(U, Operands, CostKind);
+}
+
+InstructionCost TPCTTIImpl::getInstructionLatency(const Instruction *I) const {
   unsigned latency = TPCTTIImpl::DEFAULT_LATENCY;
   TPCLatencyEvaluation::InstructionForLatencyDetermination Src;
 

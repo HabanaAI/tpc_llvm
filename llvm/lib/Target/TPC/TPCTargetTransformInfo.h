@@ -71,7 +71,12 @@ public:
                   DominatorTree *DT, AssumptionCache *AC,
                   TargetLibraryInfo *LibInfo) const override;
 
-  InstructionCost getInstructionLatency(const Instruction *I);
+  // LLVM 16 dropped TTI::getInstructionLatency; latency queries reach
+  // getInstructionCost with TCK_Latency, which uses TPC's latency model.
+  InstructionCost getInstructionCost(const User *U,
+                                     ArrayRef<const Value *> Operands,
+                                     TTI::TargetCostKind CostKind) const override;
+  InstructionCost getInstructionLatency(const Instruction *I) const;
   InstructionCost getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
                                         TTI::TargetCostKind CostKind) const override;
   int getIntrinsicInstrCost(Intrinsic::ID ID, Type *RetTy,
