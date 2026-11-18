@@ -127,6 +127,8 @@ public:
 };
 
 FunctionPass *createTPCHardwareLoops();
+FunctionPass *createTPCOptimizeHWLoopsGuards();
+void initializeTPCOptimizeHWLoopsGuardsPass(PassRegistry &);
 FunctionPass *createTPCPipeliner();
 FunctionPass *createTPCPacketizer();
 FunctionPass *createTPCExpandHWRegCopies();

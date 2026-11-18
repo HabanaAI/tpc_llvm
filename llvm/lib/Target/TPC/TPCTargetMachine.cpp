@@ -42,6 +42,7 @@ extern "C" void LLVMInitializeTPCTarget() {
 //  initializeTPCAAWrapperPassPass(Registry);
   initializeTPCPredicateOptimizerPass(Registry);
   initializeTPCIncMergerPass(Registry);
+  initializeTPCOptimizeHWLoopsGuardsPass(Registry);
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
@@ -458,6 +459,7 @@ void TPCPassConfig::addPreRegAlloc() {
     addPass(createTPCRegisterBalancer());
     addPass(&DeadMachineInstructionElimID);
     addPass(createTPCHardwareLoops());
+    addPass(createTPCOptimizeHWLoopsGuards());
     addPass(createTPCPipeliner());
     addPass(&DeadMachineInstructionElimID);
     addPass(createTPCSubregInitElimination());

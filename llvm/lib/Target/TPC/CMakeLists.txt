@@ -54,6 +54,7 @@ set(sources
   TPCSelectionDAGInfo.cpp
   TPCTargetObjectFile.cpp
   TPCHardwareLoops.cpp
+  TPCOptimizeHWLoopsGuards.cpp
   TPCSelectorPreshaper.cpp
   TPCSingleUseScalarOptimizer.cpp
   TPCIndexSpaceGen.cpp

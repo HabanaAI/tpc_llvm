@@ -116,7 +116,7 @@ void main(tensor in, tensor out, int k, unsigned short m) {
 // HOIST-NOT:  lookup
 // HOIST:      cache_invalidate lu
 // HOIST-NOT:  cache_invalidate
-// HOIST:      .LBB0_2:
+// HOIST:      {{^}}.LBB0_{{[0-9]+}}:
 // HOIST-NOT:  cache_invalidate
 // HOIST:      lookup_1c BV16 x2
 // HOIST-NOT:  cache_invalidate
@@ -130,7 +130,7 @@ void main(tensor in, tensor out, int k, unsigned short m) {
 // RST:        lookup_1c BV16 x2
 
 // The scheduler used to move this invalidate after the x2 lookup.
-// SCHED:      .LBB0_2:
+// SCHED:      {{^}}.LBB0_{{[0-9]+}}:
 // SCHED-NOT:  lookup
 // SCHED:      lookup BV32
 // SCHED-NOT:  lookup
