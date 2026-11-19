@@ -37,6 +37,21 @@
 // 'if (n > 0) { store; for (x = 0; x < n; ...) }' stores when n <= 0, as the
 // simulator shows. This pass keeps such a guard.
 //
+// On that zero-trip edge an exit PHI usually takes the initial value of a
+// loop-carried register, such as an accumulator:
+//
+//   bb.pre:    %z1 = MOV 0 ; %z2 = MOV 0 ; LOOP ..., %bb.exit
+//   bb.loop:   %acc = PHI %z1, %bb.pre, %next, %bb.loop ; %next = MAC %acc...
+//   bb.exit:   %out = PHI %z2, %bb.pre, %next, %bb.loop
+//
+// Each edge materialized the constant, so %z1 and %z2 are two registers. For
+// the register allocator %out then holds another value than %acc at the
+// LOOP, so the two cannot share a register, and the loop ends with a copy of
+// %next to %out in every iteration (two MOVs for a register pair). For every
+// hardware loop, the exit PHI takes %z1 where %z2 computes the same value, so
+// %acc, %next and %out become one register. Behind a guard the two values
+// were defined in different blocks and did not meet.
+//
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/InstructionDB.h"
@@ -62,6 +77,7 @@ using namespace llvm;
 STATISTIC(NumRemoved, "Guards removed because the LOOP makes the same check");
 STATISTIC(NumPredicated, "Guards turned into a LOOP predicate");
 STATISTIC(NumUnpredicated, "LOOP predicates removed as redundant");
+STATISTIC(NumShared, "Exit PHIs given the loop's initial value register");
 
 static cl::opt<bool> EnableGuardOpt(
     "enable-tpc-optimize-hw-loops-guards", cl::init(true), cl::Hidden,
@@ -222,7 +238,8 @@ private:
   Register loopEntryValue(const MachineInstr &ExitPhi,
                           const MachineBasicBlock &GuardMBB, Register GuardVal,
                           MachineBasicBlock &LoopMBB) const;
-  bool computeSame(Register A, Register B) const;
+  bool computeSame(Register A, Register B, unsigned Depth = 0) const;
+  bool shareEntryValues(MachineInstr &Loop);
   void removeJump(Guard &Gd, MachineInstr *&Loop);
   MachineInstr *rebuildLoop(MachineInstr &Loop, Register Pred,
                             int64_t Polarity);
@@ -586,35 +603,83 @@ Register TPCOptimizeHWLoopsGuards::loopEntryValue(
   return GuardVal;
 }
 
-/// Whether A and B are computed by the same side-effect-free instruction
-/// from the same operands. Unconditional instructions ignore their income
-/// operand, which is a separate IMPLICIT_DEF for each.
-bool TPCOptimizeHWLoopsGuards::computeSame(Register A, Register B) const {
+/// Whether A and B are computed by the same side-effect-free instructions
+/// from the same operands, up to a few levels deep. Unconditional
+/// instructions ignore their income operand, which is a separate IMPLICIT_DEF
+/// (or undef register) for each.
+bool TPCOptimizeHWLoopsGuards::computeSame(Register A, Register B,
+                                           unsigned Depth) const {
   A = lookThroughCopies(A);
   B = lookThroughCopies(B);
   if (A == B)
     return true;
+  if (Depth > 3 || !A.isVirtual() || !B.isVirtual())
+    return false;
   const MachineInstr *DA = MRI->getUniqueVRegDef(A);
   const MachineInstr *DB = MRI->getUniqueVRegDef(B);
   if (!DA || !DB || DA->getOpcode() != DB->getOpcode() ||
       DA->getNumOperands() != DB->getNumOperands() || DA->mayLoad() ||
       DA->mayStore() || DA->hasUnmodeledSideEffects() ||
-      DA->getDesc().getNumDefs() != 1 || !isUnconditional(*DA) ||
-      !isUnconditional(*DB))
+      DA->getDesc().getNumDefs() != 1 || DA->getOperand(0).getSubReg() ||
+      DB->getOperand(0).getSubReg())
+    return false;
+  const bool IsRegSequence = DA->isRegSequence();
+  if (!IsRegSequence && (!isUnconditional(*DA) || !isUnconditional(*DB)))
     return false;
   for (unsigned I = 1, E = DA->getNumOperands(); I < E; ++I) {
     const MachineOperand &OA = DA->getOperand(I), &OB = DB->getOperand(I);
-    if (OA.isReg() && OB.isReg() && OA.isTied() && OB.isTied() &&
-        OA.getReg().isVirtual() && OB.getReg().isVirtual()) {
-      const MachineInstr *IA = MRI->getUniqueVRegDef(OA.getReg());
-      const MachineInstr *IB = MRI->getUniqueVRegDef(OB.getReg());
-      if (IA && IB && IA->isImplicitDef() && IB->isImplicitDef())
+    if (!OA.isReg() || !OB.isReg()) {
+      if (!OA.isIdenticalTo(OB))
+        return false;
+      continue;
+    }
+    if (OA.isDef() || OB.isDef() || OA.getSubReg() != OB.getSubReg())
+      return false;
+    const Register RA = OA.getReg(), RB = OB.getReg();
+    if (RA.isPhysical() || RB.isPhysical()) {
+      // A physical register may hold another value at the other instruction.
+      if (RA != RB || !MRI->isConstantPhysReg(RA))
+        return false;
+      continue;
+    }
+    if (!IsRegSequence && OA.isTied() && OB.isTied()) {
+      // The income of an unconditional instruction.
+      const MachineInstr *IA = MRI->getUniqueVRegDef(RA);
+      const MachineInstr *IB = MRI->getUniqueVRegDef(RB);
+      if ((OA.isUndef() || (IA && IA->isImplicitDef())) &&
+          (OB.isUndef() || (IB && IB->isImplicitDef())))
         continue;
     }
-    if (!OA.isIdenticalTo(OB))
+    if (!computeSame(RA, RB, Depth + 1))
       return false;
   }
   return true;
+}
+
+/// A loop that does not run reaches its exit from the LOOP's block. Where an
+/// exit PHI takes there a value computed the same way as the initial value of
+/// the matching loop-carried register, use that register (see the comment at
+/// the top). Returns whether a PHI changed.
+bool TPCOptimizeHWLoopsGuards::shareEntryValues(MachineInstr &Loop) {
+  MachineBasicBlock &LoopMBB = *Loop.getParent();
+  MachineBasicBlock &Exit = *Loop.getOperand(LoopExitOp).getMBB();
+  bool Changed = false;
+  for (MachineInstr &Phi : Exit.phis()) {
+    for (unsigned I = 1, E = Phi.getNumOperands(); I < E; I += 2) {
+      if (Phi.getOperand(I + 1).getMBB() != &LoopMBB)
+        continue;
+      const Register Val = Phi.getOperand(I).getReg();
+      const Register New = loopEntryValue(Phi, LoopMBB, Val, LoopMBB);
+      if (New == Val)
+        continue;
+      LLVM_DEBUG(dbgs() << "Share " << printReg(New) << " in " << Phi);
+      MRI->clearKillFlags(New); // Now also live out to the exit.
+      Phi.getOperand(I).setReg(New);
+      ++NumShared;
+      Changed = true;
+    }
+  }
+  return Changed;
 }
 
 /// Remove the guard's jump, then merge the guard's block with the next one if
@@ -737,7 +802,9 @@ bool TPCOptimizeHWLoopsGuards::runOnMachineFunction(MachineFunction &MF) {
         Loops.push_back(&MI);
 
   bool Changed = false;
-  for (MachineInstr *Loop : Loops)
+  for (MachineInstr *Loop : Loops) {
     Changed |= optimizeLoop(Loop);
+    Changed |= shareEntryValues(*Loop);
+  }
   return Changed;
 }
