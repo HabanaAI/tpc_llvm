@@ -1262,6 +1262,7 @@ private:
                                LongRegisterKind Kind);
   void initBundle(SMLoc Loc);
   void outputBundle(MCStreamer &Out, SMLoc IDLoc, bool UseStreamer);
+  bool checkLongImmediates(SMLoc Loc);
 
   bool parseTPCMetadata();
   bool parseTPCMetadataArrayField(std::bitset<TPCNumTensors>& SetIndexes,
@@ -3097,6 +3098,9 @@ void TPCAsmParser::outputBundle(MCStreamer &Out, SMLoc IDLoc, bool UseStreamer) 
   LLVM_DEBUG(Bundle.dump_pretty(dbgs()));
   LLVM_DEBUG(dbgs() << "--\n");
 
+  if (checkLongImmediates(Bundle.getLoc().isValid() ? Bundle.getLoc() : IDLoc))
+    UseStreamer = false;
+
   if (UseStreamer)
     AC.EmitInstruction(Bundle, Out, getSTI());
 
@@ -3105,6 +3109,50 @@ void TPCAsmParser::outputBundle(MCStreamer &Out, SMLoc IDLoc, bool UseStreamer) 
   Bundle.setOpcode(0);
   Bundle.setLoc(SMLoc());
   CurrentSlot = SlotParser::Unknown;
+}
+
+/// A VLIW has one immediate field, shared by the immediates that do not fit
+/// in their instruction (all of them before Gaudi2's short immediates) and by
+/// a jump target. Report a bundle that needs two different values there; the
+/// code emitter wrote one of them for both, silently.
+bool TPCAsmParser::checkLongImmediates(SMLoc Loc) {
+  if (Bundle.getOpcode() != TPC::BUNDLE)
+    return false;
+  const bool HasShortImm = getSTI().hasFeature(TPC::FeatureShortImm);
+  std::optional<uint32_t> Field;
+  bool FieldIsTarget = false;
+  for (unsigned I = 1, E = Bundle.getNumOperands(); I < E; ++I) {
+    const MCInst &MI = *Bundle.getOperand(I).getInst();
+    if (!TPCMCInstrInfo::hasImm(MII, MI))
+      continue;
+    if (MI.getOperand(0).isExpr()) {
+      if (Field || FieldIsTarget)
+        return Error(Loc, "a jump target and another long immediate in one "
+                          "VLIW: it has one immediate field");
+      FieldIsTarget = true;
+      continue;
+    }
+    const unsigned OpNum = TPCMCInstrInfo::getImmFieldOpNum(MII, MI);
+    const MCOperand &Op = MI.getOperand(OpNum);
+    if (!Op.isImm() && !Op.isSFPImm())
+      continue;
+    const int64_t Value = Op.isImm() ? Op.getImm() : Op.getSFPImm();
+    const MCInstrDesc &Desc = MII.get(MI.getOpcode());
+    if (HasShortImm &&
+        !TPCMCInstrInfo::useImmSlotForImm(
+            Desc.operands()[OpNum], Value,
+            TPCMCInstrInfo::isInstTypeSigned(Desc, MI)))
+      continue;
+    if (FieldIsTarget)
+      return Error(Loc, "a jump target and another long immediate in one "
+                        "VLIW: it has one immediate field");
+    if (Field && *Field != static_cast<uint32_t>(Value))
+      return Error(Loc, formatv("two different long immediates in one VLIW "
+                                "({0:x} and {1:x}): it has one immediate field",
+                                *Field, static_cast<uint32_t>(Value)));
+    Field = static_cast<uint32_t>(Value);
+  }
+  return false;
 }
 
 bool TPCAsmParser::parseTPCMetadata() {
