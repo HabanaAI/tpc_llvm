@@ -64,6 +64,10 @@ BitVector TPCRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   markSuperRegs(Reserved, TPC::V_LANE_ID_32);
   markSuperRegs(Reserved, TPC::V_LANE_ID_16);
   markSuperRegs(Reserved, TPC::V_LANE_ID_8);
+  // Only ADD/SUB write the carry registers (and MOV, from assembly); they are
+  // never allocated. TPCCarryDeps keeps their dead flags.
+  Reserved.set(TPC::S_CARRY);
+  Reserved.set(TPC::V_CARRY);
 
   if (IsPriorDoron1) {
     Reserved.set(TPC::SP0);

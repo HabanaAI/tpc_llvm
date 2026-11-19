@@ -248,6 +248,14 @@ getRegisterClass(Register Reg, const MachineRegisterInfo &MRI);
 bool looksLikeHavingAPredicate(const MachineInstr &MI, int &PredicateIdx, bool &Polarity);
 int getIncome(const MachineInstr &MI);
 unsigned getSwitches(const MachineInstr &MI);
+
+/// The carry register (TPC::S_CARRY or TPC::V_CARRY) that an integer ADD or
+/// SUB writes, or none. See TPCCarryDeps.cpp.
+MCRegister getCarryRegister(const MachineInstr &MI);
+
+/// Whether MI is an ADD with the CARRY switch or a SUB with BORROW, which
+/// reads the carry left by the ADD or SUB before it.
+bool readsCarry(const MachineInstr &MI);
 }
 
 #endif

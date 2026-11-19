@@ -2927,6 +2927,12 @@ bool TPCPipeliner::checkForProhibitingInstructions() {
         LLVM_DEBUG(dbgs() << "MMIOAccess detected: " << MI);
         return true;
       }
+      // The copies of each instruction are placed together, so the copies
+      // of a carry read would all follow the last copy of the add before it.
+      if (readsCarry(MI)) {
+        LLVM_DEBUG(dbgs() << "Carry read detected: " << MI);
+        return true;
+      }
 
       // Prohibit hardware registries usage which are single in their registry
       // class to avoid their spilling.

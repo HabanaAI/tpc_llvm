@@ -44,6 +44,7 @@ extern "C" void LLVMInitializeTPCTarget() {
   initializeTPCIncMergerPass(Registry);
   initializeTPCOptimizeHWLoopsGuardsPass(Registry);
   initializeTPCMulAddCombinePass(Registry);
+  initializeTPCCarryDepsPass(Registry);
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
@@ -405,6 +406,7 @@ void TPCPassConfig::addPreEmitPass() {
 
   addPass(createTPCLutCacheCounter());
   addPass(createTPCPrologueMMIO());
+  addPass(createTPCCarryDeps());
   // Create Packets.
 #if !defined(TPC_DISABLE_PACKETIZER) && !defined(TPC_DISABLE_ALL_SCHED)
   if (!NoOpt) {
@@ -439,6 +441,7 @@ bool TPCPassConfig::addPreISel() {
 
 bool TPCPassConfig::addInstSelector() {
   addPass(createTPCISelDag(getTPCTargetMachine(), getOptLevel()));
+  addPass(createTPCCarryDeps());
   addPass(createTPCMemorySize());
   return false;
 }
@@ -475,8 +478,11 @@ void TPCPassConfig::addPreRegAlloc() {
 
   addPass(createTPCHWWA2());
   addPass(createTPCPreRAHwWorkarounds());
+  // Before the pre-RA machine scheduler.
+  addPass(createTPCCarryDeps());
 }
 
 void TPCPassConfig::addPreSched2()  {
   addPass(createTPCSetSpillBase());
+  addPass(createTPCCarryDeps());
 }

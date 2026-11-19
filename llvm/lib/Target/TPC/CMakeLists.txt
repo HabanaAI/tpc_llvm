@@ -55,6 +55,7 @@ set(sources
   TPCTargetObjectFile.cpp
   TPCHardwareLoops.cpp
   TPCMulAddCombine.cpp
+  TPCCarryDeps.cpp
   TPCOptimizeHWLoopsGuards.cpp
   TPCSelectorPreshaper.cpp
   TPCSingleUseScalarOptimizer.cpp
