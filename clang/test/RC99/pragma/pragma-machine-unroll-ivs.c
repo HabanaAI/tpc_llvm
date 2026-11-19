@@ -1,6 +1,7 @@
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DPIPELINED %s -o - 2>&1 | FileCheck --check-prefix=PIPE %s
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DACC %s -o - 2>&1 | FileCheck --check-prefix=ACC %s
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DFLOAT_IV %s -o - 2>&1 | FileCheck --check-prefix=FIV %s
+// RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DPRED %s -o - 2>&1 | FileCheck --check-prefix=PRED %s
 
 // The backend machine unroll (TPCSoftwareLoopPipelining), as Habana's compiler
 // does it:
@@ -13,6 +14,9 @@
 // - An f32 induction variable is unrolled with its step multiplied in f32:
 //   copies start at k + 0.1f, k + 0.2f, k + 0.3f and step by 0.4f. The bits of
 //   0.1f were multiplied by 4 as an integer before.
+// - A predicated add ('count += 1' in the lanes where a compare holds) is not
+//   a linear induction variable either. It was taken for one, and each copy
+//   counted every fourth iteration.
 
 void main(tensor y, tensor out, int hidden) {
   int5 c = 0;
@@ -39,6 +43,16 @@ void main(tensor y, tensor out, int hidden) {
     v_f32_st_tnsr(c, out, v_f32_ld_tnsr_b(c, y) * k);
     k = k + 0.1f;
   }
+#elif defined(PRED)
+  int64 count = 0;
+  #pragma clang loop machine_unroll_count(4)
+  for (int x = 0; x < hidden; x += 64) {
+    c[0] = x;
+    bool64 above = v_f32_cmp_grt_b(v_f32_ld_tnsr_b(c, y), 0.5f);
+    count = v_i32_add_vb(count, 1, 0, count, above, 0);
+  }
+  c[0] = 0;
+  v_i32_st_tnsr(c, out, count);
 #endif
 }
 
@@ -63,3 +77,10 @@ void main(tensor y, tensor out, int hidden) {
 // FIV:      loop 0, %S0, 512, <,
 // FIV-COUNT-4: add.f32 %V{{[0-9]+}}, %V{{[0-9]+}}, 0x3ecccccd
 // FIV:      halt
+
+// PRED:      warning: machine_unroll(4) is not applied to the loop
+// PRED-NEXT: Loop contains unsupported induction variables
+// PRED:      loop 0, %S0, 64, <,
+// PRED:      add.i32 {{.*}}, %VP{{[0-9]+}}
+// PRED-NOT:  add.i32 {{.*}}, %VP
+// PRED:      halt

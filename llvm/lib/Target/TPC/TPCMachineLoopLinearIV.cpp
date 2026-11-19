@@ -7,6 +7,7 @@
 #include "TPCGenInstrInfo.inc"
 
 #include "TPCMachineInstrTools.h"
+#include "MCTargetDesc/InstructionDB.h"
 #include "MCTargetDesc/TPCMCInstrInfo.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -101,6 +102,27 @@ MachineOperand *MLoopLinearIV::getStartOp() const {
   return nullptr;
 }
 
+/// Whether an add adds its operands in every lane each time it runs: it has
+/// no predicate, and no saturation or carry switch. A predicated add
+/// ('count += 1' where a compare holds) is not a linear induction variable;
+/// the unroller took it for one and gave wrong counts.
+static bool addsUnconditionally(const MachineInstr &MI) {
+  const unsigned N = MI.getNumExplicitOperands();
+  if (N < 4 || !MI.getOperand(0).isReg() || !MI.getOperand(0).isTied())
+    return false;
+  const MachineOperand &Pred = MI.getOperand(N - 2);
+  const MachineOperand &Pol = MI.getOperand(N - 1);
+  if (!Pred.isReg() || !Pol.isImm() || Pol.getImm() != 0 ||
+      (Pred.getReg() != TPC::SPRF_TRUE && Pred.getReg() != TPC::VPRF_TRUE))
+    return false;
+  // The switches come right before the income, which is tied to the result.
+  const unsigned Income = MI.findTiedOperandIdx(0);
+  if (Income < 2)
+    return false;
+  const MachineOperand &Sw = MI.getOperand(Income - 1);
+  return Sw.isImm() && (Sw.getImm() & (TPCII::SW_SAT | TPCII::SW_CARRY)) == 0;
+}
+
 SmallVector<MLoopLinearIV, 4> findLinearIVs(const MachineLoop &ML,
                                             const MachineRegisterInfo &MRI) {
   SmallVector<MLoopLinearIV, 4> Result;
@@ -130,7 +152,7 @@ SmallVector<MLoopLinearIV, 4> findLinearIVs(const MachineLoop &ML,
       continue;
 
     // Only add instruction for IVs are supported for now.
-    if (!TPCII::isAdd(DefMI->getDesc()))
+    if (!TPCII::isAdd(DefMI->getDesc()) || !addsUnconditionally(*DefMI))
       continue;
 
     // Skip IV if it is not simple (i += step) but complex (i += f(step)).
