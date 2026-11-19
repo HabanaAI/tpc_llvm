@@ -5731,9 +5731,7 @@ SDValue TPCTargetLowering::lowerVectorFP_Extend(
   Ops[0] = ExtArg[0];                                    // Source.
   Ops[1] = DAG.getTargetConstant(DataType, DL, MVT::i8); // DataType.
   Ops[2] = DAG.getTargetConstant(
-      TPCII::SW_TO_FP32 |
-          (IsCastIntrinsicWithRoundMode ? InputSwitch : TPCII::SW_RHNE),
-      DL, MVT::i32);                              // Switch.
+      TPCII::SW_TO_FP32 | InputSwitch, DL, MVT::i32); // Switch.
   Ops[3] = DAG.getUNDEF(Op.getValueType());       // Income.
   Ops[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
@@ -5745,9 +5743,7 @@ SDValue TPCTargetLowering::lowerVectorFP_Extend(
   Ops1[0] = ExtArg[1];                                    // Source.
   Ops1[1] = DAG.getTargetConstant(DataType, DL, MVT::i8); // DataType.
   Ops1[2] = DAG.getTargetConstant(
-      TPCII::SW_TO_FP32 |
-          (IsCastIntrinsicWithRoundMode ? InputSwitch : TPCII::SW_RHNE),
-      DL, MVT::i32);                               // Switch.
+      TPCII::SW_TO_FP32 | InputSwitch, DL, MVT::i32); // Switch.
   Ops1[3] = DAG.getUNDEF(Op.getValueType());       // Income.
   Ops1[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops1[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
@@ -5784,6 +5780,35 @@ SDValue TPCTargetLowering::lowerFP_EXTEND(SDValue Op, SelectionDAG &DAG) const {
   // Let's try via any-any
   EVT SrcEltVT = SrcType.getVectorElementType();
   EVT DestEltVT = OpType.getVectorElementType();
+
+  // bf16 to f32 on Gaudi as Habana's compiler does it: each half unpacked,
+  // then converted on all lanes into a register pair, of which the first
+  // register holds the 64 results. The generic conversion converted a lane
+  // group at a time, which Gaudi's CONVERT does not have (the simulator
+  // stops: "must be all lanes").
+  if (Subtarget->hasGaudiISA() && SrcEltVT == MVT::bf16 &&
+      DestEltVT == MVT::f32) {
+    if (SrcType == MVT::v128bf16)
+      return lowerVectorFP_Extend(Op, DAG, DL, TPCII::OpType::BF16,
+                                  MVT::v64f32, InputSwitch,
+                                  IsCastIntrinsicWithRoundMode);
+    if (SrcType == MVT::v256bf16) {
+      SmallVector<SDValue, 4> Parts;
+      for (unsigned Sub : {TPC::sub_0, TPC::sub_1}) {
+        SDValue Half =
+            helperExtractSubRegSDValue(Sub, DL, DAG, MVT::v128bf16, Src);
+        SDValue Ext = lowerVectorFP_Extend(
+            DAG.getNode(ISD::FP_EXTEND, DL, MVT::v128f32, Half), DAG, DL,
+            TPCII::OpType::BF16, MVT::v64f32, InputSwitch,
+            IsCastIntrinsicWithRoundMode);
+        Parts.push_back(
+            helperExtractSubRegSDValue(TPC::sub_0, DL, DAG, MVT::v64f32, Ext));
+        Parts.push_back(
+            helperExtractSubRegSDValue(TPC::sub_1, DL, DAG, MVT::v64f32, Ext));
+      }
+      return createTuple(Parts, DAG);
+    }
+  }
 
   unsigned DDT = getInstrDataType(SrcEltVT, false);
   unsigned SWS = getSwitchByDestDataType(DestEltVT, false);
@@ -8463,17 +8488,14 @@ SDValue TPCTargetLowering::ConversionEntity(EVT DestVT, SDValue Source,
        }
 
       if (SrcNumElements == 64 && DestNumElements == 64) {
-        if (SrcIsUnsigned) { // to signed first
-          EVT DestVT1 = MVT::v64i32;
-          unsigned swiu = TPCII::SW_TO_INT32;
-          unsigned newswi1 = newswi | swiu;
-          SDValue Income1 = DAG.getUNDEF(MVT::v64i32);
-          SDValue conv1 =
-              ConversionEntity(DestVT1, Source, DataType,
-                               DAG.getTargetConstant(newswi1, DL, MVT::i32),
-                               Income1, Predicate, Polarity, DAG, DL);
+        if (SrcIsUnsigned) {
+          // As Habana's compiler: x > INT32_MAX ? f32((x >> 1) | (x & 1)) * 2
+          // : f32(x), converting as int32. Keeping the low bit in the halved
+          // value makes it round as x would; without it, a halved value
+          // exactly between two floats rounded to even (0x80000081 gave
+          // 0x4f000000, not 0x4f000001).
           SDValue conv2 = ConversionEntity(
-              DestVT, conv1, DAG.getTargetConstant(T_INT32, DL, MVT::i8),
+              DestVT, Source, DAG.getTargetConstant(T_INT32, DL, MVT::i8),
               DAG.getTargetConstant(SwitchVal, DL, MVT::i32), Income, Predicate,
               Polarity, DAG, DL);
 
@@ -8500,13 +8522,20 @@ SDValue TPCTargetLowering::ConversionEntity(EVT DestVT, SDValue Source,
           };
           MachineSDNode *NodeShr_1 =
               DAG.getMachineNode(TPC::SHRvip, DL, MVT::v64i32, Operands);
+          SDValue LowBit = helperANDvipNodeCreate(
+              Source, DL, DAG, TPCII::OpType::INT32, 1, MVT::v64i32);
+          MachineSDNode *Halved = DAG.getMachineNode(
+              TPC::ORvvp, DL, MVT::v64i32,
+              {SDValue(NodeShr_1, 0), LowBit,
+               DAG.getTargetConstant(TPCII::OpType::INT32, DL, MVT::i8),
+               DAG.getTargetConstant(0, DL, MVT::i32),
+               DAG.getUNDEF(MVT::v64i32),
+               DAG.getRegister(TPC::SPRF_TRUE, MVT::i1),
+               DAG.getTargetConstant(0, DL, MVT::i1)});
 
-          SDValue Negconv1 =
-              ConversionEntity(DestVT1, SDValue(NodeShr_1, 0), DataType,
-                               DAG.getTargetConstant(newswi1, DL, MVT::i32),
-                               Income1, evp, Polarity, DAG, DL);
           SDValue Negconv2 = ConversionEntity(
-              DestVT, Negconv1, DAG.getTargetConstant(T_INT32, DL, MVT::i8),
+              DestVT, SDValue(Halved, 0),
+              DAG.getTargetConstant(T_INT32, DL, MVT::i8),
               DAG.getTargetConstant(SwitchVal, DL, MVT::i32), Income, evp,
               Polarity, DAG, DL);
           unsigned R2 = 0x40000000; // __builtin_bit_cast(unsigned, 2.0f);
@@ -10345,6 +10374,22 @@ SDValue TPCTargetLowering::lowerCONVERTUNSIGNED(SDValue Op,
         DAG.getTargetConstant(0, DL, MVT::i1)};
     return SDValue(DAG.getMachineNode(TPC::CONVERTssp, DL, VT, Ops), 0);
   }
+
+  // Vector u32 to bf16 on Gaudi: through f32, as Habana's compiler does it.
+  // The generic conversion went through u16 and saturated: 4294967295 gave
+  // 65536.
+  if (Op.getOpcode() == ISD::UINT_TO_FP && Op.getValueType().isVector() &&
+      Op.getValueType().getVectorElementType() == MVT::bf16 &&
+      Op.getOperand(0).getValueType().getVectorElementType() == MVT::i32 &&
+      Subtarget->hasGaudiISA()) {
+    const EVT VT = Op.getValueType();
+    const EVT F32VT =
+        EVT::getVectorVT(*DAG.getContext(), MVT::f32, VT.getVectorNumElements());
+    SDValue F32 = DAG.getNode(ISD::UINT_TO_FP, DL, F32VT, Op.getOperand(0));
+    return DAG.getNode(ISD::FP_ROUND, DL, VT, F32,
+                       DAG.getIntPtrConstant(0, DL, /*isTarget=*/true));
+  }
+
   unsigned int NumOp = Op.getNumOperands();
   unsigned int InputSwitch = TPCII::SW_RHNE;
 
