@@ -29,9 +29,23 @@
 // This pass removes the extra IR nodes in hope that it can help code
 // generation.
 //
+// Both rewrites move an access: the first makes the store write the destination
+// where it used to write the temporary, before the memcpy; the second makes the
+// loads read the source after the memcpy. So the first needs the destination
+// untouched between the store and the memcpy, and the second needs the source
+// unmodified between the memcpy and the loads. Without that check,
+//
+//   float128 q = f(); use(p.v1); p = q;
+//
+// became `p = f(); use(p.v1)` (a value carried across loop iterations read the
+// new one).
+//
 //===----------------------------------------------------------------------===//
 
 #include "TPCTargetMachine.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/InstIterator.h"
@@ -49,7 +63,7 @@ static cl::opt<bool> EnableCopyElision("tpc-copy-elision",
 
 namespace {
 struct TpcCopyElision {
-  static bool runImpl(Function &F);
+  static bool runImpl(Function &F, AAResults &AA);
 };
 }
 
@@ -129,8 +143,9 @@ static bool isReturnTempValue(Value *V, StoreInst *&StI, SmallVectorImpl<Instruc
   return Seen_memcpy && Seen_store;
 }
 
-static bool isArgumentTempValue(Value *V, LoadInst *&LdI, SmallVectorImpl<Instruction *> &TempUsers) {
-  LdI = nullptr;
+static bool isArgumentTempValue(Value *V, SmallVectorImpl<LoadInst *> &Loads,
+                                SmallVectorImpl<Instruction *> &TempUsers) {
+  Loads.clear();
   TempUsers.clear();
 
   auto *Inst = dyn_cast<AllocaInst>(V);
@@ -152,7 +167,7 @@ static bool isArgumentTempValue(Value *V, LoadInst *&LdI, SmallVectorImpl<Instru
         return false;
     } else if (auto *Load = dyn_cast<LoadInst>(U)) {
       //  %61 = load <128 x float>, ptr %tmp10, align 256
-      LdI = Load;
+      Loads.push_back(Load);
       Seen_load = true;
     } else {
       // This alloca is used in some other way.
@@ -183,11 +198,29 @@ static bool isOnlyCopy(const MemCpyInst *MemCopy, Value *&Dest, Value *&Src) {
   return IsWholeStruct(Dest) || IsWholeStruct(Src);
 }
 
-bool TpcCopyElision::runImpl(Function &F) {
+/// Check if an instruction strictly between \p From and \p To, which are in
+/// the same block with \p From first, may modify \p Loc, or with \p AnyAccess
+/// may also read it. Instructions in \p Dead are about to be erased.
+static bool isAccessedBetween(Instruction *From, Instruction *To,
+                              const MemoryLocation &Loc, bool AnyAccess,
+                              AAResults &AA,
+                              const SmallPtrSetImpl<Instruction *> &Dead) {
+  for (auto It = std::next(From->getIterator()); &*It != To; ++It) {
+    if (Dead.contains(&*It))
+      continue;
+    ModRefInfo MR = AA.getModRefInfo(&*It, Loc);
+    if (AnyAccess ? isModOrRefSet(MR) : isModSet(MR))
+      return true;
+  }
+  return false;
+}
+
+bool TpcCopyElision::runImpl(Function &F, AAResults &AA) {
   bool Changed = false;
 
   for (BasicBlock &BB : F) {
     SmallVector<Instruction *, 16> ToRemove;
+    SmallPtrSet<Instruction *, 16> Dead;
     for (Instruction &I : BB) {
       if (auto *Call = dyn_cast<MemCpyInst>(&I)) {
         Value *Dest = nullptr;
@@ -196,11 +229,22 @@ bool TpcCopyElision::runImpl(Function &F) {
           if (isa<GetElementPtrInst>(Dest))
             continue;
           StoreInst *StI = nullptr;
-          LoadInst *LdI = nullptr;
+          SmallVector<LoadInst *, 4> Loads;
           SmallVector<Instruction *, 10> TempUsers;
+          LocationSize Size = LocationSize::precise(
+              cast<ConstantInt>(Call->getLength())->getZExtValue());
           if (isReturnTempValue(Src, StI, TempUsers)) {
             assert(StI);
             assert(!TempUsers.empty());
+            // The store will write Dest in place of the temporary, so nothing
+            // between it and the memcpy may read or write Dest.
+            if (StI->getParent() != &BB || !StI->comesBefore(Call) ||
+                isAccessedBetween(StI, Call, MemoryLocation(Dest, Size),
+                                  /*AnyAccess=*/true, AA, Dead)) {
+              LLVM_DEBUG(dbgs() << "Copy elision: destination accessed before "
+                                   "the copy, keeping " << *Call << '\n');
+              continue;
+            }
             LLVM_DEBUG(dbgs() << "Copy elision: " << *StI << '\n');
             StI->getOperand(1)->replaceAllUsesWith(Dest);
             LLVM_DEBUG(dbgs() << "          To: " << *StI << '\n');
@@ -209,18 +253,38 @@ bool TpcCopyElision::runImpl(Function &F) {
                 dbgs() << "       Erase: " << *I << '\n';
             );
             ToRemove.append(TempUsers.begin(), TempUsers.end());
+            Dead.insert(TempUsers.begin(), TempUsers.end());
             Changed = true;
-          } else if (isArgumentTempValue(Dest, LdI, TempUsers)) {
-            assert(LdI);
+          } else if (isArgumentTempValue(Dest, Loads, TempUsers)) {
+            assert(!Loads.empty());
             assert(!TempUsers.empty());
-            LLVM_DEBUG(dbgs() << "Copy elision: " << *LdI << '\n');
-            LdI->getPointerOperand()->replaceAllUsesWith(Src);
-            LLVM_DEBUG(dbgs() << "          To: " << *LdI << '\n');
+            // The loads will read Src in place of the temporary, so nothing
+            // between the memcpy and them may modify Src.
+            Instruction *Last = Call;
+            bool Safe = true;
+            for (LoadInst *LdI : Loads) {
+              if (LdI->getParent() != &BB || !Call->comesBefore(LdI)) {
+                Safe = false;
+                break;
+              }
+              if (Last->comesBefore(LdI))
+                Last = LdI;
+            }
+            if (!Safe || isAccessedBetween(Call, Last, MemoryLocation(Src, Size),
+                                           /*AnyAccess=*/false, AA, Dead)) {
+              LLVM_DEBUG(dbgs() << "Copy elision: source modified before the "
+                                   "loads, keeping " << *Call << '\n');
+              continue;
+            }
+            LLVM_DEBUG(dbgs() << "Copy elision: " << *Loads.front() << '\n');
+            Dest->replaceAllUsesWith(Src);
+            LLVM_DEBUG(dbgs() << "          To: " << *Loads.front() << '\n');
             LLVM_DEBUG(
               for (auto I : TempUsers)
                 dbgs() << "       Erase: " << *I << '\n';
             );
             ToRemove.append(TempUsers.begin(), TempUsers.end());
+            Dead.insert(TempUsers.begin(), TempUsers.end());
             Changed = true;
           }
         }
@@ -241,7 +305,7 @@ PreservedAnalyses TpcCopyElisionPass::run(Function &F,
   if (!EnableCopyElision)
     return PreservedAnalyses::all();
 
-  if (!TpcCopyElision::runImpl(F))
+  if (!TpcCopyElision::runImpl(F, AM.getResult<AAManager>(F)))
     return PreservedAnalyses::all();
   return PreservedAnalyses::none();
 }
