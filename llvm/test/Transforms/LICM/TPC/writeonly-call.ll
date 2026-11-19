@@ -1,9 +1,10 @@
 ; RUN: opt -S -passes='loop-mssa(licm)' < %s | FileCheck %s
 
 ; Since LLVM 22, LICM moves a loop-invariant write-only call out of its loop,
-; which runs it once instead of on every iteration. TPC store intrinsics are
-; write-only, but an RMW store adds to memory, so on TPC these calls stay in
-; the loop, as with LLVM 12 and Habana's compiler.
+; which runs it once instead of on every iteration. TPC stores are write-only
+; calls but not all idempotent, so on TPC they stay in the loop, as with
+; LLVM 12 and Habana's compiler. An RMW store reads memory, so it stays in the
+; loop in any case.
 
 target triple = "tpc"
 

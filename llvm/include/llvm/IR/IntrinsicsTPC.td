@@ -1160,18 +1160,22 @@ def int_tpc_st_tnsr_partial : Intrinsic<[],
 def int_tpc_st_tnsr_partial_direct : Intrinsic<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                       [IntrWriteMem]>;
+// The RMW stores read the value they update, and the squeeze stores depend on
+// the squeeze counter and partial buffer, so neither is write-only: two
+// identical ones are not one (EarlyCSE merged them), nor can one move out of a
+// loop (LICM).
 def int_tpc_st_tnsr_rmw   : Intrinsic<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 def int_tpc_st_tnsr_rmw_direct   : Intrinsic<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 def int_tpc_st_tnsr_partial_rmw : Intrinsic<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 def int_tpc_st_tnsr_partial_rmw_direct : Intrinsic<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 def int_tpc_st_tnsr_low   : Intrinsic<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                       [IntrWriteMem]>;
@@ -1180,10 +1184,10 @@ def int_tpc_st_tnsr_low_direct   : Intrinsic<[],
                                       [IntrWriteMem]>;
 def int_tpc_st_tnsr_low_rmw : Intrinsic<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 def int_tpc_st_tnsr_low_rmw_direct : Intrinsic<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 def int_tpc_st_tnsr_high  : Intrinsic<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                       [IntrWriteMem]>;
@@ -1192,30 +1196,30 @@ def int_tpc_st_tnsr_high_direct  : Intrinsic<[],
                                       [IntrWriteMem]>;
 def int_tpc_st_tnsr_high_rmw : Intrinsic<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 def int_tpc_st_tnsr_high_rmw_direct : Intrinsic<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      []>;
 
 def int_tpc_st_tnsr_sqz       : Intrinsic<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          []>;
 def int_tpc_st_tnsr_sqz_rmw   : Intrinsic<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          []>;
 
 def int_tpc_st_tnsr_s         : Intrinsic<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_any_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                           [IntrWriteMem]>;
 def int_tpc_st_tnsr_s_rmw     : Intrinsic<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_any_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          []>;
 def int_tpc_st_tnsr_s_hwr     : Intrinsic<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                           [IntrWriteMem]>;
 def int_tpc_st_tnsr_s_hwr_rmw : Intrinsic<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          []>;
 
 def int_tpc_reset_sqz_cntr    : Intrinsic<[], [llvm_i8_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty], [IntrHasSideEffects]>;
 

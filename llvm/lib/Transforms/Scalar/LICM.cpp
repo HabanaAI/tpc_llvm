@@ -1262,10 +1262,10 @@ bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
     if (Behavior.onlyWritesMemory()) {
 #ifdef LLVM_TPC_COMPILER
       // TPC: moving a write-only call (new in LLVM 22) runs it once instead of
-      // on every iteration. TPC store intrinsics are write-only but not all
-      // idempotent: st_tnsr_rmw adds to memory, so an RMW add in a loop of n
-      // iterations added only once. Keep them in the loop, like LLVM 12 and
-      // Habana's compiler.
+      // on every iteration. TPC stores are write-only calls but not all
+      // idempotent: an MMIO write by st_l in a loop of n iterations must
+      // happen n times (the RMW stores, which added only once, now read
+      // memory). Keep them in the loop, like LLVM 12 and Habana's compiler.
       if (CI->getModule()->getTargetTriple().getArch() == Triple::tpc)
         return false;
 #endif
