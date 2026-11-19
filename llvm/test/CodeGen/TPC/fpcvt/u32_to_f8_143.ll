@@ -10,5 +10,5 @@ entry:
   ret void
 }
 
-; CHECK: convert.u32 target_type=f8_143 [[VAL:%S[0-9]+]], %S1
+; CHECK: convert.u32 target_type=f8_143 rhne [[VAL:%S[0-9]+]], %S1
 ; CHECK: st_l        %S0, [[VAL]]

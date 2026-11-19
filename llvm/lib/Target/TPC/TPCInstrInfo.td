@@ -3536,11 +3536,14 @@ def : Pat<(f8_152 (fpround f16:$src)),  (CONVERTssp $src, OpType.FP16, !or(Switc
 def : Pat<(f8_143 (fpround bf16:$src)), (CONVERTssp $src, OpType.BF16, !or(SwitchVal.TO_FP8_143, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
 def : Pat<(f8_152 (fpround bf16:$src)), (CONVERTssp $src, OpType.BF16, !or(SwitchVal.TO_FP8_152, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
 
-def : Pat<(f32    (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP32, SwitchVal.RM_DEFAULT),  (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>;
-def : Pat<(bf16   (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_BF16, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[BF16]>;
-def : Pat<(f16    (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP16, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP16]>;
-def : Pat<(f8_143 (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP8_143, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
-def : Pat<(f8_152 (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP8_152, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
+def : Pat<(f32    (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP32, SwitchVal.RM_RHNE),  (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>;
+def : Pat<(bf16   (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_BF16, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[BF16]>;
+def : Pat<(f16    (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP16, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP16, Gen3Plus]>;
+// Gaudi B converts INT32 to f16 through f32, as Habana's compiler does.
+def : Pat<(f16    (sint_to_fp i32:$src)), (CONVERTssp (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP32, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)),
+                                                      OpType.FP32, !or(SwitchVal.TO_FP16, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP16, Gen2B]>;
+def : Pat<(f8_143 (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP8_143, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
+def : Pat<(f8_152 (sint_to_fp i32:$src)), (CONVERTssp $src, OpType.INT32, !or(SwitchVal.TO_FP8_152, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
 def : Pat<(f32    (sint_to_fp i16:$src)), (CONVERTssp $src, OpType.INT16, !or(SwitchVal.TO_FP32, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>;
 def : Pat<(bf16   (sint_to_fp i16:$src)), (CONVERTssp $src, OpType.INT16, !or(SwitchVal.TO_BF16, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[BF16]>;
 def : Pat<(f16    (sint_to_fp i16:$src)), (CONVERTssp $src, OpType.INT16, !or(SwitchVal.TO_FP16, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP16]>;
@@ -3554,20 +3557,19 @@ def : Pat<(f16    (sint_to_fp i8:$src)),  (CONVERTssp $src, OpType.INT8,  !or(Sw
 def : Pat<(f8_143 (sint_to_fp i8:$src)),  (CONVERTssp $src, OpType.INT8,  !or(SwitchVal.TO_FP8_143, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
 def : Pat<(f8_152 (sint_to_fp i8:$src)),  (CONVERTssp $src, OpType.INT8,  !or(SwitchVal.TO_FP8_152, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
 
-// There are no conversions from UINT32 to any other types on all architectures
-// prior to Gen4, so define for them a kludge that works only for lower half of
-// unsigned type value range. Full-fledged conversions are available only for Gen4+.
+// UINT32 to f32 and f16 convert natively from Gen3 on; Gaudi lowers them in
+// TPCTargetLowering::lowerCONVERTUNSIGNED, as Habana's compiler does. UINT32 to
+// bf16 converts natively wherever bf16 exists (Habana's compiler uses it on
+// Gaudi too). Goya keeps a kludge that works only for the lower half of the
+// unsigned range (before, Gaudi and Greco used it as well, and values from
+// 2^31 up lost their top bit).
 def : Pat<(f32 (uint_to_fp i32:$src)),  (CONVERTssp (ANDsip i32:$src, (i32 0x7fffffff), OpType.INT32, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)),
-                                                    OpType.INT32, !or(SwitchVal.TO_FP32, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[PriorGen4]>;
-def : Pat<(bf16 (uint_to_fp i32:$src)), (CONVERTssp (ANDsip i32:$src, (i32 0x7fffffff), OpType.INT32, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)),
-                                                    OpType.INT32, !or(SwitchVal.TO_BF16, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[BF16, PriorGen4]>;
-def : Pat<(f16 (uint_to_fp i32:$src)),  (CONVERTssp (ANDsip i32:$src, (i32 0x7fffffff), OpType.INT32, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)),
-                                                    OpType.INT32, !or(SwitchVal.TO_FP16, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP16, PriorGen4]>;
-def : Pat<(f32    (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP32,    SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[Gen4Plus]>;
-def : Pat<(bf16   (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_BF16,    SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[Gen4Plus]>;
-def : Pat<(f16    (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP16,    SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[Gen4Plus]>;
-def : Pat<(f8_143 (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP8_143, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
-def : Pat<(f8_152 (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP8_152, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
+                                                    OpType.INT32, !or(SwitchVal.TO_FP32, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[Gen1]>;
+def : Pat<(f32    (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP32,    SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[Gen3Plus]>;
+def : Pat<(bf16   (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_BF16,    SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[BF16]>;
+def : Pat<(f16    (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP16,    SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP16, Gen3Plus]>;
+def : Pat<(f8_143 (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP8_143, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
+def : Pat<(f8_152 (uint_to_fp i32:$src)), (CONVERTssp $src, OpType.UINT32, !or(SwitchVal.TO_FP8_152, SwitchVal.RM_RHNE), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[FP8]>;
 // Short unsigned integer types may be promoted to longer signed types.
 def : Pat<(f32    (uint_to_fp i16:$src)), (CONVERTssp (ANDsip SRF:$src, (i32 0x0ffff), OpType.INT32, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)),
                                                       OpType.INT32, !or(SwitchVal.TO_FP32, SwitchVal.RM_DEFAULT), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))>, Requires<[PriorGen4]>;

@@ -452,6 +452,9 @@ static SDValue helperExtractSubRegSDValue(unsigned subReg, const SDLoc &DL,
     setOperationAction(ISD::SINT_TO_FP, VT, Custom);
     setOperationAction(ISD::UINT_TO_FP, VT, Custom);
   }
+  // Gaudi has no scalar UINT32 to f32 conversion: see lowerCONVERTUNSIGNED.
+  // (Custom for every subtarget: the features are not parsed yet here.)
+  setOperationAction(ISD::UINT_TO_FP, MVT::i32, Custom);
 
   // TPC doesn't have sext_inreg, replace them with shl/sra
   setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i16, Expand);
@@ -10307,6 +10310,41 @@ SDValue TPCTargetLowering::lowerCONVERTSIGNED(SDValue Op,
 SDValue TPCTargetLowering::lowerCONVERTUNSIGNED(SDValue Op,
                                                 SelectionDAG &DAG) const {
   SDLoc DL(Op);
+
+  // Scalar u32. On Gaudi to f32 (and to f16 through f32), as Habana's
+  // compiler does it: x > INT32_MAX ? f32(x >> 1) * 2 : f32(x), both
+  // conversions rounding to nearest even (so a tie decided by the dropped bit
+  // rounds as in Habana's compiler, not correctly). Otherwise the native
+  // conversion.
+  if (Op.getOpcode() == ISD::UINT_TO_FP &&
+      Op.getOperand(0).getValueType() == MVT::i32) {
+    const EVT VT = Op.getValueType();
+    if ((VT != MVT::f32 && VT != MVT::f16) ||
+        !(Subtarget->hasGaudiISA() || Subtarget->hasGaudiBISA()))
+      return Op;
+    SDValue X = Op.getOperand(0);
+    EVT CCVT = getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(),
+                                  MVT::i32);
+    SDValue Big = DAG.getSetCC(DL, CCVT, X,
+                               DAG.getConstant(0x7fffffff, DL, MVT::i32),
+                               ISD::SETUGT);
+    SDValue Half = DAG.getNode(ISD::SRL, DL, MVT::i32, X,
+                               DAG.getConstant(1, DL, MVT::i32));
+    SDValue FBig = DAG.getNode(ISD::FMUL, DL, MVT::f32,
+                               DAG.getNode(ISD::SINT_TO_FP, DL, MVT::f32, Half),
+                               DAG.getConstantFP(2.0, DL, MVT::f32));
+    SDValue FSmall = DAG.getNode(ISD::SINT_TO_FP, DL, MVT::f32, X);
+    SDValue F32 = DAG.getSelect(DL, MVT::f32, Big, FBig, FSmall);
+    if (VT == MVT::f32)
+      return F32;
+    // An explicit convert: a generic FP_ROUND would fold into a store.
+    SDValue Ops[] = {
+        F32, DAG.getTargetConstant(TPCII::OpType::FP32, DL, MVT::i8),
+        DAG.getTargetConstant(TPCII::SW_TO_FP16 | TPCII::SW_RHNE, DL, MVT::i32),
+        DAG.getUNDEF(VT), DAG.getRegister(TPC::SPRF_TRUE, MVT::i1),
+        DAG.getTargetConstant(0, DL, MVT::i1)};
+    return SDValue(DAG.getMachineNode(TPC::CONVERTssp, DL, VT, Ops), 0);
+  }
   unsigned int NumOp = Op.getNumOperands();
   unsigned int InputSwitch = TPCII::SW_RHNE;
 
