@@ -39,6 +39,9 @@ constexpr unsigned TPCMetadataVersion = 20;
 
 constexpr const char TPCMarchName[] = "march";
 
+// Size of the binary .tpc_metadata section.
+constexpr unsigned TPCMetadataSectionSize = 262;
+
 struct TPCMetadataSection {
   uint32_t    version = TPCMetadataVersion;
   bool        specialFunctionUsed = false;

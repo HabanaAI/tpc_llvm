@@ -815,6 +815,16 @@ void llvm::calculateMCPU(const ObjectFile *ObjFile) {
   if (!SectionNameOrError)
     consumeError(SectionNameOrError.takeError());
 
+  // A section of another size cannot be decoded (the deserializer asserted);
+  // treat it as missing.
+  if (MetadataSection->getSize() != TPCMetadataSectionSize) {
+    reportWarning(formatv("{0} section has {1} bytes, expected {2}.",
+                          BinaryTPCMetadataSectionName,
+                          MetadataSection->getSize(), TPCMetadataSectionSize),
+                  ObjFile->getFileName());
+    return;
+  }
+
   TPCMetadataSection Metadata;
   if (*SectionNameOrError == BinaryTPCMetadataSectionName)
     Metadata = getMetadataFromBinarySection(*MetadataSection);
@@ -847,7 +857,10 @@ void llvm::calculateMCPU(const ObjectFile *ObjFile) {
       TpcArch = Doron1;
       break;
     default:
-      llvm_unreachable("Unhandled tpc arch");
+      reportWarning(formatv("Unknown architecture {0} in {1} section.",
+                            (unsigned)Metadata.march,
+                            BinaryTPCMetadataSectionName),
+                    ObjFile->getFileName());
     }
   }
 }
@@ -890,6 +903,13 @@ void llvm::printTPCMetadataFromBinary(const SectionRef& Section) {
   assert(SectionNameOrError &&
          *SectionNameOrError == BinaryTPCMetadataSectionName);
 
+  if (Section.getSize() != TPCMetadataSectionSize) {
+    reportWarning(formatv("{0} section has {1} bytes, expected {2}.",
+                          BinaryTPCMetadataSectionName, Section.getSize(),
+                          TPCMetadataSectionSize),
+                  Section.getObject()->getFileName());
+    return;
+  }
   TPCMetadataSection Header = getMetadataFromBinarySection(Section);
 
   outs() << '\n';

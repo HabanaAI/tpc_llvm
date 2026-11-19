@@ -19,7 +19,6 @@
 
 using namespace llvm;
 
-static constexpr unsigned TPCMetadataSectionSize = 262;
 static constexpr unsigned TPCLastMarch = 6; // Doron1
 
 template <typename FieldT>

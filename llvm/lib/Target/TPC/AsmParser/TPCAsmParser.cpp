@@ -1263,6 +1263,7 @@ private:
   void initBundle(SMLoc Loc);
   void outputBundle(MCStreamer &Out, SMLoc IDLoc, bool UseStreamer);
   bool checkLongImmediates(SMLoc Loc);
+  void skipRegisterPercent();
 
   bool parseTPCMetadata();
   bool parseTPCMetadataArrayField(std::bitset<TPCNumTensors>& SetIndexes,
@@ -1314,6 +1315,18 @@ bool TPCAsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc, SMLoc &EndLoc
   return Error(StartLoc, "invalid register name", SMRange(StartLoc, EndLoc));
 }
 
+/// The compiler prints registers with a '%' prefix (%S1, !%SP1). Skip it
+/// before a register name, so its assembly output can be read back.
+void TPCAsmParser::skipRegisterPercent() {
+  if (!Lexer.is(AsmToken::Percent))
+    return;
+  const AsmToken Next = Lexer.peekTok();
+  if (Next.is(AsmToken::Identifier) &&
+      (MatchRegisterName(Next.getString()) ||
+       MatchRegisterName(Next.getString().lower())))
+    Lexer.Lex();
+}
+
 ParseStatus TPCAsmParser::tryParseRegister(MCRegister &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) {
   MCAsmParser &Parser = getParser();
   const AsmToken &Tok = Parser.getTok();
@@ -1358,6 +1371,7 @@ ParseStatus TPCAsmParser::parsePredicate(OperandVector &Operands) {
     Inversion = true;
     Parser.Lex();
   }
+  skipRegisterPercent();
 
   // If '!' is encountered, it must be a predicate, otherwise it is an error.
   ParseStatus FailResult = Inversion ? ParseStatus::Failure
@@ -1788,6 +1802,7 @@ static StringRef getSwitchForIntegerOperand(OperandVector &Operands, StringRef M
 }
 
 ParseStatus TPCAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
+  skipRegisterPercent();
   const AsmToken &Tok = Lexer.getTok();
   SMLoc StartLoc = Tok.getLoc();
   SMLoc EndLoc = Tok.getEndLoc();
@@ -1829,6 +1844,7 @@ ParseStatus TPCAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemon
   // !SP1
   if (Tok.is(AsmToken::Exclaim)) {
     consumeToken();
+    skipRegisterPercent();
     MCRegister RegNo;
     if (!parseRegister(RegNo, StartLoc, EndLoc)) {
       PredicateKind PredKind = getPredicateKind(RegNo);
@@ -2179,6 +2195,10 @@ bool TPCAsmParser::parseInstruction(ParseInstructionInfo &Info,
   // Split bare mnemonic and switch for same instructions
   if (Mnemonic.equals_insensitive("mov_group"))
     Mnemonic = BareMnemonic = "mov_g";
+  // The compiler prints MOV from the lane id and LFSR registers as READ (its
+  // isCodeGenOnly instructions); the disassembler prints MOV.
+  else if (Mnemonic.equals_insensitive("read"))
+    Mnemonic = BareMnemonic = "mov";
   else if (Mnemonic.starts_with_insensitive("mov_dual_group"))
     Mnemonic = BareMnemonic = "mov_dg";
   else if (Mnemonic.starts_with_insensitive("mov_dg"))
@@ -2455,6 +2475,15 @@ bool TPCAsmParser::ParseDirective(AsmToken DirectiveID) {
 
     Lexer.Lex();
     ParseResult = parseTPCMetadata();
+  } else if (DirectiveID.getString() == ".section" &&
+             SectionNameToken.getString() == ".tpc_compiler") {
+    // The compiler marks the section "a", the assembler (cc1as, which writes
+    // its own command line there first) "aw"; the generic parser rejected the
+    // compiler's directive. Continue in the existing section.
+    Lexer.Lex();
+    getStreamer().switchSection(getContext().getELFSection(
+        ".tpc_compiler", ELF::SHT_PROGBITS, ELF::SHF_WRITE | ELF::SHF_ALLOC));
+    ParseResult = true;
   } else if (SectionNameToken.getString().
              equals_insensitive(IndexMapSectionName)) {
     if (IndexMap) {
@@ -3178,8 +3207,18 @@ bool TPCAsmParser::parseTPCMetadata() {
 
     const TPCMetadataFieldInfo *CurrentFieldInfo =
         getTPCMetadataFieldInfo(Tok.getString());
-    if (!CurrentFieldInfo)
+    if (!CurrentFieldInfo) {
+      // No fields: the metadata is given as data, as the compiler prints it
+      // (.asciz bytes). Put that data in the section as it is. Before, a
+      // default header was written and the data went to the previous section.
+      if (SetField.empty() && MaskSetIndexes.empty()) {
+        TPCHeader.reset();
+        getStreamer().switchSection(getContext().getELFSection(
+            BinaryTPCMetadataSectionName, ELF::SHT_PROGBITS,
+            ELF::SHF_WRITE | ELF::SHF_ALLOC));
+      }
       break;  // Possible, if it is start of an assembler program
+    }
     if (CurrentFieldInfo->isArray()) {
       if (!parseTPCMetadataArrayField(MaskSetIndexes[CurrentFieldInfo],
                                       *CurrentFieldInfo))

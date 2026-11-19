@@ -326,8 +326,23 @@ void TPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   TPCII::setInstrInfo(&MII);
   
   if (MI->getOpcode() == TPC::BUNDLE) {
-    if (getFormat() == InstructionPerLine ||
-        getFormat() == InstructionPerLineNoNops) {
+    if (getFormat() == InstructionPerLine) {
+      // All four slots in slot order (load, scalar, vector, store), which is
+      // how the parser reads a bundle in braces, with a NOP for each slot a
+      // compressed bundle does not have.
+      MCInst *Sorted[4] = {nullptr, nullptr, nullptr, nullptr};
+      getSortedInstrsFromBundle(MI, Sorted, MII);
+      OS << "{\n";
+      for (const MCInst *Slot : Sorted) {
+        FirstOperandPrinded = false;
+        if (Slot)
+          printInstruction(Slot, Address, OS);
+        else
+          OS << "\tnop";
+        OS << "\n";
+      }
+      OS << "}";
+    } else if (getFormat() == InstructionPerLineNoNops) {
       int icount = 0; // how many instrs in the bundle are going to be really printed
       for (auto &I : TPCMCInstrInfo::bundleInstructions(*MI)) {
         MCInst &Bundle_MI = const_cast<MCInst &>(*I.getInst());
@@ -364,6 +379,10 @@ void TPCInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         if (array[i]) {
           FirstOperandPrinded = false;
           printInstruction(array[i], Address, OS);
+        } else if (getFormat() == TpcAsmParseCompatible) {
+          // A compressed bundle has two of the slots; the parser needs a NOP
+          // in the others.
+          OS << "\tnop";
         } else {
           OS << "\t";
         }
