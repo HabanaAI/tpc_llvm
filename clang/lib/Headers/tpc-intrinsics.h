@@ -5151,9 +5151,14 @@ half128 v_f16_ld_tnsr_cnvrt_partial_direct_vb(uint32_t addr1, uint32_t addr2, in
 float64 v_f32_lookup(uint64 a, int fid, int switches, float64 income, bool predicate=1, bool polarity=0);
 int64 v_i32_lookup(uint64 a, int fid, int switches, int64 income, bool predicate=1, bool polarity=0);
 uint64 v_u32_lookup(uint64 a, int fid, int switches, uint64 income, bool predicate=1, bool polarity=0);
+// 16- and 8-bit LOOKUP (SW_BV16_*, SW_BV8_*) exist only on Goya; from Gaudi
+// on the 16-bit lookups are LOOKUP_1C/2C. Habana's compiler does not declare
+// these three for Gaudi or later.
+#if defined(__goya__)
 short128 v_i16_lookup(ushort128 a, int fid, int switches, short128 income, bool predicate=1, bool polarity=0);
 ushort128 v_u16_lookup(ushort128 a, int fid, int switches, ushort128 income, bool predicate=1, bool polarity=0);
 char256 v_i8_lookup(uchar256 a, int fid, int switches, char256 income, bool predicate=1, bool polarity=0);
+#endif
 #if defined(__gaudi_plus__)
 bfloat128 v_bf16_lookup(uint64 a, int fid, int switches, bfloat128 income, bool predicate=1, bool polarity=0);
 #endif
