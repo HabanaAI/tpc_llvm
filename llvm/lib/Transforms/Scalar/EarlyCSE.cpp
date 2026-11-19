@@ -477,6 +477,15 @@ struct CallValue {
         // accessing kind more precisely.
         CI->getFunction()->isPresplitCoroutine())
       return false;
+#ifdef LLVM_TPC_COMPILER
+    // TPC: two identical write-only calls are taken for one (new in LLVM 22,
+    // de6b8cdc4112), but a TPC store is not always idempotent: two identical
+    // MMIO writes by st_l are two writes. Keep them all, like LLVM 12 and
+    // Habana's compiler.
+    if (!CI->onlyReadsMemory() &&
+        CI->getModule()->getTargetTriple().getArch() == Triple::tpc)
+      return false;
+#endif
     return true;
   }
 };
