@@ -21,7 +21,10 @@
 #include "MCTargetDesc/TPCMCInstrInfo.h"
 #include "llvm/InitializePasses.h"
 #include <optional>
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -195,6 +198,56 @@ makeLinearIVNextValDefToStepOpIxMapping(const MachineLoop &ML,
   return RV;
 }
 
+/// Check if the unroller can scale an immediate step of an add of this type:
+/// an integer, or f32 (multiplied in f32).
+static bool isSupportedIVType(TPCII::OpType Type) {
+  switch (Type) {
+  case TPCII::OpType::FP32:
+  case TPCII::OpType::INT32:
+  case TPCII::OpType::UINT32:
+  case TPCII::OpType::INT16:
+  case TPCII::OpType::UINT16:
+  case TPCII::OpType::INT8:
+  case TPCII::OpType::UINT8:
+  case TPCII::OpType::INT4:
+  case TPCII::OpType::UINT4:
+  case TPCII::OpType::INT64:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Return the immediate step \p Step of the linear induction variable
+/// \p IVDef times \p N. An f32 step is multiplied in f32, as Habana's compiler
+/// does; multiplying its bits as an integer gave a wrong step.
+static int64_t scaleIVStep(const MachineInstr &IVDef, int64_t Step, unsigned N) {
+  if (getOpType(IVDef) != TPCII::OpType::FP32)
+    return Step * N;
+  APFloat F(APFloat::IEEEsingle(), APInt(32, static_cast<uint32_t>(Step)));
+  F.multiply(APFloat(APFloat::IEEEsingle(), N), APFloat::rmNearestTiesToEven);
+  // f32 immediates are kept sign-extended from 32 bits.
+  return static_cast<int32_t>(F.bitcastToAPInt().getZExtValue());
+}
+
+static void printLoc(const DILocation &Loc) {
+  errs() << Loc.getFilename() << ":" << Loc.getLine() << ":" << Loc.getColumn();
+}
+
+/// Report that a loop pragma is not applied, as Habana's compiler does:
+/// "<file>:<line>:<col>: warning: <What>" (with debug info), then the reason.
+static void warnNotApplied(const MDNode &LoopMD, const Twine &What,
+                           const Twine &Why) {
+  for (const MDOperand &Op : drop_begin(LoopMD.operands())) {
+    if (const auto *Loc = dyn_cast_or_null<DILocation>(Op.get())) {
+      printLoc(*Loc);
+      errs() << ": ";
+      break;
+    }
+  }
+  errs() << "warning: " << What << "\n" << Why << "\n";
+}
+
 class TPCPipeliner  : public MachineFunctionPass {
   MachineLoopInfo            *MLI;
   MachineRegisterInfo        *MRI;
@@ -282,6 +335,9 @@ private:
   void correctIVs(int Counter);
   void correctExit();
   bool checkForProhibitingInstructions();
+  MachineInstr *findUnsupportedIV(const MLLinearIVsContainer &IVs) const;
+  bool isIndexSetEachIteration(const MachineInstr &Phi) const;
+  bool dependsOnInLoop(const MachineOperand &MO, Register Reg) const;
 
   /// Add epilogue loop after the source loop to be unrolled.
   ///
@@ -1147,19 +1203,6 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
 
   PrologInserter = --Prolog->end();
 
-  // Avoid unrolling non-single MBB loops. Loops with branches are not supported
-  // by unrolling algorithm. Theoretically loop might consist of a chain of MBBs
-  // without terminators, but the case should not appear, such MBBs should be
-  // squashed before this pass.
-  if (CurLoop->getBlocks().size() >= 2)
-    return false;
-
-  // Avoid unrolling if step is not an immediate value. It is hard to make
-  // gain from unrolling in this case.
-  const MachineOperand &Step = LoopInst->getOperand(2);
-  if (!Step.isImm())
-    return false;
-
   // Get user-specified unroll count from pragma.
   const MDNode *LoopMD = getMachineLoopMDNode(EndInstr);
 
@@ -1169,11 +1212,59 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   if (UserUnrollCount < 2)
     return false;
 
+  // Software pipelining is not supported, as in Habana's compiler, which says
+  // so: its output used values defined in the loop on the path that skips the
+  // loop, and LiveVariables asserted. The loop is only unrolled.
+  llvm::scope_exit WarnPipelining([LoopMD] {
+    if (getPipelineFromMetadata(LoopMD))
+      warnNotApplied(*LoopMD, "pipelining is not applied to the loop.",
+                     "Pipelining is not supported now");
+  });
+  const std::string NotApplied =
+      ("machine_unroll(" + Twine(UserUnrollCount) + ") is not applied to the loop")
+          .str();
+
+  // Avoid unrolling non-single MBB loops. Loops with branches are not supported
+  // by unrolling algorithm. Theoretically loop might consist of a chain of MBBs
+  // without terminators, but the case should not appear, such MBBs should be
+  // squashed before this pass.
+  if (CurLoop->getBlocks().size() >= 2) {
+    warnNotApplied(*LoopMD, NotApplied,
+                   "Loop contains unsupported instructions for machine unroll");
+    return false;
+  }
+
+  // Avoid unrolling if step is not an immediate value. It is hard to make
+  // gain from unrolling in this case.
+  const MachineOperand &Step = LoopInst->getOperand(2);
+  if (!Step.isImm()) {
+    warnNotApplied(*LoopMD, NotApplied,
+                   "Step is not constant. Runtime step is not supported.");
+    return false;
+  }
+
   if (!calcLoopForm())
     return false;
 
-  if (checkForProhibitingInstructions())
+  if (checkForProhibitingInstructions()) {
+    warnNotApplied(*LoopMD, NotApplied,
+                   "Loop contains unsupported instructions for machine unroll");
     return false;
+  }
+
+  if (const MachineInstr *Phi = findUnsupportedIV(findLinearIVs(*CurLoop, *MRI))) {
+    warnNotApplied(*LoopMD, NotApplied,
+                   "Loop contains unsupported induction variables");
+    const MachineOperand *Next = getPhiValueForMBB(*Phi, *Latch);
+    if (Next && Next->isReg() && Next->getReg().isVirtual())
+      if (const MachineInstr *NextMI = MRI->getVRegDef(Next->getReg()))
+        if (const DILocation *Loc = NextMI->getDebugLoc().get()) {
+          errs() << "  unsupported iv at: ";
+          printLoc(*Loc);
+          errs() << "\n";
+        }
+    return false;
+  }
 
   // Report warning on dependencies which might affect unrolling result.
   const bool IgnoreCheckAgainstStoresToSameTensorId = true;
@@ -1222,8 +1313,6 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
 
   const unsigned UnrollCount = UserUnrollCount;
 
-  bool Pipelined = LoopMD && getPipelineFromMetadata(LoopMD);
-
   if (isIterationsCountKnownAtCompileTime(*LoopInst)) {
     const std::optional<uint64_t> IterationsCount =
         getCompileTimeIterationsCount(*LoopInst);
@@ -1235,10 +1324,6 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
     // Avoid unrolling loop if it has no sense.
     if (IterationsCount.value() < UnrollCount)
       return false;
-
-    // Avoid pipelining if it has no sense.
-    if (IterationsCount.value() < UnrollCount * 2)
-      Pipelined = false;
   }
 
   // Avoid unrolling if unrolled step does not fit into i32 type.
@@ -1255,10 +1340,6 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
       findOptionMDForLoopMD(*LoopMD, "llvm.loop.unroll.unaligned_trip_count");
 
   if (IsEpilogueRequired) {
-    // Pipelining does not work properly if loop epilogue is generated, so
-    // pipelining must be disabled if pass is going to generate epilogue.
-    Pipelined = false;
-
     generateEpilogueLoop(UnrollCount, LoopMD && hasLoopTakenMD(*LoopMD));
 
     LLVM_DEBUG({
@@ -1269,9 +1350,83 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
     LLVM_DEBUG(dbgs() << "Epilogue loop generation is not required.\n");
   }
 
-  unrollAndAlign(UnrollCount, Pipelined);
+  unrollAndAlign(UnrollCount, /*DoPipelining=*/false);
 
   return true;
+}
+
+/// Find a value carried from one iteration to the next that the unroller
+/// cannot split between the copies of the loop body, or return null.
+///
+/// Each copy gets its own version of every such value. That is right for a
+/// linear induction variable with an immediate integer or f32 step (copy i
+/// starts at start + i * step and steps by UnrollCount * step), and for an
+/// index register whose lanes are set each iteration from values that do not
+/// depend on it. For anything else (an accumulator, a value kept from the
+/// previous iteration) each copy would see only every UnrollCount-th
+/// iteration, and the results were wrong. Habana's compiler does not unroll
+/// such loops either.
+MachineInstr *
+TPCPipeliner::findUnsupportedIV(const MLLinearIVsContainer &IVs) const {
+  for (MachineInstr &Phi : Header->phis()) {
+    const auto *IV = find_if(IVs, [&](const MLoopLinearIV &I) {
+      return I.isCustom() && &I.getCurrDefMI() == &Phi;
+    });
+    if (IV != IVs.end()) {
+      if (!IV->getStepOp().isImm() ||
+          !isSupportedIVType(getOpType(IV->getNextDefMI())))
+        return &Phi;
+    } else if (!isIndexSetEachIteration(Phi)) {
+      return &Phi;
+    }
+  }
+  return nullptr;
+}
+
+/// Check if \p Phi is an index register that each iteration updates with
+/// unpredicated set_indx from values that do not depend on it, so the lanes
+/// set are new in each iteration and the others keep their start value.
+bool TPCPipeliner::isIndexSetEachIteration(const MachineInstr &Phi) const {
+  const Register PhiReg = Phi.getOperand(0).getReg();
+  const MachineOperand *Next = getPhiValueForMBB(Phi, *Latch);
+  if (!Next || !Next->isReg())
+    return false;
+  for (Register Reg = Next->getReg(); Reg != PhiReg;) {
+    if (!Reg.isVirtual())
+      return false;
+    const MachineInstr *MI = MRI->getVRegDef(Reg);
+    if (!MI || !CurLoop->contains(MI) || !isSET_INDX(MI->getOpcode()) ||
+        TII->isPredicated(*MI) || !MI->getOperand(1).isReg() ||
+        dependsOnInLoop(MI->getOperand(2), PhiReg))
+      return false;
+    Reg = MI->getOperand(1).getReg();
+  }
+  return true;
+}
+
+/// Check if the value of \p MO is computed in the loop from \p Reg (without
+/// going through another phi).
+bool TPCPipeliner::dependsOnInLoop(const MachineOperand &MO,
+                                   Register Reg) const {
+  if (!MO.isReg())
+    return false;
+  SmallVector<Register, 8> Work = {MO.getReg()};
+  SmallPtrSet<const MachineInstr *, 16> Seen;
+  while (!Work.empty()) {
+    const Register R = Work.pop_back_val();
+    if (R == Reg)
+      return true;
+    if (!R.isVirtual())
+      continue;
+    const MachineInstr *Def = MRI->getVRegDef(R);
+    if (!Def || !CurLoop->contains(Def) || Def->isPHI() ||
+        !Seen.insert(Def).second)
+      continue;
+    for (const MachineOperand &Op : Def->uses())
+      if (Op.isReg())
+        Work.push_back(Op.getReg());
+  }
+  return false;
 }
 
 void TPCPipeliner::createPrologCounters(unsigned UnrollCount, MachineBasicBlock* PrologBlock) {
@@ -1344,7 +1499,8 @@ void TPCPipeliner::correctIVs(int UnrollCount) {
     const unsigned OpNum = IV.second;
 
     const Register NextItValDefReg = MI->getOperand(0).getReg();
-    const uint64_t NewStepValue = MI->getOperand(OpNum).getImm() * UnrollCount;
+    const int64_t NewStepValue =
+        scaleIVStep(*MI, MI->getOperand(OpNum).getImm(), UnrollCount);
 
     const SmallVector<MachineInstr *, 8> NextItValUses =
         collectUses(NextItValDefReg, *MRI);
@@ -2290,10 +2446,18 @@ void TPCPipeliner::patchPhiStartValue(MachineInstr &Phi, int UnrollCount) {
       continue;
     }
 
-    RegMap RM = {{PhiDef, FinalReg}};
+    // A linear induction variable starts i steps further, at start + i * step
+    // (as in Habana's compiler); the others apply their path to the previous
+    // copy's start. For f32, adding the step i times rounds differently.
+    const bool IsLinearIV = Path.size() == 1 && LinearIVs.count(Path.front());
+    RegMap RM = {{PhiDef, IsLinearIV ? FirstReg : FinalReg}};
 
     for (MachineInstr* MI : Path) {
       MachineInstr* Copy = Prolog->getParent()->CloneMachineInstr(MI);
+      if (IsLinearIV) {
+        MachineOperand &StepOp = Copy->getOperand(LinearIVs[MI]);
+        StepOp.setImm(scaleIVStep(*MI, StepOp.getImm(), i));
+      }
 
       for (MachineOperand& MO : Copy->defs()) {
         unsigned v_reg  = MRI->createVirtualRegister(MRI->getRegClass(MO.getReg()));
