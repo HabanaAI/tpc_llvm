@@ -129,6 +129,8 @@ public:
 FunctionPass *createTPCHardwareLoops();
 FunctionPass *createTPCOptimizeHWLoopsGuards();
 void initializeTPCOptimizeHWLoopsGuardsPass(PassRegistry &);
+FunctionPass *createTPCMulAddCombine();
+void initializeTPCMulAddCombinePass(PassRegistry &);
 FunctionPass *createTPCPipeliner();
 FunctionPass *createTPCPacketizer();
 FunctionPass *createTPCExpandHWRegCopies();

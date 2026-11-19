@@ -43,6 +43,7 @@ extern "C" void LLVMInitializeTPCTarget() {
   initializeTPCPredicateOptimizerPass(Registry);
   initializeTPCIncMergerPass(Registry);
   initializeTPCOptimizeHWLoopsGuardsPass(Registry);
+  initializeTPCMulAddCombinePass(Registry);
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {
@@ -443,6 +444,9 @@ bool TPCPassConfig::addInstSelector() {
 }
 
 bool TPCPassConfig::addILPOpts() {
+  // Before machine LICM and CSE, which then share and hoist the zero addends.
+  if (getOptLevel() >= CodeGenOptLevel::Default)
+    addPass(createTPCMulAddCombine());
   addPass(&MachineCombinerID);
   return true;
 }
