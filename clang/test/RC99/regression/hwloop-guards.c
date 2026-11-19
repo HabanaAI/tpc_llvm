@@ -5,14 +5,15 @@
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=3 %s -o - | FileCheck %s --check-prefix=IF
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=4 %s -o - | FileCheck %s --check-prefix=STORE
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=5 %s -o - | FileCheck %s --check-prefix=LONG
-// RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=6 %s -o - | FileCheck %s --check-prefix=LOAD
+// RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=6 -mllvm -tpc-machine-unroll-count=0 %s -o - | FileCheck %s --check-prefix=LOAD
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=7 %s -o - | FileCheck %s --check-prefix=LFSR
 
 // A LOOP instruction checks its condition before the first iteration, so the
 // jump that skips a rotated loop when it runs zero times is not needed.
 // TPCOptimizeHWLoopsGuards removes it, as Habana's compiler does, when the
 // code it would skip has no side effects. A jump on another condition becomes
-// the LOOP's predicate when it skips at most 10 instructions.
+// the LOOP's predicate when it skips at most 10 instructions. (P == 6 turns
+// off the automatic unrolling, which would split its inner loop in two.)
 
 void main(tensor in, tensor out, int n, int k, int a, int b) {
   int5 c = {0, 0, 0, 0, 0};

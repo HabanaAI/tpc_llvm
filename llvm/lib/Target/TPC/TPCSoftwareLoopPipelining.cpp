@@ -25,6 +25,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -61,6 +62,23 @@ using namespace llvm;
 static cl::opt<bool>
     EnablePipelining("pipeline-loops", cl::Hidden,
                      cl::desc("Enable software pipelining"), cl::init(true));
+
+// Unrolling without the pragma; see TPCPipeliner::autoUnrollCount.
+static cl::opt<unsigned> AutoUnrollCount(
+    "tpc-machine-unroll-count", cl::Hidden, cl::init(4),
+    cl::desc("Unroll a hardware loop that has no machine_unroll pragma up to "
+             "this many times where that is safe (0 or 1: only with the "
+             "pragma)"));
+
+static cl::opt<unsigned> AutoUnrollMinGain(
+    "tpc-machine-unroll-min-gain", cl::Hidden, cl::init(4),
+    cl::desc("Fewest cycles per iteration that unrolling without the pragma "
+             "must save, by the latency estimate, to be done"));
+
+static cl::opt<unsigned> AutoUnrollMaxSize(
+    "tpc-machine-unroll-max-size", cl::Hidden, cl::init(160),
+    cl::desc("Most instructions a loop body unrolled without the pragma may "
+             "have"));
 
 namespace llvm {
 
@@ -336,6 +354,8 @@ private:
   void correctExit();
   bool checkForProhibitingInstructions();
   MachineInstr *findUnsupportedIV(const MLLinearIVsContainer &IVs) const;
+  unsigned autoUnrollCount(const MLDAReport &Deps) const;
+  bool dependsOnIndexSpace(const MachineOperand &MO) const;
   bool isIndexSetEachIteration(const MachineInstr &Phi) const;
   bool dependsOnInLoop(const MachineOperand &MO, Register Reg) const;
 
@@ -805,15 +825,26 @@ void TPCPipeliner::generateEpilogueLoop(const unsigned UnrollCount,
   // If there is guarantee that loop is taken and step > 0, it means that Bound
   // >= Start, i.e. MinDistance >= 0. Cheaper remainder calculation algorithm
   // might be used for positive numerators.
-  const MachineOperand MinRestDistanceOp =
-      StepOp().getImm() > 0 && HasLoopTakenGuarantee
-          ? evalRemPosToPosI32(*Prolog, --Prolog->end(), MinDistanceOp,
-                               UnrolledStep, *MRI, *TII)
-          : evalRemPosI32(*Prolog, --Prolog->end(), MinDistanceOp, UnrolledStep,
-                          *MRI, *TII);
-
-  const MachineOperand UnrolledDistanceVal = evalSubI32(
-      *Prolog, --Prolog->end(), MinDistanceOp, MinRestDistanceOp, *MRI, *TII);
+  //
+  // For 'start < bound' counting up by a power of 2, the unrolled distance is
+  // the distance rounded down to a multiple of the unrolled step: one AND,
+  // right for a negative distance too (then neither loop runs).
+  MachineOperand UnrolledDistanceVal = MachineOperand::CreateImm(0);
+  if (StepOp().getImm() > 0 && CmpOp().getImm() == TPCII::LoopLT &&
+      isPowerOf2_32(UnrolledStep)) {
+    UnrolledDistanceVal =
+        evalAndI32(*Prolog, --Prolog->end(), MinDistanceOp,
+                   MachineOperand::CreateImm(-UnrolledStep), *MRI, *TII);
+  } else {
+    const MachineOperand MinRestDistanceOp =
+        StepOp().getImm() > 0 && HasLoopTakenGuarantee
+            ? evalRemPosToPosI32(*Prolog, --Prolog->end(), MinDistanceOp,
+                                 UnrolledStep, *MRI, *TII)
+            : evalRemPosI32(*Prolog, --Prolog->end(), MinDistanceOp,
+                            UnrolledStep, *MRI, *TII);
+    UnrolledDistanceVal = evalSubI32(*Prolog, --Prolog->end(), MinDistanceOp,
+                                     MinRestDistanceOp, *MRI, *TII);
+  }
 
   const MachineOperand UnrolledBoundaryVal = evalAddI32(
       *Prolog, --Prolog->end(), StartOp(), UnrolledDistanceVal, *MRI, *TII);
@@ -1209,14 +1240,22 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   const unsigned UserUnrollCount =
       LoopMD ? getUnrollCountFromMetadata(LoopMD).value_or(0) : 0;
 
-  if (UserUnrollCount < 2)
+  // Without the pragma, the loop is unrolled where that is safe and the
+  // registers fit (autoUnrollCount), with no warnings. A pragma count of 1, or
+  // unrolling disabled for the loop, keeps it as it is.
+  const bool Auto =
+      UserUnrollCount == 0 && AutoUnrollCount >= 2 &&
+      !(LoopMD &&
+        findOptionMDForLoopMD(*LoopMD, "llvm.loop.unroll.disable"));
+
+  if (UserUnrollCount < 2 && !Auto)
     return false;
 
   // Software pipelining is not supported, as in Habana's compiler, which says
   // so: its output used values defined in the loop on the path that skips the
   // loop, and LiveVariables asserted. The loop is only unrolled.
-  llvm::scope_exit WarnPipelining([LoopMD] {
-    if (getPipelineFromMetadata(LoopMD))
+  llvm::scope_exit WarnPipelining([LoopMD, Auto] {
+    if (!Auto && getPipelineFromMetadata(LoopMD))
       warnNotApplied(*LoopMD, "pipelining is not applied to the loop.",
                      "Pipelining is not supported now");
   });
@@ -1229,8 +1268,9 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   // without terminators, but the case should not appear, such MBBs should be
   // squashed before this pass.
   if (CurLoop->getBlocks().size() >= 2) {
-    warnNotApplied(*LoopMD, NotApplied,
-                   "Loop contains unsupported instructions for machine unroll");
+    if (!Auto)
+      warnNotApplied(*LoopMD, NotApplied,
+                     "Loop contains unsupported instructions for machine unroll");
     return false;
   }
 
@@ -1238,8 +1278,9 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   // gain from unrolling in this case.
   const MachineOperand &Step = LoopInst->getOperand(2);
   if (!Step.isImm()) {
-    warnNotApplied(*LoopMD, NotApplied,
-                   "Step is not constant. Runtime step is not supported.");
+    if (!Auto)
+      warnNotApplied(*LoopMD, NotApplied,
+                     "Step is not constant. Runtime step is not supported.");
     return false;
   }
 
@@ -1247,12 +1288,19 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
     return false;
 
   if (checkForProhibitingInstructions()) {
-    warnNotApplied(*LoopMD, NotApplied,
-                   "Loop contains unsupported instructions for machine unroll");
+    if (!Auto)
+      warnNotApplied(*LoopMD, NotApplied,
+                     "Loop contains unsupported instructions for machine unroll");
     return false;
   }
 
-  if (const MachineInstr *Phi = findUnsupportedIV(findLinearIVs(*CurLoop, *MRI))) {
+  // Collect information about linear induction variables. (The dependency
+  // analysis below needs them; it was given none before.)
+  MLLinearIVs = findLinearIVs(*CurLoop, *MRI);
+
+  if (const MachineInstr *Phi = findUnsupportedIV(MLLinearIVs)) {
+    if (Auto)
+      return false;
     warnNotApplied(*LoopMD, NotApplied,
                    "Loop contains unsupported induction variables");
     const MachineOperand *Next = getPhiValueForMBB(*Phi, *Latch);
@@ -1266,15 +1314,18 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
     return false;
   }
 
-  // Report warning on dependencies which might affect unrolling result.
-  const bool IgnoreCheckAgainstStoresToSameTensorId = true;
+  // The unroller puts the copies of each instruction next to each other, so
+  // a later iteration's loads and stores move above an earlier one's. Without
+  // the pragma, that needs the analysis to show there is no dependency; with
+  // it, a possible one is only reported.
   const MLDAReport DepAnalysisReport = runMachineLoopDataDependencyAnalysis(
       *CurLoop, *MRI, CurrMF->getSubtarget<TPCSubtarget>(), *TII, MLLinearIVs,
-      IgnoreCheckAgainstStoresToSameTensorId, UserUnrollCount);
-  if (DepAnalysisReport.HasLoopDependentMemStLd == true ||
-      DepAnalysisReport.HasLoopIndependentMemStLd == true ||
-      DepAnalysisReport.HasLoopDependentMemStSt == true ||
-      DepAnalysisReport.HasLoopIndependentMemStSt == true) {
+      /*IgnoreCheckAgainstStoresToSameTensorId=*/!Auto,
+      Auto ? AutoUnrollCount : UserUnrollCount);
+  if (!Auto && (DepAnalysisReport.HasLoopDependentMemStLd == true ||
+                DepAnalysisReport.HasLoopIndependentMemStLd == true ||
+                DepAnalysisReport.HasLoopDependentMemStSt == true ||
+                DepAnalysisReport.HasLoopIndependentMemStSt == true)) {
     errs()
         << "warning: TPC backend unrolling is requested in loop_unroll pragma, "
            "but compiler has detected memory dependencies which are affected "
@@ -1298,9 +1349,6 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
     }
   }
 
-  // Collect information about linear induction variables.
-  MLLinearIVs = findLinearIVs(*CurLoop, *MRI);
-
   LLVM_DEBUG({
     for (const MLoopLinearIV &IV : MLLinearIVs)
       dbgs() << "Detected linear iv: " << IV.getNextDefMI();
@@ -1311,11 +1359,14 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   LinearIVs =
       makeLinearIVNextValDefToStepOpIxMapping(*CurLoop, *MRI, MLLinearIVs);
 
-  const unsigned UnrollCount = UserUnrollCount;
+  const unsigned UnrollCount =
+      Auto ? autoUnrollCount(DepAnalysisReport) : UserUnrollCount;
+  if (UnrollCount < 2)
+    return false;
 
+  std::optional<uint64_t> IterationsCount;
   if (isIterationsCountKnownAtCompileTime(*LoopInst)) {
-    const std::optional<uint64_t> IterationsCount =
-        getCompileTimeIterationsCount(*LoopInst);
+    IterationsCount = getCompileTimeIterationsCount(*LoopInst);
 
     // Avoid unrolling infinite loops.
     if (!IterationsCount.has_value())
@@ -1335,9 +1386,14 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   // If user manually specified loop_unroll, he guarantees that trip count value
   // is divisible at unrolled step even if trip count value is a run time value.
   // It is the loop_unroll pragma precondition. But if user additionally
-  // specified unaligned_trip_count, then epilogue should be generated.
+  // specified unaligned_trip_count, then epilogue should be generated. Without
+  // the pragma there is no such guarantee: the epilogue is generated unless
+  // the iterations count is known to divide.
   const bool IsEpilogueRequired =
-      findOptionMDForLoopMD(*LoopMD, "llvm.loop.unroll.unaligned_trip_count");
+      Auto ? !IterationsCount || *IterationsCount % UnrollCount != 0
+           : findOptionMDForLoopMD(*LoopMD,
+                                   "llvm.loop.unroll.unaligned_trip_count") !=
+                 nullptr;
 
   if (IsEpilogueRequired) {
     generateEpilogueLoop(UnrollCount, LoopMD && hasLoopTakenMD(*LoopMD));
@@ -1353,6 +1409,235 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
   unrollAndAlign(UnrollCount, /*DoPipelining=*/false);
 
   return true;
+}
+
+/// The unroll count for a loop without the pragma, or 0 to leave it.
+///
+/// The loop must count up with '<' (the form whose epilogue loop is tested),
+/// and the dependency analysis must show that no load or store depends on
+/// another one (not merely fail to find one). The count is the largest power
+/// of 2 up to -tpc-machine-unroll-count for which the unrolled body has at
+/// most -tpc-machine-unroll-max-size instructions and its values fit in the
+/// register files: with the copies of each instruction next to each other,
+/// about invariants + count * (most values of one iteration live at once)
+/// are live, which must stay within 3/4 of the allocatable registers.
+///
+/// Unrolling costs about 14 cycles each time the loop is entered (the
+/// unrolled bound, the epilogue LOOP), so it is for loops that run many
+/// times. A loop over the member's part of the index space (its start or
+/// bound comes from get_index_space_offset or _size) usually runs a few
+/// times, once per index-space point the member got, and is left as it is. A
+/// loop over a tensor dimension or up to a scalar argument is unrolled when
+/// that saves at least -tpc-machine-unroll-min-gain cycles per iteration: an
+/// iteration takes about the longest chain of latencies through the body, as
+/// iterations do not overlap, and Count copies take about
+/// max(chain + Count - 1, Count * busiest slot), as theirs do. A smaller
+/// count is taken when it saves about as much.
+unsigned TPCPipeliner::autoUnrollCount(const MLDAReport &Deps) const {
+  if (LoopInst->getOperand(3).getImm() != TPCII::LoopLT ||
+      LoopInst->getOperand(2).getImm() <= 0)
+    return 0;
+  if (dependsOnIndexSpace(LoopInst->getOperand(0)) ||
+      dependsOnIndexSpace(LoopInst->getOperand(1))) {
+    LLVM_DEBUG(dbgs() << "Auto unroll: loop over the index space\n");
+    return 0;
+  }
+  if (Deps.HasLoopDependentMemStLd != false ||
+      Deps.HasLoopIndependentMemStLd != false ||
+      Deps.HasLoopDependentMemStSt != false ||
+      Deps.HasLoopIndependentMemStSt != false) {
+    LLVM_DEBUG(dbgs() << "Auto unroll: memory dependencies not ruled out\n");
+    return 0;
+  }
+
+  // Register files: vector (VRF, DRF, ARF), scalar (SRF, ZRF), index, and the
+  // two predicate files.
+  enum { Vec, Scalar, Index, VPred, SPred, NumFiles };
+  auto FileOf = [](const TargetRegisterClass *RC) -> int {
+    if (TPC::VRFRegClass.hasSubClassEq(RC) ||
+        TPC::DRFRegClass.hasSubClassEq(RC) ||
+        TPC::ARFRegClass.hasSubClassEq(RC))
+      return Vec;
+    if (TPC::SRFRegClass.hasSubClassEq(RC) ||
+        TPC::ZRFRegClass.hasSubClassEq(RC))
+      return Scalar;
+    if (TPC::IRFRegClass.hasSubClassEq(RC))
+      return Index;
+    if (TPC::VPRFRegClass.hasSubClassEq(RC))
+      return VPred;
+    if (TPC::SPRFRegClass.hasSubClassEq(RC))
+      return SPred;
+    return -1;
+  };
+  const TargetRegisterClass *FileRC[NumFiles] = {
+      &TPC::VRFRegClass, &TPC::SRFRegClass, &TPC::IRFRegClass,
+      &TPC::VPRFRegClass, &TPC::SPRFRegClass};
+  unsigned Limit[NumFiles];
+  for (unsigned F = 0; F < NumFiles; ++F) {
+    unsigned N = 0;
+    for (MCPhysReg R : *FileRC[F])
+      if (!MRI->isReserved(R))
+        ++N;
+    Limit[F] = N * 3 / 4;
+  }
+  auto Weight = [&](Register R) {
+    return TRI->getRegClassWeight(MRI->getRegClass(R)).RegWeight;
+  };
+
+  // Values of one iteration live at once, walking the body backwards from
+  // the values that leave it (to the next iteration or after the loop).
+  unsigned Live[NumFiles] = {}, MaxLive[NumFiles] = {}, Invariant[NumFiles] = {};
+  SmallSet<Register, 32> LiveSet, Invariants;
+  auto Add = [&](Register R) {
+    const int F = FileOf(MRI->getRegClass(R));
+    if (F >= 0 && LiveSet.insert(R).second)
+      Live[F] += Weight(R);
+  };
+  unsigned Size = 0;
+  for (const MachineInstr &MI : *Header) {
+    if (MI.isPHI() || MI.isDebugInstr() || MI.isTerminator())
+      continue;
+    ++Size;
+    for (const MachineOperand &MO : MI.defs()) {
+      if (!MO.isReg() || !MO.getReg().isVirtual())
+        continue;
+      for (const MachineInstr &U : MRI->use_nodbg_instructions(MO.getReg()))
+        if (U.getParent() != Header || U.isPHI()) {
+          Add(MO.getReg());
+          break;
+        }
+    }
+    for (const MachineOperand &MO : MI.uses()) {
+      if (!MO.isReg() || !MO.getReg().isVirtual() || MO.isUndef())
+        continue;
+      const MachineInstr *Def = MRI->getVRegDef(MO.getReg());
+      if (Def && Def->getParent() != Header) {
+        const int F = FileOf(MRI->getRegClass(MO.getReg()));
+        if (F >= 0 && Invariants.insert(MO.getReg()).second)
+          Invariant[F] += Weight(MO.getReg());
+      }
+    }
+  }
+  for (const MachineInstr &MI : reverse(*Header)) {
+    if (MI.isDebugInstr() || MI.isTerminator())
+      continue;
+    for (unsigned F = 0; F < NumFiles; ++F)
+      MaxLive[F] = std::max(MaxLive[F], Live[F]);
+    if (MI.isPHI())
+      continue;
+    for (const MachineOperand &MO : MI.defs())
+      if (MO.isReg() && MO.getReg().isVirtual() && LiveSet.erase(MO.getReg())) {
+        const int F = FileOf(MRI->getRegClass(MO.getReg()));
+        if (F >= 0)
+          Live[F] -= Weight(MO.getReg());
+      }
+    for (const MachineOperand &MO : MI.uses()) {
+      if (!MO.isReg() || !MO.getReg().isVirtual() || MO.isUndef())
+        continue;
+      const MachineInstr *Def = MRI->getVRegDef(MO.getReg());
+      if (Def && Def->getParent() == Header)
+        Add(MO.getReg());
+    }
+  }
+
+  // The latency chain of one iteration and the instructions per slot.
+  DenseMap<const MachineInstr *, unsigned> Issue;
+  unsigned Chain = 0, Slots[4] = {}; // load, scalar, vector, store
+  for (const MachineInstr &MI : *Header) {
+    if (MI.isPHI() || MI.isDebugInstr() || MI.isTerminator() ||
+        MI.isImplicitDef())
+      continue;
+    const bool Real = !MI.isPseudo();
+    unsigned T = 0;
+    for (unsigned I = 0, E = MI.getNumOperands(); I < E; ++I) {
+      const MachineOperand &MO = MI.getOperand(I);
+      if (!MO.isReg() || !MO.isUse() || MO.isUndef() || !MO.getReg().isVirtual())
+        continue;
+      const MachineInstr *Def = MRI->getVRegDef(MO.getReg());
+      auto It = Def ? Issue.find(Def) : Issue.end();
+      if (It == Issue.end())
+        continue; // A phi, or defined outside the loop.
+      // Pseudo instructions (copies, REG_SEQUENCE) pass their inputs on.
+      unsigned Lat = 0;
+      if (Real && !Def->isPseudo()) {
+        const int DefIdx = Def->findRegisterDefOperandIdx(MO.getReg(), TRI);
+        Lat = DefIdx < 0 ? 4
+                         : TII->getOperandLatency(nullptr, *Def, DefIdx, MI, I)
+                               .value_or(4);
+      } else if (Real) {
+        Lat = 4;
+      }
+      T = std::max(T, It->second + std::max(Lat, Real ? 1u : 0u));
+    }
+    Issue[&MI] = T;
+    if (!Real)
+      continue;
+    Chain = std::max(Chain, T + 1);
+    const MCInstrDesc &D = MI.getDesc();
+    if (TPCII::isLoadInst(D))
+      ++Slots[0];
+    else if (TPCII::isSPUInst(D))
+      ++Slots[1];
+    else if (TPCII::isVPUInst(D))
+      ++Slots[2];
+    else if (TPCII::isStoreInst(D))
+      ++Slots[3];
+  }
+  const unsigned Busiest = std::max({Slots[0], Slots[1], Slots[2], Slots[3], 1u});
+  const unsigned Before = std::max(Chain, Busiest);
+  auto Saving = [&](unsigned Count) {
+    return Before - std::max(Chain + Count - 1, Count * Busiest) / Count;
+  };
+
+  unsigned Count = 1;
+  while (Count * 2 <= AutoUnrollCount)
+    Count *= 2;
+  for (; Count >= 2; Count /= 2) {
+    bool Fits = Size * Count <= AutoUnrollMaxSize;
+    for (unsigned F = 0; F < NumFiles && Fits; ++F)
+      Fits = Invariant[F] + Count * MaxLive[F] <= Limit[F];
+    if (Fits)
+      break;
+  }
+  // Prefer the smaller count when it saves nearly as much.
+  while (Count > 2 && Saving(Count / 2) + 1 >= Saving(Count))
+    Count /= 2;
+  LLVM_DEBUG(dbgs() << "Auto unroll: size " << Size << ", vector live "
+                    << MaxLive[Vec] << " + " << Invariant[Vec] << " of "
+                    << Limit[Vec] << ", chain " << Chain << ", slots "
+                    << Slots[0] << "/" << Slots[1] << "/" << Slots[2] << "/"
+                    << Slots[3] << ", count " << Count << " saves "
+                    << (Count >= 2 ? Saving(Count) : 0) << "\n");
+  if (Count < 2 || Saving(Count) < AutoUnrollMinGain)
+    return 0;
+  return Count;
+}
+
+/// Whether a LOOP operand is computed from the member's index space: from I0
+/// or I1, where get_index_space_offset and get_index_space_size are. Also
+/// true when the search gives up.
+bool TPCPipeliner::dependsOnIndexSpace(const MachineOperand &MO) const {
+  if (!MO.isReg())
+    return false;
+  SmallVector<Register, 16> Work = {MO.getReg()};
+  SmallPtrSet<const MachineInstr *, 32> Seen;
+  while (!Work.empty()) {
+    const Register R = Work.pop_back_val();
+    if (R == TPC::I0 || R == TPC::I1)
+      return true;
+    if (!R.isVirtual())
+      continue;
+    for (const MachineInstr &Def : MRI->def_instructions(R)) {
+      if (!Seen.insert(&Def).second)
+        continue;
+      if (Seen.size() > 64)
+        return true;
+      for (const MachineOperand &U : Def.uses())
+        if (U.isReg() && !U.isUndef() && U.getReg())
+          Work.push_back(U.getReg());
+    }
+  }
+  return false;
 }
 
 /// Find a value carried from one iteration to the next that the unroller
