@@ -91,6 +91,9 @@ namespace llvm {
     bool ShouldShrinkFPConstant(EVT) const override { return false; }
     TargetLowering::ConstraintType getConstraintType(StringRef Constraint) const override;
     const char *getTargetNodeName(unsigned Opcode) const override;
+    LegalizeAction getCustomTruncStoreAction(EVT ValVT, EVT MemVT,
+                                             Align Alignment,
+                                             unsigned AddrSpace) const override;
     Register getRegisterByName(const char *RegName, LLT Ty,
                                const MachineFunction &MF) const override;
       SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;

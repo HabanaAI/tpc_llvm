@@ -501,6 +501,12 @@ static SDValue helperExtractSubRegSDValue(unsigned subReg, const SDLoc &DL,
   // we got v64i32 = BUILD_VECTOR t1305, t1308,... which can not be supported
 
   setTruncStoreAction(MVT::i64, MVT::i32, Custom);
+  // Rounding stores: to global memory, see lowerSTORE; to local memory they
+  // have patterns (getCustomTruncStoreAction).
+  for (MVT ValTy : {MVT::f32, MVT::f16, MVT::bf16})
+    for (MVT MemTy : {MVT::f16, MVT::bf16, MVT::f8_143, MVT::f8_152})
+      if (MemTy.getSizeInBits() < ValTy.getSizeInBits())
+        setTruncStoreAction(ValTy, MemTy, Custom);
 
   for (auto ValTy : {MVT::f32, MVT::f16, MVT::bf16}) {
     setLoadExtAction(ISD::EXTLOAD, ValTy, MVT::f8_143, Expand);
@@ -588,6 +594,17 @@ unsigned getTargetConvertType(const TPCSubtarget &Subtarget) {
   } else {
     return TPC::CONVERT_INT16vvp;
   }
+}
+
+// The rounding stores set Custom above are lowered by lowerSTORE only when
+// they go to global memory; to local memory they have patterns.
+TargetLowering::LegalizeAction
+TPCTargetLowering::getCustomTruncStoreAction(EVT ValVT, EVT MemVT,
+                                             Align Alignment,
+                                             unsigned AddrSpace) const {
+  if (MemVT.isFloatingPoint() && AddrSpace != 3)
+    return Legal;
+  return Custom;
 }
 
 const char *TPCTargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -2896,6 +2913,18 @@ SDValue TPCTargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
   StoreSDNode *StoreNode = cast<StoreSDNode>(Op);
 
   EVT MemVT = StoreNode->getMemoryVT();
+  // A float rounded to a narrower float and stored to global memory: there is
+  // no pattern that converts, as for local memory, and the plain global store
+  // patterns would store the low bits of the wider register. Round, then
+  // store the narrow value.
+  if (StoreNode->isTruncatingStore() && MemVT.isFloatingPoint() &&
+      StoreNode->getAddressSpace() == 3) {
+    SDLoc DL(Op);
+    SDValue Narrow = DAG.getNode(ISD::FP_ROUND, DL, MemVT, StoreNode->getValue(),
+                                 DAG.getIntPtrConstant(0, DL, true));
+    return DAG.getStore(StoreNode->getChain(), DL, Narrow,
+                        StoreNode->getBasePtr(), StoreNode->getMemOperand());
+  }
   if (!MemVT.isVector())
     return SDValue();
 
