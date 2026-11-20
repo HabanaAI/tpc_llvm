@@ -2,9 +2,9 @@
 
 ; Since LLVM 22, LICM moves a loop-invariant write-only call out of its loop,
 ; which runs it once instead of on every iteration. TPC stores are write-only
-; calls but not all idempotent, so on TPC they stay in the loop, as with
-; LLVM 12 and Habana's compiler. An RMW store reads memory, so it stays in the
-; loop in any case.
+; calls but not all idempotent (an RMW store adds to memory, an MMIO write is
+; a write), so on TPC they stay in the loop, as with LLVM 12 and Habana's
+; compiler.
 
 target triple = "tpc"
 
