@@ -1161,9 +1161,12 @@ after GlobalDCE/ConstantMerge, before LoopSink.
   loop without one crashed in ``createHeaderLoadPhi``
   (``two-loops-one-module.ll``), and ``HasInductionInCoordSeq`` overrode the
   prefetch count of every later loop.
-* ``createPreheaderLoadClone`` casts a load's preheader income to an
-  ``Instruction``, so a load-income PHI whose preheader value is a constant
-  (``zeroinitializer``) crashes the pass.
+* A header PHI of a load sequence is cloned into the preheader as a PHI over
+  the preheader's predecessors (``InstSequence::createPreheaderPhi``). Its
+  preheader value may be a constant (coordinates or income starting at
+  ``zeroinitializer``); that used to be cast to an ``Instruction`` and crash
+  the pass. When the preheader is the entry block, which has no predecessors,
+  such a loop is not pipelined (``constant-preheader-income.ll``).
 * ``isPipelinePragmaDefined`` checks only that ``llvm.loop.ir.pipeline`` is
   present. Clang emits it with an ``i1 false`` operand for a disabled hint, so
   a "disable" hint also enables pipelining.

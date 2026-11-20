@@ -479,8 +479,10 @@ Instruction *InstSequence::createPreheaderPhi(Instruction *Phi,
   // get the Phi's incoming value from Preheader
   Value *PreheaderValue =
       (cast<PHINode>(Phi))->getIncomingValueForBlock(PreheaderBlock);
-  Instruction *PreheaderInst = cast<Instruction>(PreheaderValue);
-  if (PreheaderInst->getParent() != PreheaderBlock) {
+  // A constant or an argument (a load whose income starts as
+  // zeroinitializer) is not computed in the preheader either.
+  auto *PreheaderInst = dyn_cast<Instruction>(PreheaderValue);
+  if (!PreheaderInst || PreheaderInst->getParent() != PreheaderBlock) {
     // create the Preheader clone
     INSTSEQ_DEBUG(DebugTag << "Preheader clone phi does not exist, cloning ...")
     auto *InstClonePN = PHINode::Create(PreheaderValue->getType(), 1);

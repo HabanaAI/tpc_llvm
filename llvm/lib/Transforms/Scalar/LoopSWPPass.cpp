@@ -1267,6 +1267,35 @@ bool LoopSWPImpl::isPipeliningPossible() {
     return false;
   }
 
+  // The header PHIs that the loads' operands come from are cloned into the
+  // preheader as PHIs over its predecessors (InstSequence::createPreheaderPhi).
+  // The entry block has none, so such a clone of a constant or an argument
+  // would have no value.
+  if (PreheaderBlock && pred_empty(PreheaderBlock)) {
+    SmallVector<Instruction *, 16> Work;
+    SmallPtrSet<Instruction *, 32> Seen;
+    for (Instruction &I : *HeaderBlock)
+      if (TPCOptUtils::isLoadTensor(&I))
+        Work.push_back(&I);
+    while (!Work.empty()) {
+      Instruction *I = Work.pop_back_val();
+      if (!Seen.insert(I).second)
+        continue;
+      if (auto *Phi = dyn_cast<PHINode>(I)) {
+        if (!isa<Instruction>(Phi->getIncomingValueForBlock(PreheaderBlock))) {
+          LOOP_SWP_DEBUG(DebugTag << "Preheader is the entry block and a load "
+                                     "operand starts from a constant, exiting")
+          return false;
+        }
+        continue;
+      }
+      for (Value *Op : I->operands())
+        if (auto *OpI = dyn_cast<Instruction>(Op))
+          if (OpI->getParent() == HeaderBlock)
+            Work.push_back(OpI);
+    }
+  }
+
   LOOP_SWP_DEBUG("PreheaderBlock = " << PreheaderBlock->getName())
   LOOP_SWP_DEBUG("HeaderBlock = " << HeaderBlock->getName())
   LOOP_SWP_DEBUG("ExitBlock = " << ExitBlock->getName())
