@@ -5621,7 +5621,9 @@ SDValue TPCTargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
     } else {
       assert(false && "Unsupported target type");
     }
-  } else if (Op.getValueType() == MVT::v128f16 && Subtarget->hasGen3Plus()) {
+  } else if (Op.getValueType() == MVT::v128f16 &&
+             (Subtarget->hasGen3Plus() || Subtarget->hasGaudiBISA())) {
+    // Gaudi B has f16 too: the same instructions as for bf16 (= Habana).
     if (Src.getValueType() == MVT::v128f32) {
 
       SDValue N0Val =
@@ -5684,7 +5686,7 @@ SDValue TPCTargetLowering::lowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
       assert(false && "Unsupported source type");
     }
   } else if (Op.getValueType() == MVT::v256f16) {
-    if (Subtarget->hasGen3Plus()) {
+    if (Subtarget->hasGen3Plus() || Subtarget->hasGaudiBISA()) {
       if (Src.getValueType() == MVT::v256f32) {
         SDValue S0Val =
             helperExtractSubRegSDValue(TPC::sub_0, DL, DAG, MVT::v64f32, Src);
