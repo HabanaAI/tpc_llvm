@@ -1,5 +1,10 @@
 // RUN: %clang_cc1 -S -triple tpc-none-none -std=rc99 -O1 -o - %s
 // RUN: %clang_cc1 -S -triple tpc-none-none -std=rc99 -O2 -o - %s
+// RUN: not %clang_cc1 -S -triple tpc-none-none -std=rc99 -O0 -o - %s 2>&1 | FileCheck %s --check-prefix=O0
+// At -O0 a struct copy between address spaces is left; it used to assert
+// in TPCSelectionDAGInfo::EmitTargetCodeForMemcpy and now fails cleanly.
+// O0-NOT: Assertion
+// O0: error in backend: cannot lower memory intrinsic
 
 // This is file failure_struct_in_st_tnsr.c fron GAUDI-255 attachments.
 

@@ -71,16 +71,19 @@ SDValue TPCSelectionDAGInfo::EmitTargetCodeForMemcpy(
     MachinePointerInfo DstPtrInfo, MachinePointerInfo SrcPtrInfo) const {
   // One alignment for both sides, as SelectionDAG passed before LLVM 23.
   Align Alignment = std::min(DstAlign, SrcAlign);
-  // Prepare arguments making sanity checks.
+  // Only a copy of a constant size within one local memory is expanded here.
+  // Anything else (a struct copied between address spaces at -O0) is left to
+  // the generic lowering, which reports it as Habana's compiler does.
   ConstantSDNode *SizeValue = dyn_cast<ConstantSDNode>(Size);
-  assert(SizeValue && "Size in memset call must be a compile time constant");
-  assert(SrcPtrInfo.getAddrSpace() == DstPtrInfo.getAddrSpace() &&
-         "Cannot memcpy between different address spaces");
+  if (!SizeValue || SrcPtrInfo.getAddrSpace() != DstPtrInfo.getAddrSpace())
+    return SDValue();
   int AS = DstPtrInfo.getAddrSpace();
-  assert((AS == 1 || AS == 2) && "memcpy may be called only for local memory");
+  if (AS != 1 && AS != 2)
+    return SDValue();
   unsigned Sz = SizeValue->getZExtValue();
   unsigned UnitSz = (AS == 1) ? 4 : 256;
-  assert((Sz % UnitSz == 0) && "Size in memcpy must be a multiple of space unit");
+  if (Sz % UnitSz != 0)
+    return SDValue();
 
   // Prepare working variables.
   MVT VT = (AS == 1) ? MVT::i32 : MVT::v64i32;
