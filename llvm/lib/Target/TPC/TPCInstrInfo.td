@@ -6051,6 +6051,29 @@ foreach pred = [i1, v256i1] in {
   defm : BinaryVectorIntrinsicsDnorm<int_tpc_sub, "SUB", v256f32, v256f8_152, pred>;
 }
 
+// The two halves of tpc_carry_pair (see TPCTargetLowering::lowerTPC_CarryPair).
+// Operands as tpc_add and tpc_sub; the glue keeps the pair together.
+def SDTCarryHalf : SDTypeProfile<1, 7, [SDTCisVT<3, i8>, SDTCisVT<4, i32>,
+                                        SDTCisSameAs<0, 5>, SDTCisVT<7, i1>]>;
+def TPCaddCarryOut : SDNode<"TPCISD::ADD_CARRY_OUT", SDTCarryHalf, [SDNPOutGlue]>;
+def TPCsubCarryOut : SDNode<"TPCISD::SUB_CARRY_OUT", SDTCarryHalf, [SDNPOutGlue]>;
+def TPCaddCarryIn  : SDNode<"TPCISD::ADD_CARRY_IN",  SDTCarryHalf, [SDNPInGlue]>;
+def TPCsubCarryIn  : SDNode<"TPCISD::SUB_CARRY_IN",  SDTCarryHalf, [SDNPInGlue]>;
+
+foreach pred = [i1, v256i1] in
+  foreach type = [v128i16, v64i32] in {
+    defm : BinaryVectorIntrinsics<TPCaddCarryOut, "ADD", type, type, pred>;
+    defm : BinaryVectorIntrinsics<TPCsubCarryOut, "SUB", type, type, pred>;
+    defm : BinaryVectorIntrinsics<TPCaddCarryIn,  "ADD", type, type, pred>;
+    defm : BinaryVectorIntrinsics<TPCsubCarryIn,  "SUB", type, type, pred>;
+  }
+foreach type = [i32, i16] in {
+  defm : BinaryScalarIntrinsics<TPCaddCarryOut, "ADD", type>;
+  defm : BinaryScalarIntrinsics<TPCsubCarryOut, "SUB", type>;
+  defm : BinaryScalarIntrinsics<TPCaddCarryIn,  "ADD", type>;
+  defm : BinaryScalarIntrinsics<TPCsubCarryIn,  "SUB", type>;
+}
+
 defm : AddSubX2IntrinsicsGen4<int_tpc_sub_x2, OpType.FP32, DoubleVector<v64f32>.Type, "SUBx2", fpimm>, Requires<[Gen4Plus]>;
 
 //------ MAX -------------------------------------------------------------------

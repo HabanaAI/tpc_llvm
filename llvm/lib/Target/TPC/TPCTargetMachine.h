@@ -126,6 +126,15 @@ public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 
+/// Pass "tpc-carry-pairs": joins each carry-reading add with the add before
+/// it (see TPCCarryPairs.cpp).
+class TPCCarryPairsPass : public PassInfoMixin<TPCCarryPairsPass> {
+public:
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  // Needed for correct code at -O0 too.
+  static bool isRequired() { return true; }
+};
+
 FunctionPass *createTPCHardwareLoops();
 FunctionPass *createTPCOptimizeHWLoopsGuards();
 void initializeTPCOptimizeHWLoopsGuardsPass(PassRegistry &);

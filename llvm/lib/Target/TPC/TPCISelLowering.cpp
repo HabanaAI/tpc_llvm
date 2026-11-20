@@ -609,6 +609,10 @@ const char *TPCTargetLowering::getTargetNodeName(unsigned Opcode) const {
     case (TPCISD::HALT):  return "halt";
     case (TPCISD::COND_MOV): return "TPC::COND_MOV";
     case (TPCISD::COND_MOV_INVERT): return "TPC::COND_MOV_INVERT";
+    case (TPCISD::ADD_CARRY_OUT): return "TPC::ADD_CARRY_OUT";
+    case (TPCISD::SUB_CARRY_OUT): return "TPC::SUB_CARRY_OUT";
+    case (TPCISD::ADD_CARRY_IN): return "TPC::ADD_CARRY_IN";
+    case (TPCISD::SUB_CARRY_IN): return "TPC::SUB_CARRY_IN";
     case (TPCISD::LD_G):  return "TPC::LD_G";
     case (TPCISD::LD_G_INC):  return "TPC::LD_G_INC";
     case (TPCISD::ST_G):  return "TPC::ST_G";
@@ -3253,6 +3257,8 @@ SDValue TPCTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
     return lowerTPC_MovDualGroup(Op, false, DAG);
   case Intrinsic::tpc_mov_dual_group_all:
     return lowerTPC_MovDualGroup(Op, true, DAG);
+  case Intrinsic::tpc_carry_pair:
+    return lowerTPC_CarryPair(Op, DAG);
   }
 
 // TODO: Remove it.
@@ -9163,6 +9169,32 @@ SDValue TPCTargetLowering::lowerTPC_CONVERT_UINT_LINEAR(SDValue Op,
   Switches = DAG.getTargetConstant(SwitchVal, DL, MVT::i32);
   return ConversionEntity(DestVT, Source, DataType, Switches, Income, Predicate,
                           Polarity, DAG, DL, false, &ShiftForInt);
+}
+
+// tpc_carry_pair: the carry-writing ADD/SUB with a glue result and the
+// carry-reading ADD/SUB glued to it. Glued nodes are never merged with other
+// nodes and are scheduled together, so no other add comes between them;
+// TPCCarryDeps then keeps them in order after instruction selection.
+SDValue TPCTargetLowering::lowerTPC_CarryPair(SDValue Op,
+                                              SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  unsigned Kind = Op.getConstantOperandVal(1);
+  auto Operands = [&](unsigned First) {
+    SmallVector<SDValue, 8> Ops;
+    for (unsigned I = First; I < First + 7; ++I)
+      Ops.push_back(Op.getOperand(I));
+    return Ops;
+  };
+  SDValue Lo = DAG.getNode(Kind & 1 ? TPCISD::SUB_CARRY_OUT
+                                    : TPCISD::ADD_CARRY_OUT,
+                           DL, DAG.getVTList(Op.getValueType(), MVT::Glue),
+                           Operands(2));
+  SmallVector<SDValue, 8> HiOps = Operands(9);
+  HiOps.push_back(Lo.getValue(1));
+  SDValue Hi = DAG.getNode(Kind & 2 ? TPCISD::SUB_CARRY_IN
+                                    : TPCISD::ADD_CARRY_IN,
+                           DL, Op->getValueType(1), HiOps);
+  return DAG.getMergeValues({Lo, Hi}, DL);
 }
 
 SDValue TPCTargetLowering::lowerTPC_MovDualGroup(SDValue Op, bool ModeAll, SelectionDAG &DAG) const {

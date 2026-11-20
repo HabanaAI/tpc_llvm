@@ -422,6 +422,30 @@ def int_tpc_sub           : Intrinsic<[llvm_any_ty],        // VRF, IRF or SRF t
                                         llvm_i1_ty          // Polarity
                                       ],
                                       [IntrNoMem]>;
+// An integer ADD or SUB followed by an ADD with CARRY or a SUB with BORROW
+// that reads the carry the first one writes (a 64-bit add from two 32-bit
+// ones). The carry is not a value in the IR, so the two are kept as one call
+// (TPCCarryPairs) and emitted next to each other. Operands: Kind (bit 0: the
+// first is a SUB, bit 1: the second is a SUB), then the operands of tpc_add
+// or tpc_sub for the first and for the second. Returns both results.
+def int_tpc_carry_pair    : Intrinsic<[llvm_any_ty, llvm_any_ty],
+                                      [ llvm_i32_ty,        // Kind
+                                        llvm_any_ty,        // X of the first
+                                        llvm_any_ty,        // Y of the first
+                                        llvm_i8_ty,         // DataType
+                                        llvm_i32_ty,        // Switches
+                                        LLVMMatchType<0>,   // Income
+                                        llvm_any_ty,        // Predicate (i1/v256i1)
+                                        llvm_i1_ty,         // Polarity
+                                        llvm_any_ty,        // X of the second
+                                        llvm_any_ty,        // Y of the second
+                                        llvm_i8_ty,         // DataType
+                                        llvm_i32_ty,        // Switches
+                                        LLVMMatchType<1>,   // Income
+                                        llvm_any_ty,        // Predicate (i1/v256i1)
+                                        llvm_i1_ty          // Polarity
+                                      ],
+                                      [IntrNoMem, ImmArg<ArgIndex<0>>]>;
 def int_tpc_sub_x2        : Intrinsic<[llvm_any_ty],
                                       [ LLVMMatchType<0>,   // SrcA
                                         llvm_any_ty,        // SrcB

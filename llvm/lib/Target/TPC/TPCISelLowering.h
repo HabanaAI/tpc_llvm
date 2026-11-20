@@ -29,6 +29,11 @@ namespace llvm {
       FSRL, FSHL, FSRA,
       HALT,
       COND_MOV, COND_MOV_INVERT,
+      // The two halves of tpc_carry_pair: an integer ADD or SUB with a glue
+      // result, and an ADD with CARRY or a SUB with BORROW glued to it, so
+      // that they are never merged with other nodes and are emitted next to
+      // each other. Operands as tpc_add/tpc_sub.
+      ADD_CARRY_OUT, SUB_CARRY_OUT, ADD_CARRY_IN, SUB_CARRY_IN,
       // Nodes with a memory operand (see TPCSelectionDAGInfo).
       FIRST_MEMORY_OPCODE,
       LD_G = FIRST_MEMORY_OPCODE,
@@ -173,6 +178,7 @@ namespace llvm {
     SDValue lowerTPC_CONVERT_INT_LINEAR(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerTPC_CONVERT_UINT_LINEAR(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerTPC_MovDualGroup(SDValue Op, bool ModeAll, SelectionDAG &DAG) const;
+    SDValue lowerTPC_CarryPair(SDValue Op, SelectionDAG &DAG) const;
 
   private:
     typedef enum {
