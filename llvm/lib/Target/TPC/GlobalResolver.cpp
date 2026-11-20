@@ -49,7 +49,11 @@ struct GlobalResolver {
     // Find main function.
     Function *MainFunc = nullptr;
     for (Function &F : M) {
-      if (!F.isDeclaration()) {
+      // Functions other than the kernel are available_externally
+      // (TPCModuleLegalizer) and are not emitted; at -O0 one that could not
+      // be inlined (a recursive one) is still here, and its call is reported
+      // as a call to an undefined function.
+      if (!F.isDeclaration() && !F.hasAvailableExternallyLinkage()) {
         assert(MainFunc == 0 && "More than one entry points");
         MainFunc = &F;
       }
