@@ -3712,6 +3712,8 @@ static EVT getHalfEVT(EVT evt) {
   if (evt == MVT::v256f32) return MVT::v128f32;
   if (evt == MVT::v256i32) return MVT::v128i32;
   if (evt == MVT::v512i8) return MVT::v256i8;
+  if (evt == MVT::v512f8_143) return MVT::v256f8_143;
+  if (evt == MVT::v512f8_152) return MVT::v256f8_152;
   assert(false && "Not supported half");
   return MVT::Other;
 }

@@ -1,6 +1,6 @@
 // RUN: %clang_cc1 -emit-llvm -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 %s -o - | FileCheck --check-prefixes=CHECK-IR %s
-// FIXME: (GAUDI-1733) R*U*N: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 %s -o - | FileCheck --check-prefixes=CHECK-ASM %s
-// FIXME: (GAUDI-1733) R*U*N: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu doron1 %s -o - | FileCheck --check-prefixes=CHECK-ASM %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu gaudi2 %s -o - | FileCheck --check-prefixes=CHECK-ASM %s
+// RUN: %codegen -S -O1 -triple tpc-none-none -std=rc99 -target-cpu doron1 %s -o - | FileCheck --check-prefixes=CHECK-ASM %s
 
 void main(int src, int dest) {
   minihalf512 *sptr = (minihalf512 *)src;
@@ -13,6 +13,8 @@ void main(int src, int dest) {
 // CHECK-IR: call <512 x f8_143> @llvm.tpc.convert.v512f8_143.v512f8_152.i1(<512 x f8_152> {{.*}}, i8 12, i32 3328, <512 x f8_143> undef, i1 true, i1 false)
 // CHECK-IR: call <512 x f8_143> @llvm.tpc.convert.v512f8_143.v512f8_152.i1(<512 x f8_152> {{.*}}, i8 12, i32 134400, <512 x f8_143> undef, i1 true, i1 false)
 
-// CHECK-ASM: ld_l_v         [[SRC:%V[0-9]+]], %S0
-// CHECK-ASM: convert.f8_152 all_lanes target_type=f8_143 rhne %V{{[0-9]+}}, [[SRC]]
-// CHECK-ASM: convert.f8_152 all_lanes target_type=f8_143 ru %V{{[0-9]+}}, [[SRC]]
+// Each half is converted on its own (an assertion in getHalfEVT before).
+// CHECK-ASM-DAG: convert.f8_152 all_lanes target_type=f8_143 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+// CHECK-ASM-DAG: convert.f8_152 all_lanes target_type=f8_143 rhne %V{{[0-9]+}}, %V{{[0-9]+}}
+// CHECK-ASM-DAG: convert.f8_152 all_lanes target_type=f8_143 ru %V{{[0-9]+}}, %V{{[0-9]+}}
+// CHECK-ASM-DAG: convert.f8_152 all_lanes target_type=f8_143 ru %V{{[0-9]+}}, %V{{[0-9]+}}

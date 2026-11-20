@@ -60,6 +60,12 @@ KNOWN_PARITY = {
     # Habana does not declare s_bf16_st_tnsr_s and the fork does; on gaudi2
     # the baseline shares it.
     ("clang/test/RC99/Intrinsics/st_tnsr_s-04.c", "gaudi3"): ("error", "ok"),
+    # 512-lane f8 conversions: Habana's compiler crashes, the fork converts
+    # each half (the baseline asserted).
+    **{(f"clang/test/RC99/Intrinsics/convert_to/{name}.c", arch): ("crash", "ok")
+       for name in ("convert_minifloat512_to_minihalf512",
+                    "convert_minihalf512_to_minifloat512")
+       for arch in ("gaudi2", "gaudi3")},
 }
 METADATA = b".tpc_metadata"
 METADATA_VERSION = 20
