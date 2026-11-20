@@ -303,6 +303,10 @@ public:
     return Kind == OpKind::Imm;
   }
 
+  bool isConstantImm() const {
+    return Kind == OpKind::Imm && Imm.Expr == nullptr;
+  }
+
   int64_t getImm() const {
     assert(Kind == OpKind::Imm && "Not an immediate");
     assert(Imm.Expr == nullptr && "Immediate is an expression");
@@ -2314,6 +2318,13 @@ bool TPCAsmParser::parseInstruction(ParseInstructionInfo &Info,
   } else if (Mnemonic.compare_insensitive("loop") == 0) {
      assert(Operands.size() >= 6);
      LabelOperand = Operands[5].get();
+     // The end of a loop must be a label, as for Habana's assembler;
+     // llvm-objdump prints it as an address, which the instruction
+     // compressor and the encoder cannot take.
+     if (static_cast<const TPCOperand *>(LabelOperand)->isConstantImm())
+       return Error(LabelOperand->getStartLoc(), "missing label",
+                    SMRange(LabelOperand->getStartLoc(),
+                            LabelOperand->getEndLoc()));
      LLVM_DEBUG(dbgs() << "LOOP instuction with label: " <<
                 getStringFromLoc(LabelOperand->getStartLoc(),
                                  LabelOperand->getEndLoc()) << " detected\n");
