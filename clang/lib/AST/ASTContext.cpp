@@ -15336,13 +15336,17 @@ void ASTContext::loadTpcTypes() const {
     IdentifierInfo *II = &Idents.get(PredefinedTypes[I].Name);
     DeclarationName Name(II);
     DeclContext::lookup_result DR = TUDecl->lookup(Name);
-    assert(DR.isSingleResult());
     assert(I == TpcTypeDecls.size());
-    auto TD = cast<TypeDecl>(DR.front());
+    // The headers may not declare a type although its feature is on (-float8
+    // on gaudi, where the 8-bit float types do not exist); it is then not
+    // available, as with the feature off. Habana's compiler accepts this too.
+    const TypeDecl *TD =
+        DR.isSingleResult() ? dyn_cast<TypeDecl>(DR.front()) : nullptr;
 
     // Put the type into tables.
     TpcTypeDecls.push_back(TD);
-    TpcTypes[PredefinedTypes[I].Code] = TD;
+    if (TD)
+      TpcTypes[PredefinedTypes[I].Code] = TD;
   }
 }
 
