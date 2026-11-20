@@ -115,10 +115,11 @@ def scalar_bits(kind, text):
     raise ValueError(f"unsupported scalar type '{kind}'")
 
 
-def parse_kernel(path):
+def parse_kernel(path, tag="DIFFTEST"):
+    """Read the '// <tag>:' lines of a kernel (tpc/bench uses tag BENCH)."""
     k = Kernel(path)
     for lineno, line in enumerate(path.read_text().splitlines(), 1):
-        m = re.match(r"\s*//\s*DIFFTEST:\s*(\S+)\s*(.*)", line)
+        m = re.match(rf"\s*//\s*{tag}:\s*(\S+)\s*(.*)", line)
         if not m:
             continue
         key, args = m.group(1), m.group(2).split()
@@ -151,7 +152,7 @@ def parse_kernel(path):
         except (ValueError, IndexError) as e:
             fatal(f"{path}:{lineno}: {e}")
     if not k.archs or not any(t.is_output for t in k.tensors):
-        fatal(f"{path}: needs a DIFFTEST 'arch' line and at least one 'out' tensor")
+        fatal(f"{path}: needs a {tag} 'arch' line and at least one 'out' tensor")
     return k
 
 

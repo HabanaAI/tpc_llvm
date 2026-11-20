@@ -7,6 +7,7 @@ TPC-CLANG compiler is based on the widely used [LLVM](https://llvm.org/) open-so
 ## Table of Contents
 - [TPC-CLANG compiler](#tpc-clang-compiler)
   - [Table of Contents](#table-of-contents)
+  - [Performance](#performance)
   - [Clone tpc-llvm Repository](#clone-tpc-llvm-repository)
   - [Building the Compiler](#building-the-compiler)
     - [Requirements](#requirements)
@@ -22,6 +23,75 @@ TPC-CLANG compiler is based on the widely used [LLVM](https://llvm.org/) open-so
     - [Other TPC-Specific Options:](#other-tpc-specific-options)
     - [How to Disassemble Binary: Wrap Binary to Elf](#how-to-disassemble-binary-wrap-binary-to-elf)
   - [Assembler](#assembler)
+
+## Performance
+
+The code this fork generates, against that of Habana's own tpc-clang from the
+habanalabs-tools 1.24.2 SDK, timed on a Gaudi2 card (HL-225, driver 1.24.2):
+33 microbenchmarks from [`tpc/bench/kernels/`](tpc/bench/kernels), compiled
+for gaudi2 at -O2. Taken together the two compilers are even (geometric mean
+1.00×).
+
+* **Faster:** RMSNorm (1.84×), LayerNorm (1.36×) and the fused residual add
+  and RMSNorm (1.34×). Each reduces over the hidden dimension in a hardware
+  loop that the fork unrolls automatically. With that unrolling turned off,
+  they run at the speed of Habana's code on the simulator, except RMSNorm,
+  which keeps 1.10×.
+* **Slower:** staging data in vector local memory (0.45×), whose accesses
+  Habana's compiler keeps in registers and the fork does not yet; the 3-D
+  stencil (0.90×); and kernels that spend most of their time in tpclib math
+  functions, such as the plasma effect (0.87×) and Black-Scholes (0.95×).
+* **Same code:** five benchmarks compile to identical code with both
+  compilers. They differ by at most 0.2%, which is the measurement noise.
+
+| Kernel | Habana (TPC-µs) | Fork (TPC-µs) | Fork speedup |
+|---|---:|---:|---:|
+| `general/add_f32` | 37.2 | 37.3 | 1.00× |
+| `general/add_sat_u8` | 37.2 | 37.3 | 1.00× |
+| `general/axpy_bf16` | 37.3 | 37.1 | 1.01× |
+| `general/cast_f32_bf16` | 18.7 | 18.7 | 1.00× |
+| `general/local_mem_f32` | 18.6 | 41.3 | 0.45× |
+| `general/prefix_sum_f32` | 32.0 | 32.0 | 1.00× |
+| `general/reduce_sum_f32` | 27.5 | 27.5 | 1.00× |
+| `general/sdiv_i32` | 703.4 | 726.3 | 0.97× |
+| `general/short_rows_f32` | 59.8 | 59.8 | 1.00× |
+| `general/where_f32` | 59.8 | 59.8 | 1.00× |
+| `hpc/blackscholes_f32` | 1420.3 | 1496.5 | 0.95× |
+| `hpc/fft_radix4_f32` | 49.1 | 49.0 | 1.00× |
+| `hpc/jacobi2d_f32` | 136.9 | 136.9 | 1.00× |
+| `hpc/laplace3d_f32` | 240.8 | 268.2 | 0.90× |
+| `hpc/montecarlo_pi_f32` | 701.4 | 701.4 | 1.00× |
+| `hpc/nbody_f32` | 1312.3 | 1303.2 | 1.01× |
+| `hpc/rk4_duffing_f32` | 460.0 | 460.2 | 1.00× |
+| `misc/game_of_life_i32` | 200.6 | 200.5 | 1.00× |
+| `misc/mandelbrot_f32` | 1256.4 | 1256.3 | 1.00× |
+| `misc/plasma_rgb_f32` | 348.2 | 401.0 | 0.87× |
+| `misc/raytrace_spheres_f32` | 722.9 | 745.1 | 0.97× |
+| `ml/add_rmsnorm_bf16` | 132.2 | 98.7 | 1.34× |
+| `ml/causal_conv1d_bf16` | 423.7 | 441.9 | 0.96× |
+| `ml/decode_attention_bf16` | 934.2 | 925.3 | 1.01× |
+| `ml/dequant_int4_f32` | 52.6 | 51.5 | 1.02× |
+| `ml/fp8_quant_bf16` | 159.7 | 166.6 | 0.96× |
+| `ml/gelu_f32` | 396.6 | 401.2 | 0.99× |
+| `ml/layernorm_f32` | 129.9 | 95.7 | 1.36× |
+| `ml/moe_router_f32` | 343.4 | 343.4 | 1.00× |
+| `ml/rmsnorm_bf16` | 76.2 | 41.3 | 1.84× |
+| `ml/rope_neox_bf16` | 112.0 | 112.8 | 0.99× |
+| `ml/softmax_f32` | 1094.6 | 1103.7 | 0.99× |
+| `ml/swiglu_bf16` | 99.5 | 103.0 | 0.97× |
+| geomean, general |  |  | 0.92× |
+| geomean, hpc |  |  | 0.98× |
+| geomean, misc |  |  | 0.96× |
+| geomean, ml |  |  | 1.10× |
+| **geomean, all** |  |  | **1.00×** |
+
+Time is in TPC-microseconds: the Habana profiler's start-to-halt time of each
+TPC that ran the kernel (2 to 8 per launch), summed, so host and launch
+overhead are left out. Each time is the median of 10 runs, which spread by at
+most ±0.9%. Speedup is Habana's time divided by the fork's, so above 1× the
+fork is faster. Every run's outputs equal those of the other compiler and of
+the TPC simulator. Measured on 2026-11-20 with the fork at e23536e7f779; the
+method, and how to rerun it, is in [`tpc/README.md`](tpc/README.md#microbenchmarks-bench).
 
 ## Clone tpc-llvm Repository
 
