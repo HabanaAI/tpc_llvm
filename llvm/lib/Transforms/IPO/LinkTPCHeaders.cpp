@@ -34,6 +34,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/SourceMgr.h"
@@ -1022,13 +1023,10 @@ PreservedAnalyses LinkTPCHeadersPass::run(Module &M,
  * to.
  */
 llvm::LibHandle llvm::LoadLib(const char *path) {
-  char *Error;
   LibHandle LHandle = dlopen(path, RTLD_LAZY);
-  if ((Error = dlerror()) != NULL) {
-    fputs(Error, stderr);
-    fputc('\n', stderr);
-    assert(false && "Could not open lib");
-  }
+  // A path the user gave with -ILTO: an error, not an assertion.
+  if (const char *Error = dlerror())
+    reportFatalUsageError(Twine("-ILTO: ") + Error);
   return LHandle;
 }
 
