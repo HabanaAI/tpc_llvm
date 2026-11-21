@@ -1,4 +1,6 @@
-; RUN: llc -march=tpc -mcpu=goya2 %s -o - | FileCheck %s
+; RUN: llc -march=tpc -mcpu=goya2 -tpc-machine-unroll-count=0 %s -o - | FileCheck %s
+; (The checks follow one copy of the loop body; the machine unroller would put
+; the copies of each instruction together.)
 
 ; Each half converts on a single lane, and the dual group moves take all lanes.
 ; CHECK: convert.f32 target_type=f16 [[SRC0:%V[0-9]+]], %V{{[0-9]+}}
