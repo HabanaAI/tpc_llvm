@@ -71,6 +71,10 @@ public:
                   DominatorTree *DT, AssumptionCache *AC,
                   TargetLibraryInfo *LibInfo) const override;
 
+  void getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
+                               TTI::UnrollingPreferences &UP,
+                               OptimizationRemarkEmitter *ORE) const override;
+
   // LLVM 16 dropped TTI::getInstructionLatency; latency queries reach
   // getInstructionCost with TCK_Latency, which uses TPC's latency model.
   InstructionCost getInstructionCost(const User *U,

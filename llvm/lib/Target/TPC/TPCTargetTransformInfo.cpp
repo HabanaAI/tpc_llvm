@@ -15,8 +15,11 @@
 #undef _MSC_EXTENSIONS // Turn off iso646 mapping
 #include "TPCTargetTransformInfo.h"
 #include "MCTargetDesc/InstructionDB.h"
+#include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
@@ -45,6 +48,59 @@ static unsigned getLoopNestHeight(const Loop *L) {
 // the compare alone in loops that pass converts. The checks are the ones of
 // TPCHardwareLoops::calculateLoop that can be made on IR; the layout and size
 // checks cannot, so the answer is a prediction.
+static cl::opt<unsigned> ChainUnrollCount(
+    "tpc-chain-unroll-count", cl::Hidden, cl::init(4),
+    cl::desc("Unroll an innermost loop that carries a value other than an "
+             "induction variable from one iteration to the next up to this "
+             "many times, in order (0 or 1: no)"));
+
+/// The backend unroller (TPCSoftwareLoopPipelining) gives each copy of a loop
+/// body its own version of every carried value, which is right for
+/// induction variables and coordinates and is why it leaves alone a loop
+/// carrying anything else: a reduction, a running sum, a value kept from the
+/// previous iteration. Such a loop is unrolled here instead, at run time with
+/// a remainder loop. The copies stay in order (copy k reads copy k-1's
+/// value), so a float reduction adds in the same order; what the copies gain
+/// is the overlap of their independent work, such as the loads.
+void TPCTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
+                                         TTI::UnrollingPreferences &UP,
+                                         OptimizationRemarkEmitter *ORE) const {
+  BaseT::getUnrollingPreferences(L, SE, UP, ORE);
+  if (ChainUnrollCount < 2 || !L->isInnermost() || L->getNumBlocks() != 1)
+    return;
+  bool CarriesChain = false;
+  for (PHINode &Phi : L->getHeader()->phis()) {
+    InductionDescriptor ID;
+    if (InductionDescriptor::isInductionPHI(&Phi, L, &SE, ID))
+      continue;
+    // A coordinate (int5) updated lane by lane, as the backend unroller
+    // handles.
+    if (auto *VT = dyn_cast<FixedVectorType>(Phi.getType()))
+      if (VT->getNumElements() == 5 && VT->getElementType()->isIntegerTy(32))
+        continue;
+    CarriesChain = true;
+    break;
+  }
+  if (!CarriesChain)
+    return;
+  // The remainder loop needs the trip count: one SCEV cannot compute is no
+  // use, and a 64-bit one (the sign-extended count of a 'kh <= h + 1' loop)
+  // gives i64 arithmetic, which TPC cannot select.
+  const SCEV *BTC = SE.getBackedgeTakenCount(L);
+  if (isa<SCEVCouldNotCompute>(BTC) ||
+      SE.getTypeSizeInBits(BTC->getType()) > 32)
+    return;
+  UP.Partial = true;
+  UP.Runtime = true;
+  UP.UpperBound = true;
+  UP.MaxCount = ChainUnrollCount;
+  UP.PartialThreshold = std::max(UP.PartialThreshold, 400u);
+  // A loop stepping by a vector, (n + 63) / 64 times, has a division in its
+  // trip count, which is a shift here.
+  UP.AllowExpensiveTripCount = true;
+  UP.UnrollRemainder = false;
+}
+
 bool TPCTTIImpl::canSaveCmp(Loop *L, CondBrInst **BI, ScalarEvolution *SE,
                             LoopInfo *LI, DominatorTree *DT,
                             AssumptionCache *AC,

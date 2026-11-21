@@ -571,6 +571,7 @@ static SDValue helperExtractSubRegSDValue(unsigned subReg, const SDLoc &DL,
   setTargetDAGCombine(ISD::VECTOR_SHUFFLE);
   setTargetDAGCombine(ISD::VSELECT);
   setTargetDAGCombine(ISD::EXTRACT_VECTOR_ELT);
+  setTargetDAGCombine(ISD::INSERT_VECTOR_ELT);
 
   setMinFunctionAlignment(Align(2));
   computeRegisterProperties(Subtarget->getRegisterInfo());
@@ -11345,6 +11346,11 @@ static SDValue performExtractVectorEltCombine(SDNode *N, SelectionDAG &DAG) {
   return DAG.getAnyExtOrTrunc(X, DL, ResVT);
 }
 
+static cl::opt<bool> EnableCoordInsertCombine(
+    "tpc-coord-insert-combine", cl::Hidden, cl::init(true),
+    cl::desc("Set a coordinate lane from the coordinate before an earlier "
+             "set of the same lane"));
+
 SDValue TPCTargetLowering::PerformDAGCombine(SDNode *N,
                                              DAGCombinerInfo &DCI) const {
   SelectionDAG &DAG = DCI.DAG;
@@ -11364,6 +11370,33 @@ SDValue TPCTargetLowering::PerformDAGCombine(SDNode *N,
     return performVSelectCombine(N, DAG, DCI, Subtarget);
   case ISD::EXTRACT_VECTOR_ELT:
     return performExtractVectorEltCombine(N, DAG);
+  case ISD::INSERT_VECTOR_ELT: {
+    // insert (insert V, a, i), b, i -> insert V, b, i for a coordinate
+    // (int5) that a store also uses. The copies of an unrolled loop body set
+    // a coordinate lane each from the previous copy's coordinate; when a copy
+    // stores at its coordinate, late, the next copy's SET_INDX often ends up
+    // in the same register after it, and the copies run one after another.
+    // Setting the lane from V lets them overlap. Without a store, the chain
+    // costs nothing and the extra copies of V would.
+    SDValue Inner = N->getOperand(0);
+    auto UsedByStore = [](SDValue V) {
+      return any_of(V->users(), [](const SDNode *U) {
+        return U->getOpcode() == ISD::INTRINSIC_VOID;
+      });
+    };
+    if (EnableCoordInsertCombine &&
+        DAG.getOptLevel() != CodeGenOptLevel::None &&
+        N->getValueType(0) == MVT::v5i32 &&
+        Inner.getOpcode() == ISD::INSERT_VECTOR_ELT &&
+        isa<ConstantSDNode>(N->getOperand(2)) &&
+        isa<ConstantSDNode>(Inner.getOperand(2)) &&
+        N->getConstantOperandVal(2) == Inner.getConstantOperandVal(2) &&
+        UsedByStore(Inner))
+      return DAG.getNode(ISD::INSERT_VECTOR_ELT, SDLoc(N), MVT::v5i32,
+                         Inner.getOperand(0), N->getOperand(1),
+                         N->getOperand(2));
+    break;
+  }
   }
 
   return SDValue();
