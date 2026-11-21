@@ -218,6 +218,14 @@ bool TpcLoopOptImpl::run(Loop *lp, ScalarEvolution *SE) {
     // Check if IRF insert element is exist.
     if (IRFLocation == nullptr)
       return false;
+    // reorder() takes the parent loop's blocks to be its header, this loop's
+    // block and the block after it. After an IR unroll pragma the parent also
+    // holds the remainder loop, its second block has none of the loads, and
+    // prologue() inserted after a copy it had not placed (a crash).
+    const Loop *Parent = WorkingLoop->getParentLoop();
+    if (!Parent || Parent->getNumBlocks() < 3 ||
+        Parent->getBlocks()[1] != LoadPtrList[0]->getParent())
+      return false;
     // If so do the transformation.
     return reorder();
   }
