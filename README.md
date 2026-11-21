@@ -29,17 +29,20 @@ TPC-CLANG compiler is based on the widely used [LLVM](https://llvm.org/) open-so
 The code this fork generates, against that of Habana's own tpc-clang from the
 habanalabs-tools 1.24.2 SDK, timed on a Gaudi2 card (HL-225, driver 1.24.2):
 33 microbenchmarks from [`tpc/bench/kernels/`](tpc/bench/kernels), compiled
-for gaudi2 at -O2. The fork's code is 1.23× as fast (geometric mean), 1.43×
+for gaudi2 at -O2. The fork's code is 1.31× as fast (geometric mean), 1.57×
 on the ML kernels.
 
 * **Faster**, mostly because the fork overlaps a loop's iterations where
-  Habana's compiler runs them one after another: it unrolls hardware loops
-  without a pragma, including loops over the member's part of the index
-  space, and unrolls loops that carry a sum or another value from one
-  iteration to the next, in order. The largest gains: the 2-D stencil
-  (2.60×), Game of Life (2.31×), RoPE (2.11×), RMSNorm (1.87×), GELU
-  (1.82×), decode attention (1.64×), SwiGLU (1.63×), N-body (1.58×) and the
-  fused residual add and RMSNorm (1.57×).
+  Habana's compiler runs them one after another. It modulo-schedules
+  (software-pipelines) loops with LLVM's MachinePipeliner, so that an
+  iteration starts before the one before it ends, where that beats
+  unrolling: loops with long bodies, and loops that carry a value from one
+  iteration to the next. It unrolls other hardware loops without a pragma,
+  including loops over the member's part of the index space, and unrolls
+  loops that carry a sum, in order. The largest gains: GELU (3.04×), the
+  2-D stencil (2.94×), the fused residual add and RMSNorm (2.47×), Game of
+  Life (2.41×), RoPE (2.11×), short rows (2.06×), RMSNorm (1.87×),
+  LayerNorm (1.66×), decode attention (1.64×) and SwiGLU (1.63×).
 * **Even:** the streaming kernels (add, axpy, cast) run at the card's memory
   speed with either compiler's code, though the fork's takes half the cycles
   on the simulator.
@@ -50,51 +53,51 @@ on the ML kernels.
 
 | Kernel | Habana (TPC-µs) | Fork (TPC-µs) | Fork speedup |
 |---|---:|---:|---:|
-| `general/add_f32` | 37.3 | 37.3 | 1.00× |
-| `general/add_sat_u8` | 37.2 | 37.4 | 1.00× |
-| `general/axpy_bf16` | 37.2 | 37.3 | 1.00× |
+| `general/add_f32` | 37.1 | 37.4 | 0.99× |
+| `general/add_sat_u8` | 37.2 | 37.3 | 1.00× |
+| `general/axpy_bf16` | 37.3 | 37.4 | 1.00× |
 | `general/cast_f32_bf16` | 18.7 | 18.6 | 1.01× |
-| `general/local_mem_f32` | 18.6 | 41.2 | 0.45× |
-| `general/prefix_sum_f32` | 32.2 | 23.4 | 1.38× |
-| `general/reduce_sum_f32` | 27.5 | 21.1 | 1.31× |
-| `general/sdiv_i32` | 703.6 | 726.2 | 0.97× |
-| `general/short_rows_f32` | 59.8 | 60.0 | 1.00× |
+| `general/local_mem_f32` | 18.6 | 41.3 | 0.45× |
+| `general/prefix_sum_f32` | 32.0 | 20.3 | 1.57× |
+| `general/reduce_sum_f32` | 27.5 | 19.7 | 1.40× |
+| `general/sdiv_i32` | 703.5 | 726.2 | 0.97× |
+| `general/short_rows_f32` | 60.0 | 29.2 | 2.06× |
 | `general/where_f32` | 59.8 | 37.4 | 1.60× |
-| `hpc/blackscholes_f32` | 1420.3 | 1494.0 | 0.95× |
-| `hpc/fft_radix4_f32` | 49.1 | 49.0 | 1.00× |
-| `hpc/jacobi2d_f32` | 137.0 | 52.6 | 2.60× |
-| `hpc/laplace3d_f32` | 240.8 | 272.7 | 0.88× |
+| `hpc/blackscholes_f32` | 1420.4 | 1494.0 | 0.95× |
+| `hpc/fft_radix4_f32` | 49.2 | 49.1 | 1.00× |
+| `hpc/jacobi2d_f32` | 137.0 | 46.6 | 2.94× |
+| `hpc/laplace3d_f32` | 240.9 | 272.7 | 0.88× |
 | `hpc/montecarlo_pi_f32` | 701.4 | 504.0 | 1.39× |
 | `hpc/nbody_f32` | 1312.3 | 828.5 | 1.58× |
 | `hpc/rk4_duffing_f32` | 460.2 | 457.4 | 1.01× |
-| `misc/game_of_life_i32` | 200.6 | 87.0 | 2.31× |
+| `misc/game_of_life_i32` | 200.5 | 83.2 | 2.41× |
 | `misc/mandelbrot_f32` | 1256.4 | 1220.0 | 1.03× |
 | `misc/plasma_rgb_f32` | 348.2 | 397.5 | 0.88× |
 | `misc/raytrace_spheres_f32` | 722.9 | 747.4 | 0.97× |
-| `ml/add_rmsnorm_bf16` | 132.2 | 84.2 | 1.57× |
+| `ml/add_rmsnorm_bf16` | 132.2 | 53.6 | 2.47× |
 | `ml/causal_conv1d_bf16` | 423.7 | 292.3 | 1.45× |
-| `ml/decode_attention_bf16` | 934.2 | 568.5 | 1.64× |
+| `ml/decode_attention_bf16` | 934.3 | 568.5 | 1.64× |
 | `ml/dequant_int4_f32` | 52.6 | 52.6 | 1.00× |
-| `ml/fp8_quant_bf16` | 159.7 | 166.6 | 0.96× |
-| `ml/gelu_f32` | 396.6 | 217.6 | 1.82× |
-| `ml/layernorm_f32` | 129.9 | 95.7 | 1.36× |
+| `ml/fp8_quant_bf16` | 159.6 | 166.6 | 0.96× |
+| `ml/gelu_f32` | 396.5 | 130.6 | 3.04× |
+| `ml/layernorm_f32` | 129.9 | 78.4 | 1.66× |
 | `ml/moe_router_f32` | 343.4 | 338.1 | 1.02× |
 | `ml/rmsnorm_bf16` | 76.2 | 40.8 | 1.87× |
-| `ml/rope_neox_bf16` | 111.8 | 53.0 | 2.11× |
+| `ml/rope_neox_bf16` | 111.9 | 53.1 | 2.11× |
 | `ml/softmax_f32` | 1094.6 | 871.4 | 1.26× |
 | `ml/swiglu_bf16` | 99.5 | 61.1 | 1.63× |
-| geomean, general |  |  | 1.02× |
-| geomean, hpc |  |  | 1.25× |
-| geomean, misc |  |  | 1.19× |
-| geomean, ml |  |  | 1.43× |
-| **geomean, all** |  |  | **1.23×** |
+| geomean, general |  |  | 1.12× |
+| geomean, hpc |  |  | 1.27× |
+| geomean, misc |  |  | 1.20× |
+| geomean, ml |  |  | 1.57× |
+| **geomean, all** |  |  | **1.31×** |
 
 Time is in TPC-microseconds: the Habana profiler's start-to-halt time of each
 TPC that ran the kernel (2 to 8 per launch), summed, so host and launch
 overhead are left out. Each time is the median of 10 runs, which spread by at
-most ±0.9%. Speedup is Habana's time divided by the fork's, so above 1× the
+most ±1.1%. Speedup is Habana's time divided by the fork's, so above 1× the
 fork is faster. Every run's outputs equal those of the other compiler and of
-the TPC simulator. Measured on 2026-11-20 with the fork at 64a3c0d772c1; the
+the TPC simulator. Measured on 2026-11-21 with the fork at cdebf620f97e; the
 method, and how to rerun it, is in [`tpc/README.md`](tpc/README.md#microbenchmarks-bench).
 
 ## Clone tpc-llvm Repository
