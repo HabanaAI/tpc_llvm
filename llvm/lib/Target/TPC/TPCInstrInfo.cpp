@@ -1738,6 +1738,19 @@ static TPCLatencyEvaluation::OperandID getOperandId(const TPCSubtarget &Subtarge
         MC.getOpcode() == TPC::FCLASS_LIMITvvsvm ||
         MC.getOpcode() == TPC::FCLASS_LIMITvvvsm)
       return TPCLatencyEvaluation::OperandID::e_src_d;
+    // MAC x2 has the multiplier of the high half in SRC_D, as MUL x2 does
+    // (VpuInst_MAC_MUL_X2); its accumulator is the tied income, SRC_C above.
+    // Taken as SRC_C, a MUL feeding it got the accumulator's latency, 4
+    // instead of 6, and the MAC read the old value.
+    switch (MC.getOpcode()) {
+    case TPC::MACx2f32vvvp: case TPC::MACx2f32viip: case TPC::MACx2f32vssp:
+    case TPC::MACx2f32vivp: case TPC::MACx2f32vsvp: case TPC::MACx2f32vvip:
+    case TPC::MACx2f32vvsp: case TPC::MACx2f32ivvp: case TPC::MACx2f32svvp:
+    case TPC::MACx2f32vvvm: case TPC::MACx2f32viim: case TPC::MACx2f32vssm:
+    case TPC::MACx2f32vivm: case TPC::MACx2f32vsvm: case TPC::MACx2f32vvim:
+    case TPC::MACx2f32vvsm: case TPC::MACx2f32ivvm: case TPC::MACx2f32svvm:
+      return TPCLatencyEvaluation::OperandID::e_src_d;
+    }
     if (MC.getOpcode() == TPC::MULx2f32vvvp ||
         MC.getOpcode() == TPC::MULx2f32svvp ||
         MC.getOpcode() == TPC::MULx2f32vsvp ||
