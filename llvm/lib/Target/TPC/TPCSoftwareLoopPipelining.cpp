@@ -71,9 +71,14 @@ static cl::opt<unsigned> AutoUnrollCount(
              "pragma)"));
 
 static cl::opt<unsigned> AutoUnrollMinGain(
-    "tpc-machine-unroll-min-gain", cl::Hidden, cl::init(4),
+    "tpc-machine-unroll-min-gain", cl::Hidden, cl::init(3),
     cl::desc("Fewest cycles per iteration that unrolling without the pragma "
              "must save, by the latency estimate, to be done"));
+
+static cl::opt<bool> AutoUnrollIndexSpace(
+    "tpc-machine-unroll-index-space", cl::Hidden, cl::init(true),
+    cl::desc("Also unroll, without the pragma, a hardware loop over the "
+             "member's part of the index space"));
 
 static cl::opt<unsigned> AutoUnrollMaxSize(
     "tpc-machine-unroll-max-size", cl::Hidden, cl::init(160),
@@ -816,8 +821,41 @@ void TPCPipeliner::generateEpilogueLoop(const unsigned UnrollCount,
   //    // MinDistance == 100
   //    // Actual distance == 101
 
+  // The unrolled boundary depends only on Start and Bound. Compute it in the
+  // preheader of the outermost loop around the source loop that both are
+  // defined outside of, so that it is not computed again each time the
+  // source loop is entered.
+  MachineBasicBlock *BoundBB = Prolog;
+  MachineBasicBlock::iterator BoundAt = --Prolog->end();
+  auto DefinedOutside = [&](const MachineOperand &MO, const MachineLoop *L) {
+    if (MO.isImm())
+      return true;
+    if (!MO.isReg() || !MO.getReg().isVirtual())
+      return false;
+    const MachineInstr *Def = MRI->getVRegDef(MO.getReg());
+    return Def && !L->contains(Def->getParent());
+  };
+  // The block before a hardware loop also branches to its exit (the LOOP
+  // skips a loop that runs 0 times), so it is no preheader in
+  // MachineLoop's sense: take the loop's one predecessor outside it, as for
+  // Prolog.
+  for (MachineLoop *L = MLI->getLoopFor(Prolog); L; L = L->getParentLoop()) {
+    MachineBasicBlock *PH = L->getLoopPredecessor();
+    if (!PH || !DefinedOutside(StartOp(), L) || !DefinedOutside(BoundOp(), L))
+      break;
+    // Before the LOOP that ends the preheader, as in Prolog.
+    MachineBasicBlock::iterator At = PH->getFirstTerminator();
+    for (MachineInstr &MI : *PH)
+      if (isLoop(MI)) {
+        At = MI.getIterator();
+        break;
+      }
+    BoundBB = PH;
+    BoundAt = At;
+  }
+
   const MachineOperand MinDistanceOp =
-      evalSubI32(*Prolog, --Prolog->end(), BoundOp(), StartOp(), *MRI, *TII);
+      evalSubI32(*BoundBB, BoundAt, BoundOp(), StartOp(), *MRI, *TII);
 
   assert(isIntN(32, StepOp().getImm() * UnrollCount));  // Precondition.
   const std::int32_t UnrolledStep = std::abs(StepOp().getImm() * UnrollCount);
@@ -833,21 +871,21 @@ void TPCPipeliner::generateEpilogueLoop(const unsigned UnrollCount,
   if (StepOp().getImm() > 0 && CmpOp().getImm() == TPCII::LoopLT &&
       isPowerOf2_32(UnrolledStep)) {
     UnrolledDistanceVal =
-        evalAndI32(*Prolog, --Prolog->end(), MinDistanceOp,
+        evalAndI32(*BoundBB, BoundAt, MinDistanceOp,
                    MachineOperand::CreateImm(-UnrolledStep), *MRI, *TII);
   } else {
     const MachineOperand MinRestDistanceOp =
         StepOp().getImm() > 0 && HasLoopTakenGuarantee
-            ? evalRemPosToPosI32(*Prolog, --Prolog->end(), MinDistanceOp,
+            ? evalRemPosToPosI32(*BoundBB, BoundAt, MinDistanceOp,
                                  UnrolledStep, *MRI, *TII)
-            : evalRemPosI32(*Prolog, --Prolog->end(), MinDistanceOp,
+            : evalRemPosI32(*BoundBB, BoundAt, MinDistanceOp,
                             UnrolledStep, *MRI, *TII);
-    UnrolledDistanceVal = evalSubI32(*Prolog, --Prolog->end(), MinDistanceOp,
+    UnrolledDistanceVal = evalSubI32(*BoundBB, BoundAt, MinDistanceOp,
                                      MinRestDistanceOp, *MRI, *TII);
   }
 
   const MachineOperand UnrolledBoundaryVal = evalAddI32(
-      *Prolog, --Prolog->end(), StartOp(), UnrolledDistanceVal, *MRI, *TII);
+      *BoundBB, BoundAt, StartOp(), UnrolledDistanceVal, *MRI, *TII);
 
   bool isDoron1Plus = CurrMF->getSubtarget<TPCSubtarget>().hasDoron1();
 
@@ -1422,23 +1460,27 @@ bool TPCPipeliner::pipeline(MachineLoop* L) {
 /// about invariants + count * (most values of one iteration live at once)
 /// are live, which must stay within 3/4 of the allocatable registers.
 ///
-/// Unrolling costs about 14 cycles each time the loop is entered (the
-/// unrolled bound, the epilogue LOOP), so it is for loops that run many
-/// times. A loop over the member's part of the index space (its start or
-/// bound comes from get_index_space_offset or _size) usually runs a few
-/// times, once per index-space point the member got, and is left as it is. A
-/// loop over a tensor dimension or up to a scalar argument is unrolled when
-/// that saves at least -tpc-machine-unroll-min-gain cycles per iteration: an
-/// iteration takes about the longest chain of latencies through the body, as
-/// iterations do not overlap, and Count copies take about
-/// max(chain + Count - 1, Count * busiest slot), as theirs do. A smaller
-/// count is taken when it saves about as much.
+/// Unrolling costs about 12 cycles each time the loop is entered (the
+/// copies' index registers, the epilogue LOOP; the unrolled bound is computed
+/// outside the loops around it where it can be), so it is for loops that run
+/// more than a few times. That includes a loop over the member's part of the
+/// index space (its start or bound comes from get_index_space_offset or
+/// _size): the runtime splits the index space among the TPCs, so each part
+/// is long unless the index space is small (-tpc-machine-unroll-index-space
+/// leaves such loops alone). A loop is unrolled when that saves at least
+/// -tpc-machine-unroll-min-gain cycles per iteration: an iteration takes
+/// about the longest chain of latencies through the body, as iterations do
+/// not overlap, and Count copies take about
+/// max(chain + Count - 1, Count * busiest slot), as theirs do. The estimate
+/// understates what more copies save, so the largest count that fits is
+/// taken.
 unsigned TPCPipeliner::autoUnrollCount(const MLDAReport &Deps) const {
   if (LoopInst->getOperand(3).getImm() != TPCII::LoopLT ||
       LoopInst->getOperand(2).getImm() <= 0)
     return 0;
-  if (dependsOnIndexSpace(LoopInst->getOperand(0)) ||
-      dependsOnIndexSpace(LoopInst->getOperand(1))) {
+  if (!AutoUnrollIndexSpace &&
+      (dependsOnIndexSpace(LoopInst->getOperand(0)) ||
+       dependsOnIndexSpace(LoopInst->getOperand(1)))) {
     LLVM_DEBUG(dbgs() << "Auto unroll: loop over the index space\n");
     return 0;
   }
@@ -1511,7 +1553,11 @@ unsigned TPCPipeliner::autoUnrollCount(const MLDAReport &Deps) const {
       if (!MO.isReg() || !MO.getReg().isVirtual() || MO.isUndef())
         continue;
       const MachineInstr *Def = MRI->getVRegDef(MO.getReg());
-      if (Def && Def->getParent() != Header) {
+      // A constant made outside the loop (tpclib functions use many) need
+      // not stay in a register: the allocator makes it again where it is
+      // used when registers run short.
+      if (Def && Def->getParent() != Header &&
+          !TII->isTriviallyReMaterializable(*Def)) {
         const int F = FileOf(MRI->getRegClass(MO.getReg()));
         if (F >= 0 && Invariants.insert(MO.getReg()).second)
           Invariant[F] += Weight(MO.getReg());
@@ -1599,9 +1645,6 @@ unsigned TPCPipeliner::autoUnrollCount(const MLDAReport &Deps) const {
     if (Fits)
       break;
   }
-  // Prefer the smaller count when it saves nearly as much.
-  while (Count > 2 && Saving(Count / 2) + 1 >= Saving(Count))
-    Count /= 2;
   LLVM_DEBUG(dbgs() << "Auto unroll: size " << Size << ", vector live "
                     << MaxLive[Vec] << " + " << Invariant[Vec] << " of "
                     << Limit[Vec] << ", chain " << Chain << ", slots "

@@ -1,16 +1,18 @@
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 %s -o - 2>&1 | FileCheck --check-prefix=AUTO %s
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O3 -target-cpu gaudi %s -o - 2>&1 | FileCheck --check-prefix=AUTO %s
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -mllvm -tpc-machine-unroll-count=0 %s -o - 2>&1 | FileCheck --check-prefix=ONCE %s
-// RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DINDEX %s -o - 2>&1 | FileCheck --check-prefix=ONCE %s
+// RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DINDEX %s -o - 2>&1 | FileCheck --check-prefix=AUTO %s
+// RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DINDEX -mllvm -tpc-machine-unroll-index-space=false %s -o - 2>&1 | FileCheck --check-prefix=ONCE %s
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DACC %s -o - 2>&1 | FileCheck --check-prefix=ACC %s
 
 // Without a machine_unroll pragma, the backend unrolls a single-block
 // hardware loop 2 or 4 times when that is safe and pays (TPCPipeliner::
 // autoUnrollCount): the loop counts up with '<'; its carried values are
 // linear induction variables; no load or store can depend on another; the
-// registers fit; the latency estimate saves at least 4 cycles per iteration;
-// and the loop is not over the member's index space, which usually runs a
-// few times. An epilogue loop runs the iterations left over.
+// registers fit; and the latency estimate saves at least 3 cycles per
+// iteration. That includes a loop over the member's part of the index space
+// (-DINDEX), which is long unless the index space is small. An epilogue loop
+// runs the iterations left over.
 //
 // Here (the second pass of RMSNorm) an iteration is a chain of ld, mac (madd
 // where TPCMulAddCombine makes one), mul, convert and st with NOPs between
