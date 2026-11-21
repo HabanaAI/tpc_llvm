@@ -1773,6 +1773,11 @@ ReoptimizeBlock:
             !TII->analyzeBranch(*PredBB, PredTBB, PredFBB, PredCond, true) &&
             (PredTBB == MBB || PredFBB == MBB) &&
             (!CurFallsThru || !CurTBB || !CurFBB) &&
+            // A branch cannot be added after terminators that analyzeBranch
+            // does not understand: on TPC a block ending in a hardware LOOP
+            // must be followed by the loop body, which a jump to it would
+            // take out of the loop's range.
+            (!CurFallsThru || !CurUnAnalyzable) &&
             (!CurFallsThru || MBB->getNumber() >= PredBB->getNumber())) {
           // If the current block doesn't fall through, just move it.
           // If the current block can fall through and does not end with a
