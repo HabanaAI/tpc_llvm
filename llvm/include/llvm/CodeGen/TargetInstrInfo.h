@@ -893,6 +893,17 @@ public:
     /// Return true if the target can expand pipelined schedule with modulo
     /// variable expansion.
     virtual bool isMVEExpanderSupported() { return false; }
+
+    /// Return true if the loop should be expanded with modulo variable
+    /// expansion when the target supports it for the loop, without
+    /// -pipeliner-mve-cg.
+    virtual bool preferMVEExpander() { return false; }
+
+    /// Return false if the target has shown that no memory access of one
+    /// iteration of the loop depends on a memory access of another, where the
+    /// pipeliner's own analysis of memory operands cannot tell. No
+    /// loop-carried order dependences are added then.
+    virtual bool mayHaveLoopCarriedMemoryDependences() const { return true; }
   };
 
   /// Analyze loop L, which must be a single-basic-block loop, and if the

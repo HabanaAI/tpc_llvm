@@ -1324,7 +1324,16 @@ bool TPCHardwareLoops::convertToHardwareLoop(MachineLoop *L,
   if (NewPreheader) {
     InsertPos = NewPreheader->end();
     LoopBlock = NewPreheader;
-  } else if (Preheader->succ_size() == 1) {
+  } else if (Preheader->succ_size() == 1 &&
+             Preheader->isLayoutSuccessor(Header)) {
+    // The LOOP goes at the end of the block and runs the code after it: a
+    // jump to the loop there (the pipeliner's MVE expander leaves one before
+    // the loop it keeps for the remaining iterations) would skip it.
+    MachineBasicBlock::iterator T = Preheader->getFirstTerminator();
+    if (T != Preheader->end() && T->getOpcode() == TPC::JMPR_u &&
+        T->getOperand(0).isMBB() && T->getOperand(0).getMBB() == Header &&
+        std::next(T) == Preheader->end())
+      T->eraseFromParent();
     InsertPos = Preheader->end();
     LoopBlock = Preheader;
   } else {

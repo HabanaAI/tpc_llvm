@@ -116,6 +116,13 @@ public:
     // Let the DAG builder use Alias Analysis for memory disambiguation.
     bool useAA() const override { return true; }
 
+    /// Whether the MachinePipeliner modulo-schedules loops: on gaudi2, or as
+    /// -tpc-modulo-schedule says (TPCModuloScheduling.cpp).
+    bool enableMachinePipeliner() const override;
+    // The MachinePipeliner's fallback, which rotates a loop it could not
+    // modulo-schedule, is not set up for TPC.
+    bool enableWindowScheduler() const override { return false; }
+
 #if defined(TPC_DISABLE_MISCHED) || defined(TPC_DISABLE_ALL_SCHED)
   bool enableMachineScheduler() const override { return false; }
 #else
@@ -132,15 +139,10 @@ public:
   public:
     void apply(ScheduleDAGInstrs *DAG) override;
   };
-/*
-  void getPostRAMutations(
-      std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
-      const override;
-
+  /// Latencies the MachinePipeliner gets wrong (TPCModuloScheduling.cpp).
   void getSMSMutations(
       std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
       const override;
-*/
 
   bool hasBFloat16() const { return HasBFloat16Type; }
   bool hasHalfFloat() const { return HasHalfFloatType; }

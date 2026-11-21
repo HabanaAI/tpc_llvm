@@ -936,7 +936,8 @@ void SwingSchedulerDAG::schedule() {
   if (ExperimentalCodeGen && NewInstrChanges.empty()) {
     PeelingModuloScheduleExpander MSE(MF, MS, &LIS);
     MSE.expand();
-  } else if (MVECodeGen && NewInstrChanges.empty() &&
+  } else if ((MVECodeGen || LoopPipelinerInfo->preferMVEExpander()) &&
+             NewInstrChanges.empty() &&
              LoopPipelinerInfo->isMVEExpanderSupported() &&
              ModuloScheduleExpanderMVE::canApply(Loop)) {
     ModuloScheduleExpanderMVE MSE(MF, MS, LIS);
@@ -1255,6 +1256,9 @@ void LoopCarriedOrderDepsTracker::computeDependenciesAux() {
 /// TODO: Also compute output-dependencies.
 LoopCarriedEdges SwingSchedulerDAG::addLoopCarriedDependences() {
   LoopCarriedEdges LCE;
+  if (LoopPipelinerInfo &&
+      !LoopPipelinerInfo->mayHaveLoopCarriedMemoryDependences())
+    return LCE;
 
   // Add loop-carried order-dependencies
   LoopCarriedOrderDepsTracker LCODTracker(this, &BAA, TII, TRI);

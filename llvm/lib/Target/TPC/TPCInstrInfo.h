@@ -153,6 +153,11 @@ public:
                      LaneBitmask UsedLanes = LaneBitmask::getAll()) const override;
 
 
+  /// Describe a single-block loop to the MachinePipeliner
+  /// (TPCModuloScheduling.cpp).
+  std::unique_ptr<PipelinerLoopInfo>
+  analyzeLoopForPipelining(MachineBasicBlock *LoopBB) const override;
+
   // Create machine specific model for scheduling.
   DFAPacketizer *
   CreateTargetScheduleState(const TargetSubtargetInfo &STI) const override;
@@ -256,6 +261,28 @@ MCRegister getCarryRegister(const MachineInstr &MI);
 /// Whether MI is an ADD with the CARRY switch or a SUB with BORROW, which
 /// reads the carry left by the ADD or SUB before it.
 bool readsCarry(const MachineInstr &MI);
+
+/// An instruction of MBB that the machine unroller and the pipeliner must not
+/// move past another iteration's instructions: one with hidden state (a carry
+/// read, cache or MMIO access, ASO) or that writes a special register.
+/// TPCSoftwareLoopPipelining.cpp.
+const MachineInstr *findInstrUnsafeToReorder(const MachineBasicBlock &MBB,
+                                             const MachineRegisterInfo &MRI);
+
+/// The machine unroller's estimate for a loop body without the pragma
+/// (TPCPipeliner::autoUnrollCount): cycles per iteration as it is (Before)
+/// and unrolled Count times (After, when Count >= 2), and whether that saves
+/// enough to be done.
+struct AutoUnrollEstimate {
+  unsigned Count = 0;
+  unsigned Before = 0;
+  unsigned After = 0;
+  bool Worthwhile = false;
+};
+AutoUnrollEstimate estimateAutoUnroll(const MachineBasicBlock &Body,
+                                      const MachineRegisterInfo &MRI,
+                                      const TPCInstrInfo &TII,
+                                      const TargetRegisterInfo &TRI);
 }
 
 #endif

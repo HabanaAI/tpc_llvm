@@ -2417,7 +2417,10 @@ int TPCInstrInfo::getTPCOperandLatency(const InstrItineraryData *ItinData,
     return 0;
   }
 
-  if (UseReg != DefReg) {
+  // Virtual registers differ when the use reads the value through a copy-like
+  // pseudo (the pipeliner's latency mutation asks for that); the latency is
+  // then that of the producer to the consumer.
+  if (UseReg != DefReg && UseReg.isPhysical() && DefReg.isPhysical()) {
     // The registers used by definition and use may differ if one register
     // is a subregister of the other.
     if (!getRegisterInfo().isSubRegister(DefReg, UseReg) &&
@@ -2524,7 +2527,8 @@ int TPCInstrInfo::getTPCOperandLatency(const InstrItineraryData *ItinData,
   // result, that are not touched by this instruction.
   if (isSET_INDX(UseMI.getOpcode()) && UseIdx == 1) {
     assert(UseMI.getOperand(1).isReg());
-    assert(DefMI.getOperand(0).getReg() == UseMI.getOperand(1).getReg());
+    assert(DefMI.getOperand(0).getReg() == UseMI.getOperand(1).getReg() ||
+           UseMI.getOperand(1).getReg().isVirtual());
     DEBUG_WITH_TYPE("latency", dbgs() << "== Latency (IRF) = " << 0 << "\n");
     DEBUG_WITH_TYPE("latency", dbgs() << "=====================================================\n");
     return 0;

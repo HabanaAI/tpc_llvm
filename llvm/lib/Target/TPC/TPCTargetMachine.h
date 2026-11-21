@@ -138,6 +138,10 @@ public:
 FunctionPass *createTPCHardwareLoops();
 FunctionPass *createTPCOptimizeHWLoopsGuards();
 void initializeTPCOptimizeHWLoopsGuardsPass(PassRegistry &);
+FunctionPass *createTPCModuloScheduleSetup();
+void initializeTPCModuloScheduleSetupPass(PassRegistry &);
+FunctionPass *createTPCModuloScheduleFinish();
+void initializeTPCModuloScheduleFinishPass(PassRegistry &);
 FunctionPass *createTPCMulAddCombine();
 void initializeTPCMulAddCombinePass(PassRegistry &);
 FunctionPass *createTPCCarryDeps();
@@ -204,6 +208,10 @@ public:
   }
 
   TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
+
+  MachineFunctionInfo *
+  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
+                            const TargetSubtargetInfo *STI) const override;
 
   ScheduleDAGInstrs *
   createMachineScheduler(MachineSchedContext *C) const override;

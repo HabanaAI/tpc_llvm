@@ -1,5 +1,6 @@
 #include "TPC.h"
 #include "TPCAliasAnalysis.h"
+#include "TPCMachineFunctionInfo.h"
 #include "TPCSubtarget.h"
 #include "TPCTargetMachine.h"
 #include "TPCTargetObjectFile.h"
@@ -43,6 +44,8 @@ extern "C" void LLVMInitializeTPCTarget() {
   initializeTPCPredicateOptimizerPass(Registry);
   initializeTPCIncMergerPass(Registry);
   initializeTPCOptimizeHWLoopsGuardsPass(Registry);
+  initializeTPCModuloScheduleSetupPass(Registry);
+  initializeTPCModuloScheduleFinishPass(Registry);
   initializeTPCMulAddCombinePass(Registry);
   initializeTPCCarryDepsPass(Registry);
 }
@@ -378,6 +381,13 @@ void TPCTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
       });
 }
 
+MachineFunctionInfo *TPCTargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return TPCMachineFunctionInfo::create<TPCMachineFunctionInfo>(Allocator, F,
+                                                                STI);
+}
+
 TargetPassConfig *TPCTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new TPCPassConfig(this, PM);
 }
@@ -470,6 +480,11 @@ void TPCPassConfig::addPreRegAlloc() {
     addPass(createTPCAddrOpt());
 #endif
     addPass(createTPCRegisterBalancer());
+    addPass(&DeadMachineInstructionElimID);
+    // Modulo scheduling, where TPCSubtarget::enableMachinePipeliner says.
+    addPass(createTPCModuloScheduleSetup());
+    addPass(&MachinePipelinerID);
+    addPass(createTPCModuloScheduleFinish());
     addPass(&DeadMachineInstructionElimID);
     addPass(createTPCHardwareLoops());
     addPass(createTPCOptimizeHWLoopsGuards());

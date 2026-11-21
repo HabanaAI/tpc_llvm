@@ -57,6 +57,7 @@ set(sources
   TPCMulAddCombine.cpp
   TPCCarryDeps.cpp
   TPCCarryPairs.cpp
+  TPCModuloScheduling.cpp
   TPCOptimizeHWLoopsGuards.cpp
   TPCSelectorPreshaper.cpp
   TPCSingleUseScalarOptimizer.cpp
