@@ -414,8 +414,11 @@ defm : RemapAllTargetPseudoPointerOperands<SRF>;
 // TPC processors supported.
 //----------------------------------------------------------------------------//
 
-class Proc<string Name, list<SubtargetFeature> Features>
- : ProcessorModel<Name, TPCModel, Features>;
+// greco, gaudi2 and doron1 (256-bit VLIW) use TPCModelGen3, see
+// TPCSchedule.td.
+class Proc<string Name, list<SubtargetFeature> Features,
+           SchedMachineModel Model = TPCModel>
+ : ProcessorModel<Name, Model, Features>;
 
 def : Proc<"goya",  [FeatureGoya, FeatureMulI8, FeatureAddr2]>;
 def : Proc<"gaudi", [FeatureGaudi,
@@ -468,7 +471,7 @@ def : Proc<"greco", [FeatureGreco,
                      FeatureGetHSRF,
                      FeatureHWMov,
                      FeatureGen2Plus,
-                     FeatureGen3Plus]>;
+                     FeatureGen3Plus], TPCModelGen3>;
 def : Proc<"gaudi2", [FeatureGaudi2,
                      FeatureBF16,
                      FeatureFP16,
@@ -504,7 +507,7 @@ def : Proc<"gaudi2", [FeatureGaudi2,
                      FeatureGen4Plus,
 //                   FeatureConvertFpFlex,
                      FeatureDirect,
-                     FeatureVectStMask]>;
+                     FeatureVectStMask], TPCModelGen3>;
 def : Proc<"doron1", [FeatureDoron1,
                      FeatureBF16,
                      FeatureFP16,
@@ -540,7 +543,7 @@ def : Proc<"doron1", [FeatureDoron1,
                      FeatureGen4Plus,
                      FeatureDoron1,
                      FeatureDirect,
-                     FeatureVectStMask]>;
+                     FeatureVectStMask], TPCModelGen3>;
 
 //===----------------------------------------------------------------------===//
 // Assembly Parser

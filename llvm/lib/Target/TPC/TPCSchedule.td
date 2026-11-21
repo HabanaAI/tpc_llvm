@@ -30,6 +30,10 @@ def SRC_BD        : FuncUnit;
 // Field SrcC of VPU instruction is also SrcC in Store slot.
 def SRC_C         : FuncUnit;
 
+// Both hold for the 160-bit VLIW of goya, gaudi and gaudib only. The 256-bit
+// VLIW of greco, gaudi2 and doron1 gives VPU SrcC and SrcD fields of their
+// own (TPCInstrLayout.cpp), so TPCItinerariesGen3 below has neither unit.
+
 // Local memory address.
 //
 // According to PRM 1.3.4:
@@ -207,5 +211,85 @@ def TPCModel : SchedMachineModel {
   let LoadLatency = 1;
   let CompleteModel = 0;
   let MicroOpBufferSize = 0; // In-order execution, always hide latency.
+  let PostRAScheduler = 1;
+}
+
+//------------------------------------------------------------------------------
+// greco, gaudi2 and doron1: TPCItineraries without SRC_BD and SRC_C. Every
+// stage removed had a time increment of 0, so the others start in the same
+// cycles. A VPU instruction with SrcC or SrcD (MADD, SEL, FORM_FP_NUM, the x2
+// operations, ...) can then share a VLIW with LD_TNSR, ST_TNSR and the other
+// loads and stores.
+//------------------------------------------------------------------------------
+
+// The unit list is TPCItineraries' own, in the same order: the DFA packetizer
+// emitter numbers units by their position, with one numbering for all
+// itineraries. SRC_BD and SRC_C are listed but no stage uses them.
+def TPCItinerariesGen3 :
+  ProcessorItineraries<
+    [LD_SLOT, ST_SLOT, VPU_SLOT, SPU_SLOT,
+     SRC_BD, SRC_C,
+     LOCAL_MEM, GLOBAL_MEM],
+    [],
+    [
+      InstrItinData<IIC_LoadOp,
+          [InstrStage<1, [LD_SLOT]>]>,
+      InstrItinData<IIC_LoadComplexOp,
+          [InstrStage<1, [LD_SLOT]>]>,
+      InstrItinData<IIC_LoadScalLocal,
+          [InstrStage<1, [LD_SLOT], 0>,
+           InstrStage<1, [LOCAL_MEM]>]>,
+      InstrItinData<IIC_LoadShortVectLocal,
+          [InstrStage<1, [LD_SLOT], 0>,
+           InstrStage<1, [LOCAL_MEM]>]>,
+      InstrItinData<IIC_LoadVectLocal,
+          [InstrStage<1, [LD_SLOT], 0>,
+           InstrStage<1, [LOCAL_MEM]>]>,
+      InstrItinData<IIC_LoadScalGlobal,
+          [InstrStage<1, [LD_SLOT], 0>,
+           InstrStage<1, [GLOBAL_MEM]>]>,
+      InstrItinData<IIC_LoadScalGlobalMask,
+          [InstrStage<1, [LD_SLOT], 0>,
+           InstrStage<1, [GLOBAL_MEM]>]>,
+      InstrItinData<IIC_LoadTensor,
+          [InstrStage<1, [LD_SLOT], 0>]>,
+
+      InstrItinData<IIC_StoreOp,
+          [InstrStage<1, [ST_SLOT ]>]>,
+      InstrItinData<IIC_StoreComplexOp,
+          [InstrStage<1, [ST_SLOT], 0>]>,
+      InstrItinData<IIC_StoreScalLocal,
+          [InstrStage<1, [ST_SLOT], 0>,
+           InstrStage<1, [LOCAL_MEM]>]>,
+      InstrItinData<IIC_StoreVectLocal,
+          [InstrStage<1, [ST_SLOT], 0>,
+           InstrStage<1, [LOCAL_MEM]>]>,
+      InstrItinData<IIC_StoreScalGlobal,
+          [InstrStage<1, [ST_SLOT], 0>,
+           InstrStage<1, [GLOBAL_MEM]>]>,
+      InstrItinData<IIC_StoreTensor,
+          [InstrStage<1, [ST_SLOT], 0>]>,
+
+      InstrItinData<IIC_ScalarOp,
+          [InstrStage<1, [SPU_SLOT]>]>,
+
+      InstrItinData<IIC_VectorOp,
+          [InstrStage<1, [VPU_SLOT]>]>,
+      InstrItinData<IIC_VectorComplexOp,
+          [InstrStage<1, [VPU_SLOT]>]>,
+
+      InstrItinData<IIC_Loop,
+          [InstrStage<1, [LD_SLOT ], 0>,
+           InstrStage<1, [SPU_SLOT], 0>,
+           InstrStage<1, [VPU_SLOT], 0>,
+           InstrStage<1, [ST_SLOT ]>]>
+    ]>;
+
+def TPCModelGen3 : SchedMachineModel {
+  let IssueWidth = 4;
+  let Itineraries = TPCItinerariesGen3;
+  let LoadLatency = 1;
+  let CompleteModel = 0;
+  let MicroOpBufferSize = 0;
   let PostRAScheduler = 1;
 }
