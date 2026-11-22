@@ -340,6 +340,15 @@ void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
 
 #ifdef LLVM_TPC_COMPILER
   if (C.getTargetInfo().getTriple().getArch() == llvm::Triple::tpc) {
+    if ((Action == Backend_EmitObj || Action == Backend_EmitAssembly) &&
+        !C.getLangOpts().CompileForLibrary) {
+      // The hashedISA value, the same whether or not the source is embedded.
+      StringRef FData = C.getSourceManager().getBufferData(
+          C.getSourceManager().getMainFileID());
+      getModule()->addModuleFlag(
+          llvm::Module::Warning, llvm::TPCKernelHashFlag,
+          llvm::computeTPCKernelHash(getModule()->getSourceFileName(), FData));
+    }
     if (Action == Backend_EmitObj && !C.getLangOpts().CompileForLibrary) {
       // .source section
       FileID MainFileID = C.getSourceManager().getMainFileID();

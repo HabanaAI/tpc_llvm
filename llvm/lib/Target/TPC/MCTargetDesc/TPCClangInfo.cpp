@@ -1,4 +1,7 @@
 #include "llvm/Target/TPCClangInfo.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/CRC.h"
+#include "llvm/Support/Path.h"
 
 namespace llvm {
 
@@ -22,6 +25,11 @@ std::string makeTPCCompilerArgumentsString(ArrayRef<const char *> Args) {
     Result.pop_back();
 
   return Result;
+}
+
+uint32_t computeTPCKernelHash(StringRef SourceFileName, StringRef SourceText) {
+  uint32_t Hash = crc32(arrayRefFromStringRef(sys::path::stem(SourceFileName)));
+  return crc32(Hash, arrayRefFromStringRef(SourceText));
 }
 
 }

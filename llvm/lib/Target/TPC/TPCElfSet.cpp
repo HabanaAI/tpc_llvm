@@ -20,15 +20,13 @@
 #include "TPCTargetMachine.h"
 #include "TPCInstrInfo.h"
 #include "TPCSubtarget.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/CRC.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Path.h"
+#include "llvm/Target/TPCClangInfo.h"
 #include "llvm/Target/TPCMetadataSection.h"
 #include <algorithm>
 #include <iterator>
@@ -157,19 +155,22 @@ static bool isPartialStore(const MachineInstr &MI) {
 
 /// A value that identifies the kernel, for the hashedISA field. Like Habana's,
 /// it depends on the source text and the file name, so a kernel keeps it across
-/// architectures and optimization levels. The values differ from Habana's; the
-/// tools run a kernel whatever the value is.
+/// architectures, optimization levels and -S/-c. The values differ from
+/// Habana's; the tools run a kernel whatever the value is.
 static uint32_t computeKernelHash(const Module &M) {
-  uint32_t Hash =
-      crc32(arrayRefFromStringRef(sys::path::stem(M.getSourceFileName())));
-  // Clang embeds the source text when it emits an object, see
+  // Clang computes it from the main file, see
   // BackendConsumer::HandleTranslationUnit.
+  if (const auto *Hash = mdconst::extract_or_null<ConstantInt>(
+          M.getModuleFlag(TPCKernelHashFlag)))
+    return Hash->getZExtValue();
+  // IR from elsewhere: use the source text if an object's .source is there.
+  StringRef SourceText;
   if (const GlobalVariable *Source = M.getNamedGlobal("source"))
     if (Source->getSection() == ".source" && Source->hasInitializer())
       if (const auto *Text =
               dyn_cast<ConstantDataSequential>(Source->getInitializer()))
-        Hash = crc32(Hash, arrayRefFromStringRef(Text->getRawDataValues()));
-  return Hash;
+        SourceText = Text->getRawDataValues();
+  return computeTPCKernelHash(M.getSourceFileName(), SourceText);
 }
 
 char TPCElfSpecSet::ID = 0;
