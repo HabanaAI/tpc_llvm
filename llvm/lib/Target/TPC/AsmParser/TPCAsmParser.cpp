@@ -3355,7 +3355,7 @@ bool TPCAsmParser::parseTPCMetadataArrayField(
 
       if (Tok.getKind() == AsmToken::Integer) {
         uint64_t TempIndex = Tok.getAPIntVal().getLimitedValue();
-        if (TempIndex > FieldInfo.length) {
+        if (TempIndex >= FieldInfo.length) {
           Error(Tok.getLoc(),
                 "Tensor index out of range, expected from 0 to 15.",
                 Tok.getLocRange());

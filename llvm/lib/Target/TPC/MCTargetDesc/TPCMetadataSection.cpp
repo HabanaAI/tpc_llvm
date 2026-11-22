@@ -266,8 +266,8 @@ bool llvm::setTpcMetadataArrayValue(uint64_t Value,
 
   if (Index >= FieldInfo.length) {
     ErrorMessage = formatv("Invalid index."
-                           " Expected index in range [0, {1}].",
-                           FieldInfo.length);
+                           " Expected index in range [0, {0}].",
+                           FieldInfo.length - 1);
     return false;
   }
 
