@@ -1,7 +1,7 @@
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=1 %s -o - | FileCheck %s --check-prefix=IDX
 // RUN: %tpc_clang -S -O2 -march=gaudi -DP=1 %s -o - | FileCheck %s --check-prefix=IDX
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=1 -mllvm -enable-tpc-optimize-hw-loops-guards=false %s -o - | FileCheck %s --check-prefix=OFF
-// RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=2 %s -o - | FileCheck %s --check-prefix=SUM
+// RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=2 -mllvm -tpc-chain-unroll-count=0 %s -o - | FileCheck %s --check-prefix=SUM
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=3 %s -o - | FileCheck %s --check-prefix=IF
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=4 -mllvm -tpc-modulo-schedule=false %s -o - | FileCheck %s --check-prefix=STORE
 // RUN: %tpc_clang -S -O2 -march=gaudi2 -DP=5 -mllvm -tpc-modulo-schedule=false %s -o - | FileCheck %s --check-prefix=LONG

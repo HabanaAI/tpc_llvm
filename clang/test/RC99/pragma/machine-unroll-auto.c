@@ -3,7 +3,7 @@
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -mllvm -tpc-machine-unroll-count=0 %s -o - 2>&1 | FileCheck --check-prefix=ONCE %s
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DINDEX %s -o - 2>&1 | FileCheck --check-prefix=AUTO %s
 // RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DINDEX -mllvm -tpc-machine-unroll-index-space=false %s -o - 2>&1 | FileCheck --check-prefix=ONCE %s
-// RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DACC %s -o - 2>&1 | FileCheck --check-prefix=ACC %s
+// RUN: %codegen -S -triple tpc-none-none -std=rc99 -O2 -target-cpu gaudi2 -DACC -mllvm -tpc-chain-unroll-count=0 %s -o - 2>&1 | FileCheck --check-prefix=ACC %s
 
 // Without a machine_unroll pragma, the backend unrolls a single-block
 // hardware loop 2 or 4 times when that is safe and pays (TPCPipeliner::

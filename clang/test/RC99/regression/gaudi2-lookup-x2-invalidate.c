@@ -46,12 +46,13 @@ void main(tensor in, tensor out, int k, unsigned short m) {
 #elif P == 7
   cache_invalidate(SW_RST_LU, 1, 0); r = LK_X2(b);
 #elif P == 8
-  // No dependency between the two lookups of a row.
+  // No dependency between the two lookups of a row. Both read the row's
+  // load, so LICM cannot take the x2 lookup out of the loop.
   for (int i = 0; i < k; i++) {
     idx[1] = i;
     ushort128 a = v_u16_ld_tnsr_b(idx, in);
     v_i16_st_tnsr(idx, out, LK_PLAIN(a));
-    v_i16_st_tnsr(idx, out, LK_X2(b));
+    v_i16_st_tnsr(idx, out, LK_X2(a));
   }
 #endif
   v_i16_st_tnsr(idx, out, r);

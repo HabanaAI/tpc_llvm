@@ -1,6 +1,6 @@
-// RUN: %tpc_clang -S -O2 -march=gaudi2 %s -o - | FileCheck %s
-// RUN: %tpc_clang -S -O2 -march=gaudi %s -o - | FileCheck %s
-// RUN: %tpc_clang -S -O2 -march=gaudi3 %s -o - | FileCheck %s
+// RUN: %tpc_clang -S -O2 -march=gaudi2 -mllvm -tpc-chain-unroll-count=0 %s -o - | FileCheck %s
+// RUN: %tpc_clang -S -O2 -march=gaudi -mllvm -tpc-chain-unroll-count=0 %s -o - | FileCheck %s
+// RUN: %tpc_clang -S -O2 -march=gaudi3 -mllvm -tpc-chain-unroll-count=0 %s -o - | FileCheck %s
 
 // A hardware loop that does not run goes to its exit from the LOOP's block,
 // so the value of acc after the loop is a PHI of its initial value there and
