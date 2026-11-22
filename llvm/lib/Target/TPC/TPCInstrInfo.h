@@ -152,6 +152,10 @@ public:
                      unsigned SubIdx, const MachineInstr &Orig,
                      LaneBitmask UsedLanes = LaneBitmask::getAll()) const override;
 
+  /// Whether MIa and MIb reach different memories (SLM, VLM, global), or
+  /// VLM vectors at constant addresses 256 bytes or more apart.
+  bool areMemAccessesTriviallyDisjoint(const MachineInstr &MIa,
+                                       const MachineInstr &MIb) const override;
 
   /// Describe a single-block loop to the MachinePipeliner
   /// (TPCModuloScheduling.cpp).

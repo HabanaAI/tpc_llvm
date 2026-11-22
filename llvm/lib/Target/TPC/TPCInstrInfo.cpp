@@ -3638,6 +3638,60 @@ bool llvm::TPCInstrInfo::isMMIOAccess(const MachineInstr & MI)
   return false;
 }
 
+namespace {
+/// The memory a load or store reaches. SLM, VLM and global memory (through
+/// tensors or addresses) are separate. Unknown covers MMIO, whose writes can
+/// change what a tensor access does, and everything else.
+enum class TPCMemory { Unknown, SLM, VLM, Global };
+} // namespace
+
+static TPCMemory getAccessedMemory(const MachineInstr &MI,
+                                   const TPCSubtarget &ST) {
+  const MCInstrDesc &Desc = MI.getDesc();
+  if (TPCII::is_ld_l(Desc) || TPCII::is_st_l(Desc))
+    return TPCInstrInfo::isMMIOAccess(MI) ? TPCMemory::Unknown
+                                          : TPCMemory::SLM;
+  if (TPCII::is_ld_l_v_family(Desc) || TPCII::is_st_l_v_family(Desc))
+    return TPCMemory::VLM;
+  if (TPCII::is_ld_g(Desc) || TPCII::is_st_g(Desc) || TPCII::isStTnsr(Desc) ||
+      TPCII::isLdTnsr(Desc, ST.hasLdInStore()))
+    return TPCMemory::Global;
+  return TPCMemory::Unknown;
+}
+
+/// The constant address of an LD_L_V or ST_L_V of a whole vector, or none.
+static std::optional<int64_t> getConstantVLMAddress(const MachineInstr &MI) {
+  const MCInstrDesc &Desc = MI.getDesc();
+  unsigned AddrIdx;
+  if (TPCII::is_ld_l_v(Desc))
+    AddrIdx = 1;
+  else if (TPCII::is_st_l_v(Desc))
+    AddrIdx = 0;
+  else
+    return std::nullopt;
+  const MachineOperand &Addr = MI.getOperand(AddrIdx);
+  if (!Addr.isImm())
+    return std::nullopt;
+  return Addr.getImm();
+}
+
+bool TPCInstrInfo::areMemAccessesTriviallyDisjoint(
+    const MachineInstr &MIa, const MachineInstr &MIb) const {
+  const TPCMemory A = getAccessedMemory(MIa, Subtarget);
+  const TPCMemory B = getAccessedMemory(MIb, Subtarget);
+  if (A == TPCMemory::Unknown || B == TPCMemory::Unknown)
+    return false;
+  if (A != B)
+    return true;
+  if (A != TPCMemory::VLM)
+    return false;
+  // A vector is 256 bytes, the widest VLM access.
+  const std::optional<int64_t> AddrA = getConstantVLMAddress(MIa);
+  const std::optional<int64_t> AddrB = getConstantVLMAddress(MIb);
+  return AddrA && AddrB &&
+         (*AddrA - *AddrB >= 256 || *AddrB - *AddrA >= 256);
+}
+
 bool TPCInstrInfo::isGlobalScalarLoad(const MachineInstr &MI) const {
   if (!TPCII::is_ld_g(MI.getDesc()))
     return false;

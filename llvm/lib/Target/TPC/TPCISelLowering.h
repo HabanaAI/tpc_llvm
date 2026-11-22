@@ -174,6 +174,8 @@ namespace llvm {
     // Fills in the single memory access of a TPC intrinsic.
     bool getTPCTgtMemIntrinsic(IntrinsicInfo &Info, const CallBase &I,
                                MachineFunction &MF, unsigned Intrinsic) const;
+    bool getLocalOrTensorMemIntrinsic(IntrinsicInfo &Info, const CallBase &I,
+                                      unsigned Intrinsic) const;
     SDValue lowerTPC_CONVERT(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerTPC_CONVERT_LINEAR(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerTPC_CONVERT_INT(SDValue Op, SelectionDAG &DAG) const;

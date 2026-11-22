@@ -3619,8 +3619,110 @@ void TPCTargetLowering::getTgtMemIntrinsic(
     SmallVectorImpl<IntrinsicInfo> &Infos, const CallBase &I,
     MachineFunction &MF, unsigned Intrinsic) const {
   IntrinsicInfo Info;
-  if (getTPCTgtMemIntrinsic(Info, I, MF, Intrinsic))
+  if (getTPCTgtMemIntrinsic(Info, I, MF, Intrinsic) ||
+      getLocalOrTensorMemIntrinsic(Info, I, Intrinsic))
     Infos.push_back(Info);
+}
+
+/// A load or store of SLM or VLM, or a store to a tensor, gets a memory
+/// operand in its memory (TPC::AddressSpace) so that the schedulers order it
+/// only against the accesses that may reach the same memory
+/// (TPCInstrInfo::areMemAccessesTriviallyDisjoint). Without one, an access is
+/// a barrier to every other. MMIO accesses stay barriers: an MMIO write can
+/// change what a tensor access does.
+bool TPCTargetLowering::getLocalOrTensorMemIntrinsic(IntrinsicInfo &Info,
+                                                     const CallBase &I,
+                                                     unsigned Intrinsic) const {
+  // The stored value's argument, or -1 for a load.
+  int ValueArg;
+  unsigned AddrSpace;
+  switch (Intrinsic) {
+  default:
+    return false;
+  case Intrinsic::tpc_ld_l:
+    if (cast<ConstantInt>(I.getArgOperand(1))->getZExtValue() & TPCII::SW_MMIO)
+      return false;
+    ValueArg = -1;
+    AddrSpace = LOCAL_SCALAR;
+    break;
+  case Intrinsic::tpc_st_l:
+    if (cast<ConstantInt>(I.getArgOperand(2))->getZExtValue() & TPCII::SW_MMIO)
+      return false;
+    ValueArg = 1;
+    AddrSpace = LOCAL_SCALAR;
+    break;
+  case Intrinsic::tpc_ld_l_v:
+  case Intrinsic::tpc_ld_l_v_low:
+  case Intrinsic::tpc_ld_l_v_high:
+    ValueArg = -1;
+    AddrSpace = LOCAL_VECTOR;
+    break;
+  case Intrinsic::tpc_st_l_v:
+  case Intrinsic::tpc_st_l_v_low:
+  case Intrinsic::tpc_st_l_v_high:
+    ValueArg = 1;
+    AddrSpace = LOCAL_VECTOR;
+    break;
+  case Intrinsic::tpc_st_l_v_ofs:
+  case Intrinsic::tpc_st_l_v_low_ofs:
+  case Intrinsic::tpc_st_l_v_high_ofs:
+    ValueArg = 2;
+    AddrSpace = LOCAL_VECTOR;
+    break;
+  case Intrinsic::tpc_st_tnsr:
+  case Intrinsic::tpc_st_tnsr_direct:
+  case Intrinsic::tpc_st_tnsr_partial:
+  case Intrinsic::tpc_st_tnsr_partial_direct:
+  case Intrinsic::tpc_st_tnsr_rmw:
+  case Intrinsic::tpc_st_tnsr_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_partial_rmw:
+  case Intrinsic::tpc_st_tnsr_partial_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_low:
+  case Intrinsic::tpc_st_tnsr_low_direct:
+  case Intrinsic::tpc_st_tnsr_low_rmw:
+  case Intrinsic::tpc_st_tnsr_low_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_high:
+  case Intrinsic::tpc_st_tnsr_high_direct:
+  case Intrinsic::tpc_st_tnsr_high_rmw:
+  case Intrinsic::tpc_st_tnsr_high_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_s:
+  case Intrinsic::tpc_st_tnsr_s_rmw:
+    ValueArg = 2;
+    AddrSpace = GLOBAL;
+    break;
+  case Intrinsic::tpc_st_tnsr_sqz:
+  case Intrinsic::tpc_st_tnsr_sqz_rmw:
+    ValueArg = 3;
+    AddrSpace = GLOBAL;
+    break;
+  }
+
+  Type *Ty = ValueArg < 0 ? I.getType() : I.getArgOperand(ValueArg)->getType();
+  EVT VT = EVT::getEVT(Ty, /*HandleUnknown=*/true);
+  if (!VT.isSimple() || VT == MVT::Other)
+    return false;
+  Info.opc = ValueArg < 0 ? ISD::INTRINSIC_W_CHAIN : ISD::INTRINSIC_VOID;
+  Info.memVT = VT;
+  Info.fallbackAddressSpace = AddrSpace;
+  Info.align = Align(4);
+  Info.flags = ValueArg < 0 ? MachineMemOperand::MOLoad
+                            : MachineMemOperand::MOStore;
+  // A read-modify-write store reads the tensor too.
+  switch (Intrinsic) {
+  case Intrinsic::tpc_st_tnsr_rmw:
+  case Intrinsic::tpc_st_tnsr_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_partial_rmw:
+  case Intrinsic::tpc_st_tnsr_partial_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_low_rmw:
+  case Intrinsic::tpc_st_tnsr_low_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_high_rmw:
+  case Intrinsic::tpc_st_tnsr_high_rmw_direct:
+  case Intrinsic::tpc_st_tnsr_s_rmw:
+  case Intrinsic::tpc_st_tnsr_sqz_rmw:
+    Info.flags |= MachineMemOperand::MOLoad;
+    break;
+  }
+  return true;
 }
 
 bool TPCTargetLowering::getTPCTgtMemIntrinsic(IntrinsicInfo &Info,

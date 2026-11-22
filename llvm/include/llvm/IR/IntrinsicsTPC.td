@@ -146,7 +146,7 @@ def int_tpc_set_indx      : TPCIntrin<[llvm_v5i32_ty],
                                       [IntrNoMem]>;
 def int_tpc_ld_l          : TPCIntrin<[llvm_any_ty],
                                       [llvm_i32_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrReadMem, IntrWillReturn]>;
+                                      [IntrReadMem, IntrWillReturn], "", [SDNPMemOperand]>;
 def int_tpc_ld_g          : TPCIntrin<[llvm_any_ty],
                                       [tpc_global_ptr_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_any_ty, llvm_i1_ty],
                                       [IntrReadMem, IntrWillReturn]>;
@@ -179,7 +179,7 @@ def int_tpc_ld_l_v        : TPCIntrin<[llvm_anyvector_ty],
                                         llvm_any_ty,        // Predicate
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrReadMem, IntrWillReturn]>;
+                                      [IntrReadMem, IntrWillReturn], "", [SDNPMemOperand]>;
 def int_tpc_ld_l_v_low    : TPCIntrin<[llvm_anyvector_ty],
                                       [ llvm_i32_ty,        // Address
                                         llvm_i32_ty,        // Switches
@@ -187,7 +187,7 @@ def int_tpc_ld_l_v_low    : TPCIntrin<[llvm_anyvector_ty],
                                         llvm_any_ty,        // Predicate
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrReadMem, IntrWillReturn]>;
+                                      [IntrReadMem, IntrWillReturn], "", [SDNPMemOperand]>;
 def int_tpc_ld_l_v_high   : TPCIntrin<[llvm_anyvector_ty],
                                       [ llvm_i32_ty,        // Address
                                         llvm_i32_ty,        // Switches
@@ -195,7 +195,7 @@ def int_tpc_ld_l_v_high   : TPCIntrin<[llvm_anyvector_ty],
                                         llvm_any_ty,        // Predicate
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrReadMem, IntrWillReturn]>;
+                                      [IntrReadMem, IntrWillReturn], "", [SDNPMemOperand]>;
 def int_tpc_ld_tnsr       : TPCIntrin<[llvm_anyvector_ty],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, LLVMMatchType<0>, llvm_any_ty, llvm_i1_ty],
                                       [IntrNoMem]>;
@@ -1124,7 +1124,7 @@ def int_tpc_msac          : TPCIntrin<[llvm_anyvector_ty],
 
 def int_tpc_st_l          : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_any_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_g          : TPCIntrin<[],
                                       [tpc_global_ptr_ty, llvm_any_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                       [IntrWriteMem, IntrArgMemOnly]>;
@@ -1138,7 +1138,7 @@ def int_tpc_st_l_v        : TPCIntrin<[],
                                         llvm_any_ty,        // Predicate (i1/v256i1)
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_l_v_ofs    : TPCIntrin<[],
                                       [ llvm_i32_ty,        // Base
                                         llvm_i32_ty,        // Offset
@@ -1147,7 +1147,7 @@ def int_tpc_st_l_v_ofs    : TPCIntrin<[],
                                         llvm_any_ty,        // Predicate (i1/v256i1)
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_l_v_low    : TPCIntrin<[],
                                       [ llvm_i32_ty,        // Address
                                         llvm_anyvector_ty,  // Value
@@ -1155,7 +1155,7 @@ def int_tpc_st_l_v_low    : TPCIntrin<[],
                                         llvm_any_ty,        // Predicate (i1/v256i1)
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_l_v_low_ofs : TPCIntrin<[],
                                       [ llvm_i32_ty,        // Base
                                         llvm_i32_ty,        // Offset
@@ -1164,7 +1164,7 @@ def int_tpc_st_l_v_low_ofs : TPCIntrin<[],
                                         llvm_any_ty,        // Predicate (i1/v256i1)
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_l_v_high   : TPCIntrin<[],
                                       [ llvm_i32_ty,        // Address
                                         llvm_anyvector_ty,  // Value
@@ -1172,7 +1172,7 @@ def int_tpc_st_l_v_high   : TPCIntrin<[],
                                         llvm_any_ty,        // Predicate (i1/v256i1)
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_l_v_high_ofs : TPCIntrin<[],
                                       [ llvm_i32_ty,        // Base
                                         llvm_i32_ty,        // Offset
@@ -1181,22 +1181,22 @@ def int_tpc_st_l_v_high_ofs : TPCIntrin<[],
                                         llvm_any_ty,        // Predicate (i1/v256i1)
                                         llvm_i1_ty          // Polarity
                                       ],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_aso           : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                       []>;
 def int_tpc_st_tnsr       : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_direct : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_partial : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_partial_direct : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 // The RMW stores read the value they update, and the squeeze stores depend on
 // the squeeze counter and partial buffer, so they are not idempotent, but they
 // stay write-only: as anything else TableGen would make their instructions
@@ -1204,54 +1204,54 @@ def int_tpc_st_tnsr_partial_direct : TPCIntrin<[],
 // write-only calls and LICM does not move them out of loops.
 def int_tpc_st_tnsr_rmw   : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_rmw_direct   : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_partial_rmw : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_partial_rmw_direct : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_low   : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_low_direct   : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_low_rmw : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_low_rmw_direct : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_high  : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_high_direct  : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_high_rmw : TPCIntrin<[],
                                       [llvm_v5i32_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_high_rmw_direct : TPCIntrin<[],
                                       [llvm_i32_ty, llvm_i32_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                      [IntrWriteMem]>;
+                                      [IntrWriteMem], "", [SDNPMemOperand]>;
 
 def int_tpc_st_tnsr_sqz       : TPCIntrin<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_sqz_rmw   : TPCIntrin<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i8_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_v256i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          [IntrWriteMem], "", [SDNPMemOperand]>;
 
 def int_tpc_st_tnsr_s         : TPCIntrin<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_any_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_s_rmw     : TPCIntrin<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_any_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
-                                          [IntrWriteMem]>;
+                                          [IntrWriteMem], "", [SDNPMemOperand]>;
 def int_tpc_st_tnsr_s_hwr     : TPCIntrin<[],
                                           [llvm_v5i32_ty, llvm_i8_ty, llvm_i32_ty, llvm_i32_ty, llvm_i1_ty, llvm_i1_ty],
                                           [IntrWriteMem]>;
