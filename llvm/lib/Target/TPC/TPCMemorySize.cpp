@@ -120,6 +120,38 @@ void TPCMemorySize::setMemorySize(const Module &M) {
 }
 
 
+/// The ends of the SLM and VLM a function reaches at constant addresses
+/// (ld_l/st_l other than MMIO, ld_l_v/st_l_v), which the spill slots must
+/// not overlap: they are placed after the statically allocated data, and
+/// these accesses are not part of it. Runs before register allocation, so
+/// none of the accesses is a spill. A vector is 256 bytes and is reached at
+/// its address rounded down to 256 bytes.
+static std::pair<unsigned, unsigned>
+getConstantAddressExtents(const MachineFunction &MF) {
+  unsigned SLMEnd = 0, VLMEnd = 0;
+  for (const MachineBasicBlock &MBB : MF) {
+    for (const MachineInstr &MI : MBB) {
+      const MCInstrDesc &Desc = MI.getDesc();
+      const bool IsSLM = TPCII::is_ld_l(Desc) || TPCII::is_st_l(Desc);
+      const bool IsVLM =
+          TPCII::is_ld_l_v_family(Desc) || TPCII::is_st_l_v_family(Desc);
+      if (!IsSLM && !IsVLM)
+        continue;
+      if (IsSLM && TPCInstrInfo::isMMIOAccess(MI))
+        continue;
+      const MachineOperand &Addr = MI.getOperand(TPCII::isLoadInst(Desc) ? 1 : 0);
+      if (!Addr.isImm() || Addr.getImm() < 0)
+        continue;
+      const uint64_t A = Addr.getImm();
+      if (IsSLM)
+        SLMEnd = std::max<uint64_t>(SLMEnd, alignTo(A + 4, 4));
+      else
+        VLMEnd = std::max<uint64_t>(VLMEnd, alignTo(A + 1, 256));
+    }
+  }
+  return {SLMEnd, VLMEnd};
+}
+
 bool TPCMemorySize::runOnMachineFunction(MachineFunction &MF) {
   Subtarget = &MF.getSubtarget<TPCSubtarget>();
   if(!Subtarget->getTargetLowering()->getTargetMachine().Options.LocalVectorMemory) {
@@ -133,5 +165,9 @@ bool TPCMemorySize::runOnMachineFunction(MachineFunction &MF) {
     }
   }
   setMemorySize(*MF.getFunction().getParent());
+  const TPCFrameLowering &FL = *Subtarget->getFrameLowering();
+  const auto [SLMEnd, VLMEnd] = getConstantAddressExtents(MF);
+  FL.setScalarDataSize(std::max(FL.getScalarDataSize(), SLMEnd));
+  FL.setVectorDataSize(std::max(FL.getVectorDataSize(), VLMEnd));
   return true;
 }
