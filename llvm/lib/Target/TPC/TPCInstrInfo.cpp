@@ -1579,6 +1579,15 @@ static unsigned getLaneSel(const MachineInstr &MI) {
   return MO.getImm() & 0x3;
 }
  
+/// The address of an ld_g/st_g that steps it (the *_INC forms) is tied to the
+/// stepped result, but it is read like any address, from SRC_A.
+static bool isSteppedAddress(const MCInstrDesc &MC, unsigned OpIdx) {
+  return OpIdx == MC.getNumDefs() && OpIdx < MC.getNumOperands() &&
+         MC.getOperandConstraint(OpIdx, MCOI::TIED_TO) >= 0 &&
+         MC.operands()[OpIdx].RegClass == TPC::ADRFRegClassID &&
+         (TPCII::isLoadInst(MC) || TPCII::isStoreInst(MC));
+}
+
 static TPCLatencyEvaluation::OperandID getOperandId(const TPCSubtarget &Subtarget,
                                                     const MachineInstr &MI,
                                                     const TargetRegisterClass *UseRegClass,
@@ -1587,6 +1596,9 @@ static TPCLatencyEvaluation::OperandID getOperandId(const TPCSubtarget &Subtarge
   assert(UseIdx < MC.getNumOperands());
   const MachineOperand &MO = MI.getOperand(UseIdx);
   assert(MO.isReg());
+
+  if (isSteppedAddress(MC, UseIdx))
+    return TPCLatencyEvaluation::OperandID::e_src_a;
 
   // Some instructions have immediate operand. Check that we do not process it.
 #ifdef _DEBUG
@@ -1653,7 +1665,7 @@ static TPCLatencyEvaluation::OperandID getOperandId(const TPCSubtarget &Subtarge
   // this scheme.
   for (unsigned i = MC.getNumDefs(), e = UseIdx; i < e; i++) {
     const MachineOperand & Op = MI.getOperand(i);
-    if (Op.isReg() && Op.isTied())
+    if (Op.isReg() && Op.isTied() && !isSteppedAddress(MC, i))
       --UseIdx;
   }
 
