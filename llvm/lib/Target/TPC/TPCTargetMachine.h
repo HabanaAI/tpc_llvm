@@ -56,6 +56,11 @@ void initializeTPCIndexMapPass(PassRegistry&);
 FunctionPass *createTPCIndexGen();
 void initializeTPCIndexGenPass(PassRegistry &);
 
+/// Keeps vectors stored to VLM at constant addresses in registers
+/// (TPCLocalMemoryForwarding.cpp).
+FunctionPass *createTPCLocalMemoryForwarding();
+void initializeTPCLocalMemoryForwardingPass(PassRegistry &);
+
 /// Pass "tpclegal".
 class TPCModuleLegalizerPass : public PassInfoMixin<TPCModuleLegalizerPass> {
 public:

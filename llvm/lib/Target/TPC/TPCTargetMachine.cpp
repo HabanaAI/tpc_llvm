@@ -43,6 +43,7 @@ extern "C" void LLVMInitializeTPCTarget() {
 //  initializeTPCAAWrapperPassPass(Registry);
   initializeTPCPredicateOptimizerPass(Registry);
   initializeTPCIncMergerPass(Registry);
+  initializeTPCLocalMemoryForwardingPass(Registry);
   initializeTPCOptimizeHWLoopsGuardsPass(Registry);
   initializeTPCModuloScheduleSetupPass(Registry);
   initializeTPCModuloScheduleFinishPass(Registry);
@@ -395,6 +396,8 @@ TargetPassConfig *TPCTargetMachine::createPassConfig(PassManagerBase &PM) {
 void TPCPassConfig::addIRPasses() {
   addPass(createTPCIndexGen());
   TargetPassConfig::addIRPasses();
+  if (getOptLevel() != CodeGenOptLevel::None)
+    addPass(createTPCLocalMemoryForwarding());
 
       addPass(createTPCAAWrapperPass());
       addPass(createExternalAAWrapperPass([](Pass &P, Function &,

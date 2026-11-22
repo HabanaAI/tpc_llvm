@@ -89,6 +89,7 @@ set(sources
   TPCCostModelEmitter.cpp
   TPCEventProfiler.cpp
   TPCLoopData.cpp
+  TPCLocalMemoryForwarding.cpp
   TPCMachineInstrTools.cpp
   TPCMachineLoopDependencyAnalysis.cpp
   TPCMachineLoopLinearIV.cpp
