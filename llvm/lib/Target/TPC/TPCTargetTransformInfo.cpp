@@ -68,6 +68,10 @@ void TPCTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
   BaseT::getUnrollingPreferences(L, SE, UP, ORE);
   if (ChainUnrollCount < 2 || !L->isInnermost() || L->getNumBlocks() != 1)
     return;
+  // A machine_unroll_count pragma asks for the backend unroller, and its
+  // rules are Habana's, including when to refuse the loop with a warning.
+  if (findOptionMDForLoop(L, "llvm.loop.machine.unroll.count"))
+    return;
   bool CarriesChain = false;
   for (PHINode &Phi : L->getHeader()->phis()) {
     InductionDescriptor ID;
