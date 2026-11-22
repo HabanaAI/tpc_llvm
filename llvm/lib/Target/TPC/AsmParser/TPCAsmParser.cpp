@@ -1093,7 +1093,9 @@ private:
     const AsmToken &Tok = Parser.getTok();
     StringRef groupDesc = Tok.getString();
 
-    if (maxValues.count(groupDesc.lower()) > 0) {
+    std::string Key = groupDesc.lower();
+    auto MaxValue = maxValues.find(Key);
+    if (MaxValue != maxValues.end()) {
       Parser.Lex(); // Eat identifier token.
       if (Tok.getString() != "=") {
         Error(S, incorrectGroupDesc);
@@ -1108,7 +1110,7 @@ private:
 
       int64_t val = Tok.getIntVal();
       Parser.Lex(); // Eat value.
-      if (val > maxValues[groupDesc.lower()]) {
+      if (val > MaxValue->second) {
         Error(S, incorrectGroupDesc);
         return ParseStatus::Failure;
       }
