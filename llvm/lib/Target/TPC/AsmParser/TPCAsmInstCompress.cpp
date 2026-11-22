@@ -167,7 +167,7 @@ void TPCAsmInstCompress::flushBuffer(MCStreamer &Out,
 
 void TPCAsmInstCompress::flushInstCompressed(MCInst &Inst, MCStreamer &Out,
                                              const MCSubtargetInfo &STI) {
-  assert(IsFirstInstrProcessed);
+  IsFirstInstrProcessed = true;
   if(pInst != nullptr) {
     maybeCompressInstr(prevInst, true, STI);
     Out.emitInstruction(prevInst, STI);
@@ -444,7 +444,9 @@ void TPCAsmInstCompress::rmOpcodeFromBundle(MCInst &MI, unsigned opcode) const {
 
 bool TPCAsmInstCompress::maybeCompressInstr(MCInst &MI, bool doCompress,
                                             const MCSubtargetInfo &STI) const {
-  if (!IsFirstInstrProcessed)
+  // Like TPCInstrCompress: only doron1 keeps the kernel's first instruction
+  // uncompressed.
+  if (!IsFirstInstrProcessed && STI.hasFeature(TPC::FeatureDoron1))
     return false;
 
   if (MI.getOpcode() != TPC::BUNDLE) {
