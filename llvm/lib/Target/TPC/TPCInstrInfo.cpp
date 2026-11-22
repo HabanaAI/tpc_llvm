@@ -1996,7 +1996,7 @@ int TPCInstrInfo::getTPCOperandLatency(const InstrItineraryData *ItinData,
 // ----------------------------------------------------------------------------
 // MOV TO_HW_REG: LD_PARTIAL_REG,  |   LD_TNSR*/ST_TNSR* that uses     |   2
 // ST_PARTIAL_REG, LD_TNSR_ID_REG, |   this HW_REG(Greco/Gaudi2)       |
-// ST_TNSR_ID_REG, ST_RMW_REG      |                                   |
+// ST_TNSR_ID_REG, ST_RMW_REG      |   (also LD_G partial, GEN_ADDR)   |
 // ----------------------------------------------------------------------------
 // MOV TO_HW_REG: SQZ_CNTR[0-7]    |   ST_TNSR_SQZ/ST_TNSR_S that uses |   1
 //                                 |   this HW_REG(Gaudi2)             |
@@ -2007,17 +2007,25 @@ int TPCInstrInfo::getTPCOperandLatency(const InstrItineraryData *ItinData,
 // mov  ZP_REG, V1, SP0; 	nop; 	nop; 	nop
 // nop; 	nop; 	mac.i8  ZP_REG A8, V2, V0, VP1; 	nop
   if (IsMov(DefMI)) {
-    if ((Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) &&
-        DefRegClass->hasSuperClass(&TPC::MRFRegClass))
+    // The MOV defines M0-M3 through a wider class (HSRF), so check the
+    // register: hasSuperClass(MRF) never held, and the latency was 1. The
+    // simulator needs these on gaudi3 too.
+    bool Gen3To5 = Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA() ||
+                   Subtarget.hasDoron1ISA();
+    if (Gen3To5 && (DefReg.isPhysical()
+                        ? TPC::MRFRegClass.contains(DefReg)
+                        : DefRegClass->hasSuperClassEq(&TPC::MRFRegClass)))
       return 3;
-    else if ((Subtarget.hasGrecoISA() || Subtarget.hasGaudi2ISA()) &&
+    else if (Gen3To5 &&
              (DefReg == TPC::LD_PARTIAL_REG ||
               DefReg == TPC::ST_PARTIAL_REG ||
               DefReg == TPC::LD_TNSR_ID_REG ||
               DefReg == TPC::ST_TNSR_ID_REG ||
               DefReg == TPC::ST_RMW_REG) &&
              (TPCII::isLdTnsr(UseMCID, Subtarget.hasGen3Plus()) ||
-              TPCII::isStTnsr(UseMCID)))
+              TPCII::isStTnsr(UseMCID) || UseReg == DefReg))
+      // The table names the tensor accesses, but a partial ld_g right after
+      // the MOV to LD_PARTIAL_REG reads the old size on the simulator too.
       return 2;
     else if (Subtarget.hasGen3Plus() &&
              ((TPCII::isSPUInst(UseMCID) &&
