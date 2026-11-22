@@ -486,7 +486,7 @@ void EvalSpecialFunctionImpl::replaceReciprocalWithTPCIntrinsics(
                             FType)
           .getCallee());
   auto SelLeq1 = Builder.CreateCall(
-      Intrinsic, {Sub5ii, ConstantInt::get(I32Type, -1065353216), SelLess,
+      Intrinsic, {Sub5ii, ConstantInt::getSigned(I32Type, -1065353216), SelLess,
                   FormFP1, ConstantInt::get(I8Type, 2), Sw2,
                   UndefValue::get(Float64Type), Predicate, Polarity});
 
@@ -1602,7 +1602,7 @@ void EvalSpecialFunctionImpl::replaceBF16SinWithTPCIntrinsics(
                           getTPCIntrinsicName(Intrinsic::tpc_xor, FType), FType)
                          .getCallee());
   auto XorShort1281 = Builder.CreateCall(
-      Intrinsic, {BitCastShort1281, ConstantInt::get(I16Type, -32768),
+      Intrinsic, {BitCastShort1281, ConstantInt::getSigned(I16Type, -32768),
                   ConstantInt::get(I8Type, 7), ConstantInt::get(I32Type, 0),
                   BitCastShort1281, CmpEqShort1281, Polarity});
 
@@ -2820,7 +2820,7 @@ void EvalSpecialFunctionImpl::replaceBF16LogWithTPCIntrinsics(
                           getTPCIntrinsicName(Intrinsic::tpc_and, FType), FType)
                          .getCallee());
   auto AndShort128 = Builder.CreateCall(
-      Intrinsic, {BitCastShort128, ConstantInt::get(I16Type, -4),
+      Intrinsic, {BitCastShort128, ConstantInt::getSigned(I16Type, -4),
                   ConstantInt::get(I8Type, 8), Sw2,
                   UndefValue::get(Short128Type), Predicate, Polarity});
 

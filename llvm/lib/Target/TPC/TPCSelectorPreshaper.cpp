@@ -1180,7 +1180,7 @@ bool TPCSelectorPreshaperLegacyPass::runOnFunction(Function &Func) {
             ConstantInt::get(Type::getInt1Ty(Ctx), 0)
           });
 
-          Constant *Neg32 = ConstantInt::get(TExp, -32);
+          Constant *Neg32 = ConstantInt::getSigned(TExp, -32);
           Value* cmp_32;
           Value* NewPred;
           /// round mode extraction
