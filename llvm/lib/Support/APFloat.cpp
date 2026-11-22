@@ -3597,7 +3597,7 @@ APInt IEEEFloat::convertFloat8_152APFloatToAPInt() const {
     mysignificand = 0;
   } else {
     assert(category == fcNaN && "Unknown category!");
-    myexponent = 0x0f;
+    myexponent = 0x1f;
     mysignificand = (uint32_t)*significandParts();
   }
 
