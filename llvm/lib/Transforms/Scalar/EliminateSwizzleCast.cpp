@@ -876,7 +876,22 @@ void EliminateSwizzleCast::applyTransform(void) {
   DenseSet<Instruction *> WorkingSet;
   collectInstToReplace(FinalPostDomSet, WorkingSet);
 
-  for (auto Inst : WorkingSet) {
+  // Replace in program order. The set's order follows pointer values, so the
+  // new instructions came out in a different order from run to run.
+  SmallVector<Instruction *, 16> Order(WorkingSet.begin(), WorkingSet.end());
+  if (!Order.empty()) {
+    DenseMap<const BasicBlock *, unsigned> BBIndex;
+    unsigned Index = 0;
+    for (const BasicBlock &BB : *Order.front()->getFunction())
+      BBIndex[&BB] = Index++;
+    llvm::sort(Order, [&BBIndex](Instruction *A, Instruction *B) {
+      if (A->getParent() != B->getParent())
+        return BBIndex.lookup(A->getParent()) < BBIndex.lookup(B->getParent());
+      return A->comesBefore(B);
+    });
+  }
+
+  for (auto Inst : Order) {
     LLVM_DEBUG(dbgs() << "Replacing Instruction: " << *Inst << "\n");
     replaceInstWithIntrinsic(Inst);
   }
