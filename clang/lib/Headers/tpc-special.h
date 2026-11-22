@@ -882,15 +882,11 @@ float64 v_log_f32(float64 input)
 #define PROCESS_SIN_COS_SPECIAL_VALUES                                         \
   const uint64 nan_int = NAN_FP32;                                             \
   const float64 nan_fp32 = *((float64 *)&nan_int);                             \
-  const float sin_max_arg = s_convert_i32_to_f32(                              \
-                  0xffffff, SW_RHNE, 0, 1, 0),                                 \
-              sin_accuracy_limit = s_convert_i32_to_f32(                       \
-                  0x2000, SW_RHNE, 0, 1, 0);                                   \
+  const float sin_accuracy_limit = s_convert_i32_to_f32(                       \
+                  0x30000, SW_RHNE, 0, 1, 0);                                  \
                                                                                \
   result = v_f32_sel_grt_f32_b(abs_x, sin_accuracy_limit, 0.0f, result, 0, 0,  \
                                1, 0);                                          \
-  result =                                                                     \
-      v_f32_sel_grt_f32_b(abs_x, sin_max_arg, nan_fp32, result, 0, 0, 1, 0);   \
   result = v_f32_sel_geq_u32_b(*((uint64 *)&abs_x), PLUS_INF_FP32, nan_fp32,   \
                                result, 0, 0, 1, 0);
 
