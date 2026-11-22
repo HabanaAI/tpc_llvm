@@ -2361,17 +2361,21 @@ bool TPCAsmParser::parseInstruction(ParseInstructionInfo &Info,
     }
   }
 
+  // An instruction parsed in a slot it does not exist in (an unbundled ADD
+  // goes to the load slot) has neither operand; matching reports it.
   auto IsX2Switch = [&Operands]() -> bool {
+    if (Operands.size() <= 2)
+      return false;
     const TPCOperand &SwitchOp =
       static_cast<const TPCOperand &>(*Operands[2]);
-    assert(SwitchOp.isSwitchSet() && "Must be SwitchSet");
     return SwitchOp.isSwitchSet() &&
       (SwitchOp.getSwitchSet() & TPCII::SW_X2_ARITHMETIC);
   };
   auto IsFP32Type = [&Operands]() -> bool {
+    if (Operands.size() <= 1)
+      return false;
     const TPCOperand &DataTypeOp =
       static_cast<const TPCOperand &>(*Operands[1]);
-    assert(DataTypeOp.isDataType() && "Must be DataType");
     return DataTypeOp.isDataType() &&
       (DataTypeOp.getDataType() == TPCII::OpType::FP32);
   };
