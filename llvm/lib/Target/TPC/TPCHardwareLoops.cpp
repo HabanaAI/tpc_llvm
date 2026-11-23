@@ -1313,18 +1313,27 @@ bool TPCHardwareLoops::convertToHardwareLoop(MachineLoop *L,
   typedef std::vector<MachineBasicBlock*> MBBVector;
   MBBVector Preds(Header->pred_begin(), Header->pred_end());
 
+  unsigned OutsidePreds = 0;
   for (MachineBasicBlock *PB : Preds) {
     if (PB != Latch) {
       Preheader = PB;
+      ++OutsidePreds;
     }
   }
   assert(Preheader && "Unreachable loop");
- 
-  MachineBasicBlock* NewPreheader = stripEntranceCheck(Preheader, Header, L->getExitBlock(), &*Lv);
+
+  // With several ways into the loop (jump threading can duplicate the block
+  // before it), a LOOP in one of them would leave the others entering the
+  // body without it: give the loop its own pre-header (the prolog below),
+  // which every one of them enters.
+  MachineBasicBlock *NewPreheader =
+      OutsidePreds == 1
+          ? stripEntranceCheck(Preheader, Header, L->getExitBlock(), &*Lv)
+          : nullptr;
   if (NewPreheader) {
     InsertPos = NewPreheader->end();
     LoopBlock = NewPreheader;
-  } else if (Preheader->succ_size() == 1 &&
+  } else if (OutsidePreds == 1 && Preheader->succ_size() == 1 &&
              Preheader->isLayoutSuccessor(Header)) {
     // The LOOP goes at the end of the block and runs the code after it: a
     // jump to the loop there (the pipeliner's MVE expander leaves one before
