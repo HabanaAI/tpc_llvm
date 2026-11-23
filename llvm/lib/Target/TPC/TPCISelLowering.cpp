@@ -436,6 +436,23 @@ static SDValue helperExtractSubRegSDValue(unsigned subReg, const SDLoc &DL,
   for (auto VT : {MVT::v256bf16, MVT::v256f16, MVT::v128f32, MVT::v256f32})
     setOperationAction(ISD::FP_EXTEND, VT, Custom);
 
+  // Operations on register pairs and quads that have no pattern: split them
+  // (splitWideVectorOp).
+  for (auto VT : {MVT::v128f32, MVT::v256f32, MVT::v256bf16, MVT::v256f16})
+    for (unsigned Opc : {ISD::FABS, ISD::FNEG})
+      setOperationAction(Opc, VT, Custom);
+  for (auto VT : {MVT::v256f32, MVT::v256bf16, MVT::v256f16})
+    setOperationAction(ISD::FMUL, VT, Custom);
+  // bf16 and f16 have no FMINNUM/FMAXNUM even in one register.
+  for (unsigned Opc : {ISD::FMINNUM, ISD::FMAXNUM})
+    setOperationAction(Opc, MVT::v256f32, Custom);
+  for (auto VT : {MVT::v128i32, MVT::v256i32, MVT::v256i16})
+    for (unsigned Opc : {ISD::OR, ISD::XOR, ISD::SRA, ISD::SMIN, ISD::SMAX,
+                         ISD::UMIN, ISD::UMAX})
+      setOperationAction(Opc, VT, Custom);
+  for (unsigned Opc : {ISD::MUL, ISD::AND, ISD::SHL, ISD::SRL})
+    setOperationAction(Opc, MVT::v256i16, Custom);
+
   setOperationAction(ISD::TRUNCATE, MVT::v256i16, Custom);
   setOperationAction(ISD::TRUNCATE, MVT::v128i16, Custom);
   setOperationAction(ISD::TRUNCATE, MVT::v256i8, Custom);
@@ -832,6 +849,56 @@ TPCTargetLowering::getConstraintType(StringRef Constraint) const {
   return C_Unknown;
 }
 
+// Vector types wider than a register live in register pairs or quads, and
+// many operations have no pattern for them. InstCombine still forms them, for
+// instance the fabs of both halves of a float128 becomes one <128 x float>
+// fabs. Split such an operation into one per register.
+static SDValue splitWideVectorOp(SDValue Op, SelectionDAG &DAG) {
+  SDLoc DL(Op);
+  EVT ResTy = Op.getValueType();
+  if (!ResTy.isSimple())
+    return SDValue();
+  EVT SubTy;
+  switch (ResTy.getSimpleVT().SimpleTy) {
+  case MVT::v128f32:
+  case MVT::v256f32:
+    SubTy = MVT::v64f32;
+    break;
+  case MVT::v256bf16:
+    SubTy = MVT::v128bf16;
+    break;
+  case MVT::v256f16:
+    SubTy = MVT::v128f16;
+    break;
+  case MVT::v128i32:
+  case MVT::v256i32:
+    SubTy = MVT::v64i32;
+    break;
+  case MVT::v256i16:
+    SubTy = MVT::v128i16;
+    break;
+  default:
+    return SDValue();
+  }
+  unsigned Parts = ResTy.getSizeInBits().getFixedValue() /
+                   SubTy.getSizeInBits().getFixedValue();
+  static const unsigned SubRegs[] = {TPC::sub_0, TPC::sub_1, TPC::sub_2,
+                                     TPC::sub_3};
+  SmallVector<SDValue, 4> Pieces;
+  for (unsigned P = 0; P < Parts; ++P) {
+    SDValue Idx = DAG.getTargetConstant(SubRegs[P], DL, MVT::i32);
+    SmallVector<SDValue, 2> Ops;
+    for (const SDValue &O : Op->op_values()) {
+      assert(O.getValueType() == ResTy && "operand of another type");
+      Ops.push_back(SDValue(
+          DAG.getMachineNode(TargetOpcode::EXTRACT_SUBREG, DL, SubTy, O, Idx),
+          0));
+    }
+    Pieces.push_back(DAG.getNode(Op.getOpcode(), DL, SubTy, Ops, Op->getFlags()));
+  }
+  return DAG.getNode(ISD::CONCAT_VECTORS, DL, ResTy, Pieces);
+}
+
 SDValue TPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   LLVM_DEBUG(dbgs() << "TPC custom lowering:\n    "; Op.dump(&DAG););
   switch (Op.getOpcode()) {
@@ -889,7 +956,25 @@ SDValue TPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::INSERT_VECTOR_ELT:
     return lowerINSERT_VECTOR_ELT(Op, DAG);
   case ISD::MUL:
+    if (SDValue Split = splitWideVectorOp(Op, DAG))
+      return Split;
     return lowerMUL(Op, DAG);
+  case ISD::FABS:
+  case ISD::FNEG:
+  case ISD::FMUL:
+  case ISD::FMINNUM:
+  case ISD::FMAXNUM:
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR:
+  case ISD::SHL:
+  case ISD::SRL:
+  case ISD::SRA:
+  case ISD::SMIN:
+  case ISD::SMAX:
+  case ISD::UMIN:
+  case ISD::UMAX:
+    return splitWideVectorOp(Op, DAG);
   case ISD::MULHU:
     return lowerMULHU(Op, DAG);
   case ISD::MULHS:
