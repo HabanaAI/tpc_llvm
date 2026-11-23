@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Differential functional tests for tpc-clang.
 
-Each kernel in kernels/ is compiled by Habana's closed-source tpc-clang (the
-reference), the candidate fork compiler and, optionally, a baseline fork
-compiler. Every object runs on the TPC simulator with identical inputs and the
-output tensors are compared.
+Each kernel in kernels/ (C, or LLVM IR for paths that C cannot reach) is
+compiled by Habana's closed-source tpc-clang (the reference), the candidate
+fork compiler and, optionally, a baseline fork compiler. Every object runs on
+the TPC simulator with identical inputs and the output tensors are compared.
 
   PASS   candidate output == reference output
   KNOWN  candidate differs from reference exactly like the baseline does
@@ -119,10 +119,11 @@ def scalar_bits(kind, text):
 
 
 def parse_kernel(path, tag="DIFFTEST"):
-    """Read the '// <tag>:' lines of a kernel (tpc/bench uses tag BENCH)."""
+    """Read the '// <tag>:' lines of a kernel (tpc/bench uses tag BENCH); an IR
+    kernel writes them as '; <tag>:'."""
     k = Kernel(path)
     for lineno, line in enumerate(path.read_text().splitlines(), 1):
-        m = re.match(rf"\s*//\s*{tag}:\s*(\S+)\s*(.*)", line)
+        m = re.match(rf"\s*(?://|;)\s*{tag}:\s*(\S+)\s*(.*)", line)
         if not m:
             continue
         key, args = m.group(1), m.group(2).split()
@@ -499,7 +500,8 @@ def main():
             env = dict(os.environ)
             lib = str(tpc_home / "usr/lib/habanatools")
             env["LD_LIBRARY_PATH"] = lib + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-            files = args.kernels or sorted((HERE / "kernels").glob("*.c"))
+            files = args.kernels or sorted([*(HERE / "kernels").glob("*.c"),
+                                            *(HERE / "kernels").glob("*.ll")])
             for f in files:
                 k = parse_kernel(f.resolve())
                 for arch in k.archs:

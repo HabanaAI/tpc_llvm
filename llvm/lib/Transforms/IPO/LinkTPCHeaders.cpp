@@ -415,13 +415,13 @@ public:
     KeyToInfo[fun_VF32_of_VF32(Intrinsic::log, ArchTy::Gaudi2)] =
         LinkInfo{GaudiLogF32LL, "log_f32"};
     KeyToInfo[fun_VF32_of_VF32(Intrinsic::sqrt, ArchTy::Gaudi2)] =
-        LinkInfo{GaudiSqrtF32LL, "sqrt_f32"};
+        LinkInfo{Gaudi2SqrtF32LL, "sqrt_f32"};
     KeyToInfo[fun_VF32_of_VF32(Intrinsic::tpc_tanh, ArchTy::Gaudi2)] =
         LinkInfo{GaudiTanhF32LL, "tanh_f32"};
     KeyToInfo[fun_VF32_of_VF32(Intrinsic::tpc_rsqrt, ArchTy::Gaudi2)] =
-        LinkInfo{GaudiRSqrtF32LL, "rsqrt_f32"};
+        LinkInfo{Gaudi2RSqrtF32LL, "rsqrt_f32"};
     KeyToInfo[fun_VF32_of_VF32(Intrinsic::tpc_reciprocal, ArchTy::Gaudi2)] =
-        LinkInfo{GaudiRecipF32LL, "reciprocal_f32"};
+        LinkInfo{Gaudi2RecipF32LL, "reciprocal_f32"};
 
     KeyToInfo[fun_SF32_of_VF32(Intrinsic::vector_reduce_mul,
                                ArchTy::Gaudi2)] =

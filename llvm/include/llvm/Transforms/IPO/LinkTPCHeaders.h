@@ -27,7 +27,10 @@
 #include "llvm/Transforms/IPO/TPCHeaders/Gadui2/gaudi2LTOBF16.h"
 #include "llvm/Transforms/IPO/TPCHeaders/Gadui2/gaudi2LTO.h"
 #endif
+#include "llvm/Transforms/IPO/TPCHeaders/Gadui2/RSqrtF32.h"
+#include "llvm/Transforms/IPO/TPCHeaders/Gadui2/ReciprocalF32.h"
 #include "llvm/Transforms/IPO/TPCHeaders/Gadui2/rsqrt_f16.h"
+#include "llvm/Transforms/IPO/TPCHeaders/Gadui2/SqrtF32.h"
 #include "llvm/Transforms/IPO/TPCHeaders/Gadui2/sqrt_f16.h"
 
 // List of header files.

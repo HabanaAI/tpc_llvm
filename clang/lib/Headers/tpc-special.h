@@ -571,6 +571,130 @@ float64 v_exp_f32(float64 input)
 
 /////////////////////////////////////// RECIP_F32 /////////////////////////////////////////////////
 
+#if defined(__gaudi2__)
+// On gaudi2, form_fp_num's special_func modes do the exponent work of the
+// reciprocal, sqrt and rsqrt; the table lookup between is the same as in the
+// code for the other architectures below, and so are the results, including
+// those for negative inputs to the fast versions, +-0, denormals, inf and NaN.
+
+// GAUDI2_RECIP_FUNC VPU ops = CALC_REDUCED_VALUE + 2 = 8
+#define GAUDI2_RECIP_FUNC(INPUT_VAL, RESULT)                                   \
+{                                                                              \
+    const int FUNC_ID = e_fp32_rcp;                                            \
+    RESULT = v_f32_form_fp_num_ie_b(0, INPUT_VAL, INPUT_VAL,                   \
+                                    SW_ADD_BIAS | SW_FORCE_SIGN0 |             \
+                                    SW_EXP_IS_NUM, 0, 1, 0);                   \
+    CALC_REDUCED_VALUE(RESULT, e_func_variant_default, RESULT)                 \
+    RESULT = v_f32_form_fp_num_b(INPUT_VAL, INPUT_VAL, RESULT, SW_POST_RECIP,  \
+                                 0, 1, 0);                                     \
+}
+
+// GAUDI2_SQRT_FUNC VPU ops = CALC_REDUCED_VALUE + 2 = 8. Without
+// SW_FORCE_SIGN0, a negative input keeps its sign through the computation,
+// as in the code for the other architectures.
+#define GAUDI2_SQRT_FUNC(INPUT_VAL, POST, RESULT)                              \
+{                                                                              \
+    RESULT = v_f32_form_fp_num_b(INPUT_VAL, INPUT_VAL, INPUT_VAL,              \
+                                 SW_PRE_SQRT_RSQRT & ~SW_FORCE_SIGN0, 0, 1, 0);\
+    CALC_REDUCED_VALUE(RESULT, e_func_variant_sqrt_rsqrt, RESULT)              \
+    RESULT = v_f32_form_fp_num_b(INPUT_VAL, RESULT, RESULT,                    \
+                                 (POST) & ~SW_FORCE_SIGN0, 0, 1, 0);           \
+}
+
+float64 v_reciprocal_fast_f32(float64 input)
+{
+#define COEFF_TAB_SHIFT   16             // 23 - (m = 7)
+    float64 result;
+    GAUDI2_RECIP_FUNC(input, result)
+    // SW_POST_RECIP flushes an underflow to +0; give it the sign of a
+    // negative input.
+    result = v_f32_sel_less_f32_b(input, 0.0f,
+                                  v_f32_form_fp_num_b(result, input, result, 0x0, 0, 1, 0),
+                                  result, 0, 0, 1, 0);
+    return result;
+#undef COEFF_TAB_SHIFT
+}
+
+float64 v_reciprocal_f32(float64 input)
+{
+#define COEFF_TAB_SHIFT   16             // 23 - (m = 7)
+    float64 result;
+    GAUDI2_RECIP_FUNC(input, result)
+    float64 input_class = v_f32_fclass_b(input, 0, 0, 1, 0);
+    result = v_f32_calc_fp_special_b(input_class, input_class, SW_RECIP, result, 1, 0);
+    // The sign of the input, also on an underflow to 0 and on NaN.
+    result = v_f32_form_fp_num_b(result, input, result, 0x0, 0, 1, 0);
+    return result;
+#undef COEFF_TAB_SHIFT
+}
+
+//////////////////////////////////////// SQRT_F32 /////////////////////////////////////////////////
+float64 v_sqrt_fast_f32(float64 input)
+{
+#define COEFF_TAB_SHIFT   17                // 23 - (m = 6)
+    const int FUNC_ID = e_fp32_sqrt;
+    float64 result;
+    GAUDI2_SQRT_FUNC(input, SW_POST_SQRT, result)
+    result = v_f32_sel_eq_f32_b(input, 0.0f, 0.0f, result, 0, 0, 1, 0);
+    return result;
+#undef COEFF_TAB_SHIFT
+}
+
+float64 v_sqrt_f32(float64 input)
+{
+#define COEFF_TAB_SHIFT   17                // 23 - (m = 6)
+    const int FUNC_ID = e_fp32_sqrt;
+    float64 result;
+    GAUDI2_SQRT_FUNC(input, SW_POST_SQRT, result)
+
+    // Special values as in the code for the other architectures, which also
+    // gives -0 for +0.
+    const uint64 plus_inf = PLUS_INF_FP32;
+    const float64 plus_inf_fp32 = *((float64*)&plus_inf);
+    const uint64 nan_int = NAN_FP32;
+    const float64 nan_fp32 = *((float64*)&nan_int);
+
+    result = v_f32_sel_eq_u32_b(*((uint64*)&input), PLUS_INF_FP32, plus_inf_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_u32_b(*((uint64*)&input), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_f32_b(input, -0.0f, -0.0f, result, 0, 0, 1, 0);
+    return result;
+#undef COEFF_TAB_SHIFT
+}
+
+//////////////////////////////////////// RSQRT_F32 /////////////////////////////////////////////////
+float64 v_rsqrt_fast_f32(float64 input)
+{
+#define COEFF_TAB_SHIFT   16             // 23 - (m = 7)
+    const int FUNC_ID = e_fp32_rsqrt;
+    float64 result;
+    GAUDI2_SQRT_FUNC(input, SW_POST_RSQRT, result)
+    return result;
+#undef COEFF_TAB_SHIFT
+}
+
+float64 v_rsqrt_f32(float64 input)
+{
+#define COEFF_TAB_SHIFT   16             // 23 - (m = 7)
+    const int FUNC_ID = e_fp32_rsqrt;
+    float64 result;
+    GAUDI2_SQRT_FUNC(input, SW_POST_RSQRT, result)
+
+    // Special values as in the code for the other architectures, which also
+    // gives -inf for +0.
+    const uint64 minus_inf = MINUS_INF_FP32;
+    const float64 minus_inf_fp32 = *((float64*)&minus_inf);
+    const uint64 nan_int = NAN_FP32;
+    const float64 nan_fp32 = *((float64*)&nan_int);
+
+    result = v_f32_sel_eq_u32_b(*((uint64*)&input), PLUS_INF_FP32, 0.0f, result, 0, 0, 1, 0);
+    result = v_f32_sel_grt_u32_b(*((uint64*)&input), PLUS_INF_FP32, nan_fp32, result, 0, 0, 1, 0);
+    result = v_f32_sel_eq_f32_b(input, -0.0f, minus_inf_fp32, result, 0, 0, 1, 0);
+    return result;
+#undef COEFF_TAB_SHIFT
+}
+
+#else // !__gaudi2__
+
 float64 v_reciprocal_fast_f32(float64 input)
 {
   #define COEFF_TAB_SHIFT   16             // 23 - (m = 7)
@@ -703,6 +827,7 @@ float64 v_rsqrt_f32(float64 input)
 
     return result;
 }
+#endif // __gaudi2__
 
 //////////////////////////////////////// LOG_F32 GAUDI ///////////////////////////////////////////
 
@@ -2037,6 +2162,8 @@ float64 v_expm1_f32(float64 input)
 #undef SIN_COS_CALC
 #undef LOOKUP_AND_MAC
 #undef CALC_REDUCED_VALUE
+#undef GAUDI2_RECIP_FUNC
+#undef GAUDI2_SQRT_FUNC
 #undef false
 #undef true
 #undef UNIT_VAL
