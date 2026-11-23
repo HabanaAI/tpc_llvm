@@ -2238,6 +2238,13 @@ float64 v_expm1_f32(float64 input)
 #undef REDUCE_DT
 #undef REDUCE_OP
 
+// int64 v_i32_reduce_min(int64 x);
+#define REDUCE_DT 1
+#define REDUCE_OP 2
+#include "tpc-reduction_functions_core.h"
+#undef REDUCE_DT
+#undef REDUCE_OP
+
 // int64 v_i32_reduce_max(int64 x);
 #define REDUCE_DT 1
 #define REDUCE_OP 3
@@ -2391,6 +2398,67 @@ float64 v_expm1_f32(float64 input)
 #include "tpc-reduction_functions_core.h"
 #undef REDUCE_DT
 #undef REDUCE_OP
+
+#if defined(__gaudi2__)
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// ELEMENT BROADCAST AND SHIFT
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// These follow Habana's compiler, also for an element or shift outside
+// 0..63: a shuffle within the dual groups, then dual-group moves.
+
+// Every element of the result is x[element % 64].
+inline float64 v_broadcast_element_f32(float64 x, int element) {
+  // Element element % 8 of the group that bit 3 selects, in each dual group.
+  uchar256 control = (unsigned char)((element & 7) | 0x80);
+  control = v_u8_add_b(control, 0x20, 0, control, (element >> 3) & 1);
+  float64 r = as_float64(v_i32_shuffle_b(as_int64(x), control, 0, as_int64(x)));
+  // Then that dual group to all four.
+  const int group = element & 0x30;
+  r = v_f32_mov_dual_group_all_b(r, 0xFFFFFFFF, 0, 0, 0, 0, MkWrA(3, 3, 3, 3), r, group == 0x00);
+  r = v_f32_mov_dual_group_all_b(r, 0xFFFFFFFF, 1, 1, 1, 1, MkWrA(3, 3, 3, 3), r, group == 0x10);
+  r = v_f32_mov_dual_group_all_b(r, 0xFFFFFFFF, 2, 2, 2, 2, MkWrA(3, 3, 3, 3), r, group == 0x20);
+  r = v_f32_mov_dual_group_all_b(r, 0xFFFFFFFF, 3, 3, 3, 3, MkWrA(3, 3, 3, 3), r, group == 0x30);
+  return r;
+}
+
+// Element i of the result is x[(i - shift) % 64] for a shift in 0..64.
+inline float64 v_element_shift_up_f32(float64 x, int shift) {
+  // Each byte's element in its dual group (element = byte / 4).
+  char256 lane = v_i8_ash_b((char256)(read_lane_id_1b_b() & 0x3f), -2);
+  // Each element's index in its dual group, in every dual group.
+  int64 index = as_int64(read_lane_id_4b_b() & 0xf);
+  index = v_i32_mov_dual_group_all_b(index, 0xFFFFFFFF, 0, 0, 0, 0, MkWrA(3, 3, 3, 3), index);
+  const char256 up = v_i8_and_b(v_i8_add_b(lane, (char)shift), 8);
+  const char256 down = v_i8_and_b(v_i8_sub_b(lane, (char)shift), 7);
+  const int whole = shift & -16, part = shift & 0xf;
+  const bool64 below0 = v_i32_cmp_less_b(index, shift, 0, (bool64){0}, shift < 16);
+  const bool64 below1 = v_i32_cmp_less_b(index, part, 0, (bool64){0}, whole == 0x10);
+  const bool64 above1 = v_i32_cmp_geq_b(index, part, 0, (bool64){0}, whole == 0x10);
+  const bool64 below2 = v_i32_cmp_less_b(index, part, 0, (bool64){0}, whole == 0x20);
+  const bool64 above2 = v_i32_cmp_geq_b(index, part, 0, (bool64){0}, whole == 0x20);
+  const bool64 above3 = v_i32_cmp_geq_b(index, part, 0, (bool64){0}, whole == 0x30);
+  const uchar256 control = (uchar256)(v_i8_ash_b(up, 2) | down) | 0x80;
+  float64 r = as_float64(v_i32_shuffle_b(as_int64(x), control, 0, as_int64(x)));
+  // Move the elements that crossed into another dual group.
+#define SHIFT_MDG(S0, S1, S2, S3, W, P)                                        \
+  r = v_f32_mov_dual_group_all_vb(r, 0xFFFFFFFF, S0, S1, S2, S3,               \
+                                  MkWrA(W, W, W, W), r, P);
+  SHIFT_MDG(3, 0, 1, 2, 1, below0)
+  SHIFT_MDG(3, 0, 1, 2, 2, below0)
+  SHIFT_MDG(2, 3, 0, 1, 1, below1)
+  SHIFT_MDG(3, 0, 1, 2, 1, above1)
+  SHIFT_MDG(2, 3, 0, 1, 2, below1)
+  SHIFT_MDG(3, 0, 1, 2, 2, above1)
+  SHIFT_MDG(1, 2, 3, 0, 1, below2)
+  SHIFT_MDG(2, 3, 0, 1, 1, above2)
+  SHIFT_MDG(1, 2, 3, 0, 2, below2)
+  SHIFT_MDG(2, 3, 0, 1, 2, above2)
+  SHIFT_MDG(1, 2, 3, 0, 1, above3)
+  SHIFT_MDG(1, 2, 3, 0, 2, above3)
+#undef SHIFT_MDG
+  return r;
+}
+#endif // __gaudi2__
 
 #endif //__TPC_DROP_VERSION
 
