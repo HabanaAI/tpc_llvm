@@ -2638,6 +2638,43 @@ SDValue TPCTargetLowering::lowerVECTOR_SHUFFLE(SDValue Op,
     }
   }
 
+  // A result in several registers, each a whole register of an operand (or
+  // undefined), such as <128 x float> <0..63, 0..63> that SROA makes of a
+  // float128 whose halves are the same: a tuple of those registers.
+  unsigned RegElts = 2048 / EltSize;
+  if (VectWidth > RegElts && VectWidth % RegElts == 0 &&
+      OpVectSize % RegElts == 0 && ShuffleMask.size() == VectWidth) {
+    EVT RegTy = EVT::getVectorVT(*DAG.getContext(), EltT, RegElts);
+    SmallVector<SDValue, 4> Regs;
+    for (unsigned R = 0; R < VectWidth / RegElts; ++R) {
+      ArrayRef<int> Part = ShuffleMask.slice(R * RegElts, RegElts);
+      int Start = -1;
+      bool Whole = true;
+      for (unsigned I = 0; I < RegElts && Whole; ++I) {
+        if (Part[I] < 0)
+          continue;
+        int S = Part[I] - int(I);
+        if (Start < 0)
+          Start = S;
+        Whole = S == Start && S % int(RegElts) == 0;
+      }
+      if (!Whole)
+        break;
+      if (Start < 0) {
+        Regs.push_back(DAG.getUNDEF(RegTy));
+        continue;
+      }
+      SDValue Src = unsigned(Start) < OpVectSize ? V1 : V2;
+      unsigned Offset = unsigned(Start) % OpVectSize;
+      Regs.push_back(OpVectSize == RegElts
+                         ? Src
+                         : DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, RegTy, Src,
+                                       DAG.getConstant(Offset, DL, MVT::i32)));
+    }
+    if (Regs.size() == VectWidth / RegElts)
+      return createTuple(Regs, DAG);
+  }
+
   assert(false && (Op.dump(), "Unhandled shufflevector"));
   return SDValue();
 }
