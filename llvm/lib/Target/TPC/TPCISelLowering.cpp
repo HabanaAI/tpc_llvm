@@ -4959,9 +4959,15 @@ TPCTargetLowering::Extend_8_to_32(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
 
 SmallVector<SDValue, 2>
 TPCTargetLowering::Extend_8_to_16(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
-                                  const SDLoc &DL, unsigned DataType) const {
+                                  const SDLoc &DL, unsigned DataType,
+                                  bool ZeroExtend) const {
  EVT SrcVT = Src.getValueType();
  SmallVector<SDValue, 2> ExtArg;
+  // UNPACK writes every second byte and keeps the others from its income. When
+  // no convert follows, the result is the zero extension only if the income
+  // is zero (Habana's compiler zeroes it too); otherwise the convert reads
+  // only the unpacked bytes.
+  SDValue Income = ZeroExtend ? DAG.getConstant(0, DL, SrcVT) : DAG.getUNDEF(SrcVT);
   // unpack-1
   SmallVector<SDValue, 8> Ops1(6);
   Ops1[0] = Src;                                           // Source.
@@ -4971,7 +4977,7 @@ TPCTargetLowering::Extend_8_to_16(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
   Ops1[2] = DAG.getTargetConstant(TPCII::SW_GROUP_0 | TPCII::SW_STRIDE_2 |
                                       TPCII::SW_GROUP_HALF_0,
                                   DL, MVT::i32);   // Switch.
-  Ops1[3] = DAG.getUNDEF(SrcVT);                   // Income.
+  Ops1[3] = Income;                                // Income.
   Ops1[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops1[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
   MachineSDNode *Node1 = DAG.getMachineNode(TPC::UNPACKp, DL, SrcVT, Ops1);
@@ -4986,7 +4992,7 @@ TPCTargetLowering::Extend_8_to_16(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
   Ops2[2] = DAG.getTargetConstant(
       (TPCII::SW_GROUP_1 | TPCII::SW_STRIDE_2 | TPCII::SW_GROUP_HALF_0), DL,
       MVT::i32);                                   // Switch
-  Ops2[3] = DAG.getUNDEF(SrcVT);                   // Income.
+  Ops2[3] = Income;                                // Income.
   Ops2[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops2[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
   MachineSDNode *Node2 = DAG.getMachineNode(TPC::UNPACKp, DL, SrcVT, Ops2);
@@ -7501,7 +7507,8 @@ SDValue TPCTargetLowering::ConversionEntity(EVT DestVT, SDValue Source,
           ExtArg =
               helperExtend_16_32(Source, DataType, SrcVT, DAG, DL, Subtarget);
         } else if (DestElBitsize == 16 && SrcElBitsize == 8) {
-          ExtArg = Extend_8_to_16(SrcVT, Source, DAG, DL, DataTypeVal);
+          ExtArg = Extend_8_to_16(SrcVT, Source, DAG, DL, DataTypeVal,
+                                  SrcIsUnsigned && DestIsUnsigned);
         } else {
           assert(false && "impossible extend conversion");
           return SDValue();

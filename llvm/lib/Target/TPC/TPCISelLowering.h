@@ -270,7 +270,8 @@ namespace llvm {
     TConvKind FindConversionElement(CVT fromCVT, CVT toCVT) const;
 
     SmallVector<SDValue, 2> Extend_8_to_16(EVT ResultVT,SDValue Src, SelectionDAG &DAG,
-                                  const SDLoc &DL, unsigned DataType) const;
+                                  const SDLoc &DL, unsigned DataType,
+                                  bool ZeroExtend) const;
     SmallVector<SDValue, 4> Extend_8_to_32(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
                                       const SDLoc &DL, unsigned DataType) const;
 
