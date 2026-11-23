@@ -311,9 +311,12 @@ static bool IsSt(Intrinsic::ID inid) {
 }
 
 
-static bool HasIncome(Intrinsic::ID inid) {
-  return !(IsSt(inid) || IsMac(inid));
- 
+// The income is the operand before the predicate and the polarity. Stores,
+// MACs and intrinsics without a result, such as cache_invalidate, have none:
+// the operand there is their switch or data.
+static bool HasIncome(const IntrinsicInst *I) {
+  Intrinsic::ID inid = I->getIntrinsicID();
+  return !(IsSt(inid) || IsMac(inid)) && !I->getType()->isVoidTy();
 }
 
 // check instructions are good to move BB
@@ -345,7 +348,7 @@ static bool BBBad(BasicBlock *bb_accept, BasicBlock *rbb) {
       ConstantInt *CPre = dyn_cast<ConstantInt>(PP.predic);
       ConstantInt *CPol = cast<ConstantInt>(PP.polar);
       unsigned vpola = CPol->getZExtValue();
-      if (HasIncome(inid)) {
+      if (HasIncome(intrins)) {
         Value *income = intrins->getOperand(intrins->getNumOperands() - 4);
         Type *ti = income->getType();
         if ((!(CPre && CPre->getZExtValue() == 1) || vpola == 1 ||
@@ -501,7 +504,7 @@ static void MoveInstructionsUp(BasicBlock *bb_donor, BasicBlock *bb_accept,
             via_select = true;
           }
         }
-        else if (HasIncome(inid)) {
+        else if (HasIncome(intrins)) {
           Type *ti = income->getType();
           Value *vu = UndefValue::get(ti);
           if (CPre && CPre->getZExtValue() == 1 && !isa<UndefValue>(income) &&
