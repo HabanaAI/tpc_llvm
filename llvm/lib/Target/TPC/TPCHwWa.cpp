@@ -58,6 +58,12 @@ TPCDisableCFlushAfterCInvalidateWA("tpc-disable-cache-flush-after-invalidate",
               cl::desc("Do not insert CACHE_FLUSH after CACHE_INVALIDATE"),
               cl::init(false), cl::Hidden);
 
+static cl::opt<bool> FlushGlobalAccessesBeforeHalt(
+    "tpc-cache-flush-before-halt",
+    cl::desc("End gaudi2 kernels with global stores (gaudi3: global "
+             "loads or stores) with a CACHE_FLUSH"),
+    cl::init(true), cl::Hidden);
+
 static cl::opt<bool>
 InjectMMIOFenceGen3("tpc-mmio-fence-wa",
   cl::desc("Inject MMIO-finished fence workaround for Goya2+"),
@@ -130,7 +136,21 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
     needCacheFlAfterCacheInv_WA = TPCCFlushAfterCInvalidateWA;
   }
 
-  if (!needASO_WA1 && !needASO_WA2 && !needCacheFlAfterCacheInv_WA && !needMMIOFence)
+  // Habana's compiler (1.24.2) puts one unpredicated CACHE_FLUSH right before
+  // HALT in every gaudi2 kernel that has a global store (ST_G, also
+  // predicated, in a loop or on one branch only) and in every gaudi3 kernel
+  // that has a global load or store, at every -O, unless the kernel already
+  // has a CACHE_FLUSH somewhere (even one before the store). Gaudi and gaudib
+  // kernels flush after their CACHE_INVALIDATE (above); greco and goya2 get
+  // nothing. On a gaudi2 card, st_g data reached memory without the flush
+  // (750 runs, 2026-11-23), so this follows Habana rather than a known failure.
+  const TPCSubtarget &ST = Func.getSubtarget<TPCSubtarget>();
+  const bool FlushAfterStG =
+      FlushGlobalAccessesBeforeHalt && (ST.hasGaudi2ISA() || ST.hasDoron1ISA());
+  const bool FlushAfterLdG = FlushAfterStG && ST.hasDoron1ISA();
+
+  if (!needASO_WA1 && !needASO_WA2 && !needCacheFlAfterCacheInv_WA &&
+      !needMMIOFence && !FlushAfterStG)
     return false;
 
   MF = &Func;
@@ -169,7 +189,10 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
   //
   bool Changed = false;
   bool ASOSeen = false;
+  bool GlobalAccessSeen = false;
+  bool CacheFlushSeen = false;
   vector<MachineInstr*> MMIOSeen;
+  vector<MachineInstr*> Halts;
   MachineInstr *firstMI = nullptr;
   MachineInstr *haltMI = nullptr;
   for (MachineFunction::iterator I = MF->begin(), E = MF->end(); I != E; ++I) {
@@ -181,6 +204,11 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
       if (!firstMI) {
         firstMI = MI;
       }
+      if ((FlushAfterStG && TPCII::is_st_g(MI->getDesc())) ||
+          (FlushAfterLdG && TPCII::is_ld_g(MI->getDesc())))
+        GlobalAccessSeen = true;
+      if (opc == TPC::CACHE_FLUSH || opc == TPC::CACHE_FLUSH_ADDR)
+        CacheFlushSeen = true;
       if (needMMIOFence && TPCInstrInfo::isMMIOAccess(*MI)) {
         LLVM_DEBUG(dbgs() << " mmio seen: " << *MI);
         MMIOSeen.push_back(MI);
@@ -194,6 +222,7 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
             .addImm(0);
           mi = next_mi;
           Changed = true;
+          CacheFlushSeen = true;
           continue;
         }
       }
@@ -205,14 +234,25 @@ bool TPCPreRAHwWorkarounds::runOnMachineFunction(MachineFunction &Func) {
             .addImm(0);
           mi = next_mi;
           Changed = true;
+          CacheFlushSeen = true;
           continue;
         }
       }
       if (opc == TPC::HALTs || opc == TPC::HALTv) {
         haltMI = MI;
+        Halts.push_back(MI);
       }
       mi++;
     }
+  }
+
+  if (GlobalAccessSeen && !CacheFlushSeen) {
+    for (MachineInstr *Halt : Halts)
+      BuildMI(*Halt->getParent(), Halt, DebugLoc(), TII->get(TPC::CACHE_FLUSH))
+          .addImm(0)
+          .addReg(TPC::SPRF_TRUE)
+          .addImm(0);
+    Changed |= !Halts.empty();
   }
 
   if (ASOSeen && needASO_WA1) {
