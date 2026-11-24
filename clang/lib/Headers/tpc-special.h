@@ -2460,6 +2460,123 @@ inline float64 v_element_shift_up_f32(float64 x, int shift) {
 }
 #endif // __gaudi2__
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// SIGMOID
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Each computes what Habana's compiler computes, bit for bit on the simulator
+// (random bit patterns and the range -30..30): the same operations in the
+// same order.
+
+#if defined(__gaudi__) || defined(__gaudib__) || defined(__greco__) || defined(__gaudi2__)
+// tanh(h): a degree-2 polynomial in |h| from the m3 tables, times |h| when
+// |h| < 1, 1 when |h| >= 4, with the sign of h; calc_fp_special handles
+// zeros, infinities and NaN. (On gaudi3 Habana's compiler splits each bf16
+// lookup in two parts, which the fork does not yet.)
+static inline bfloat128 sigmoid_tanh_lut_bf16(bfloat128 h)
+{
+    const bfloat128 abs_h = v_bf16_form_fp_num_b(h, h, h, SW_FORCE_SIGN0, 0, 1, 0);
+    const short128 exponent = v_bf16_extract_exp_b(h, 0, 0, 1, 0);
+    const bfloat128 fclass = v_bf16_fclass_b(h, 0, 0, 1, 0);
+    const ushort128_bfloat128_pair_t lut = v_bf16_get_lut_entry_and_interval_start_b(
+        abs_h, 4, SW_LUT_TANH, (ushort128_bfloat128_pair_t){0}, 1, 0);
+    const bool128 below_one = v_i16_cmp_less_b(exponent, 0, 0, (bool128){0}, 1, 0);
+    const bfloat128 offset = v_bf16_sub_b(abs_h, lut.v2, 0, 0, 1, 0);
+    const bfloat256 c1c2 = v_bf16_lookup_2c(lut.v1, e_bf16_tanh_poly2_m3_c2c1, SW_BV16, (bfloat256){0}, 1, 0);
+    const bfloat128 c0 = v_bf16_lookup_1c(lut.v1, e_bf16_tanh_poly2_m3_c0, SW_BV16, 0, 1, 0);
+    bfloat128 t = v_bf16_mac_b(c1c2.v2, offset, c1c2.v1, 0, 1, 0);
+    t = v_bf16_mac_b(t, offset, c0, 0, 1, 0);
+    t = v_bf16_mul_vb(t, abs_h, 0, t, below_one, 0);
+    t = v_bf16_sel_grt_i16_b(exponent, 1, (bfloat)1.0f, t, 0, 0, 1, 0);
+    t = v_bf16_form_fp_num_b(t, h, t, 0, 0, 1, 0);
+    return v_bf16_calc_fp_special_b(fclass, fclass, SW_TANH, t, 1, 0);
+}
+
+// sigmoid(x) = 0.5 + 0.5 * tanh(x / 2).
+inline bfloat128 sigmoid_bf16(bfloat128 x)
+{
+    const bfloat128 t = sigmoid_tanh_lut_bf16(v_bf16_mul_b(x, (bfloat)0.5f, 0, 0, 1, 0));
+    return v_bf16_mac_b(t, (bfloat)0.5f, (bfloat)0.5f, 0, 1, 0);
+}
+#endif
+
+#if defined(__gaudi2__)
+// sigmoid(x) without tanh's saturation. With n = -|x|, 2 * sigmoid(n) = 2^y,
+// y = n * p(n) for a quadratic p, or 1 + n * log2(e) for n < -5; 2^y from
+// floor(y) and lookup table 291 indexed by the top 7 fraction bits. The
+// result is 2^y / 2, or 1 - 2^y / 2 for x > 0, with 2^y = 0 for n < -88.
+inline bfloat128 no_saturation_sigmoid_bf16(bfloat128 x)
+{
+    short128 xi = *(short128 *)&x;
+    xi = v_i16_or_b(xi, (short)0x8000, 0, 0, 1, 0);
+    const bfloat128 n = *(bfloat128 *)&xi;
+    const bool128 non_positive = v_bf16_cmp_leq_b(x, (bfloat)0.0f, 0, (bool128){0}, 1, 0);
+    bfloat128 base = 1.0f, scale = -0.5f;
+    base = v_bf16_mov_vb((bfloat)0.0f, 0, base, non_positive, 0);
+    scale = v_bf16_mov_vb((bfloat)0.5f, 0, scale, non_positive, 0);
+    bfloat128 p = v_bf16_mac_b(n, (bfloat)-0x1.dap-12f, (bfloat)-0x1.52p-6f, 0, 1, 0);
+    const bfloat128 lin = v_bf16_mac_b(n, (bfloat)0x1.72p+0f, (bfloat)1.0f, 0, 1, 0);
+    const bool128 large = v_bf16_cmp_less_b(n, (bfloat)-5.0f, 0, (bool128){0}, 1, 0);
+    const bool128 underflow = v_bf16_cmp_less_b(n, (bfloat)-88.0f, 0, (bool128){0}, 1, 0);
+    p = v_bf16_mac_b(p, n, (bfloat)-0x1.9p-3f, 0, 1, 0);
+    p = v_bf16_mac_b(p, n, (bfloat)0x1.7p-1f, 0, 1, 0);
+    bfloat128 y = v_bf16_mul_b(n, p, 0, 0, 1, 0);
+    y = v_bf16_mov_vb(lin, 0, y, large, 0);
+    const bfloat128 fl = v_bf16_nearbyint_b(y, SW_RD, 0, 1, 0);
+    bfloat128 frac = v_bf16_sub_b(y, fl, 0, 0, 1, 0);
+    const bfloat128 biased = v_bf16_add_b(fl, (bfloat)127.0f, 0, 0, 1, 0);
+    frac = v_bf16_add_b(frac, (bfloat)1.0f, 0, 0, 1, 0);
+    ushort128 exp_bits = v_convert_bf16_to_u16_b(biased, SW_RHNE, 0, 1, 0);
+    short128 idx = v_i16_add_b(*(short128 *)&frac, (short)0xc080, 0, 0, 1, 0);
+    exp_bits = v_u16_shl_b(exp_bits, 7, 0, 0, 1, 0);
+    ushort128 uidx = v_u16_min_b(*(ushort128 *)&idx, 0x7f, 0, 0, 1, 0);
+    const bfloat128 mant = v_bf16_lookup_1c(uidx, 291, SW_BV16, *(bfloat128 *)&uidx, 1, 0);
+    bfloat128 pow = 0.0f;
+    pow = v_bf16_form_fp_num_vb(*(bfloat128 *)&exp_bits, biased, mant, SW_FORCE_SIGN0, pow, underflow, 1);
+    return v_bf16_mac_b(scale, pow, base, 0, 1, 0);
+}
+#endif
+
+#if defined(__gaudi2__) || defined(__doron1__)
+// sigmoid(x) without the saturating special function: e = exp(-|x|) by the
+// cephes reduction and a degree-6 polynomial, e / (1 + e) by a polynomial
+// reciprocal and Newton steps, then 1 - that for x > 0; 0 below -|x| = -88.
+inline float64 no_saturation_sigmoid_f32(float64 x)
+{
+    const bool64 positive = v_f32_cmp_grt_b(x, 0.0f, 0, (bool64){0}, 1, 0);
+    int64 xi = *(int64 *)&x;
+    xi = v_i32_or_b(xi, (int)0x80000000, 0, 0, 1, 0);
+    const float64 n = *(float64 *)&xi;
+    float64 k = v_f32_mul_b(n, 0x1.715476p+0f, 0, 0, 1, 0);
+    const bool64 no_underflow = v_f32_cmp_geq_b(n, -88.0f, 0, (bool64){0}, 1, 0);
+    k = v_f32_nearbyint_b(k, SW_RHAZ, 0, 1, 0);
+    const float64 r = v_f32_mac_b(k, -0x1.62e43p-1f, n, 0, 1, 0);
+    const char256 kexp = v_convert_f32_to_i8_b(k, 0, SW_RHNE, (char256)0, 1, 0);
+    const float64 two_k = v_f32_form_fp_num_ie_b(kexp, 0.0f, 0.0f, SW_ADD_BIAS | SW_EXP_IS_NUM, 0, 1, 0);
+    float64 p = 0x1.126facp-7f;
+    p = v_f32_mac_b(0x1.6dd982p-10f, r, p, 0, 1, 0);
+    p = v_f32_mac_b(p, r, 0x1.55541cp-5f, 0, 1, 0);
+    p = v_f32_mac_b(p, r, 0x1.555404p-3f, 0, 1, 0);
+    p = v_f32_mac_b(p, r, 0.5f, 0, 1, 0);
+    p = v_f32_mac_b(p, r, 1.0f, 0, 1, 0);
+    p = v_f32_mac_b(p, r, -0x1.63f26p-34f, 0, 1, 0);
+    const float64 e = v_f32_mac_b(two_k, p, two_k, 0, 1, 0);
+    const float64 d = v_f32_add_b(e, 1.0f, 0, 0, 1, 0);
+    float64 y = -0x1.32c2f2p+0f;
+    y = v_f32_mac_b(d, 0x1.4aff8ep-3f, y, 0, 1, 0);
+    y = v_f32_mac_b(y, d, 0x1.c06434p+1f, 0, 1, 0);
+    y = v_f32_mac_b(y, d, -0x1.42e1dap+2f, 0, 1, 0);
+    y = v_f32_mac_b(y, d, 0x1.ca09e6p+1f, 0, 1, 0);
+    const float64 t = v_f32_mac_b(d, y, 2.0f, SW_NEG, 1, 0);
+    y = v_f32_mul_b(y, t, 0, 0, 1, 0);
+    float64 q = v_f32_mul_b(e, y, 0, 0, 1, 0);
+    const float64 res = v_f32_mac_b(q, d, -e, 0, 1, 0);
+    q = v_f32_mac_b(res, y, q, SW_NEG, 1, 0);
+    float64 s = 0.0f;
+    s = v_f32_mov_vb(q, 0, s, no_underflow, 0);
+    return v_f32_sub_vb(1.0f, s, 0, s, positive, 0);
+}
+#endif
+
 #endif //__TPC_DROP_VERSION
 
 #endif // TPC_SPECIAL_FUNCS_INCLUDED
