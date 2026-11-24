@@ -9,7 +9,8 @@
 // S_t = g_t S_{t-1} + ds_t k_t^T, and stores every S_t (a 50 MB checkpoint
 // output). The inputs are independent random values, so gram is not the Gram
 // matrix of kvals; it is positive, so the rsqrt of its diagonal is defined.
-// From GaudiInfer, test_kernels/GaudiInfer/flashinfer_gaudi/kernels/gdn_mtp_wy_f32_gaudi2.c; Apache-2.0.
+// From GaudiInfer (https://github.com/JChen-318/GaudiInfer, commit cb260a91),
+// tpc/flashinfer_gaudi/kernels/gdn_mtp_wy_f32_gaudi2.c; Apache-2.0.
 //
 // BENCH: arch gaudi2
 // BENCH: in  f32 128 128 48 1 range=-1,1

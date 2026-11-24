@@ -7,7 +7,8 @@
 // heads, token) per member. No lookup tables: exp is a base-2 polynomial, 1/x
 // and 1/sqrt(x) are Newton steps from bit tricks, lane sums and maxima use
 // dual-group moves and shuffles; whole-vector bf16 <-> f32 conversions.
-// From GaudiInfer, test_kernels/GaudiInfer/flashinfer_gaudi/kernels/gated_norm_quant_bf16_gaudi2.c; Apache-2.0.
+// From GaudiInfer (https://github.com/JChen-318/GaudiInfer, commit cb260a91),
+// tpc/flashinfer_gaudi/kernels/gated_norm_quant_bf16_gaudi2.c; Apache-2.0.
 //
 // BENCH: arch gaudi2
 // BENCH: in  bf16 128 48 16 range=-2,2

@@ -6,7 +6,8 @@
 // S q), a lane-0 broadcast, a scalar global load of v (decay and beta once per
 // token) and a one-element partial store. k and q are in a range that makes
 // |k| and |q| about 1, as after the L2 normalization of the model.
-// From 1cat-vllm-gaudi, test_kernels/1cat-vllm-gaudi/flashqla_hpu/flashqla_recurrent_prefill_f32_gaudi2.c; Apache-2.0 (test_kernels/1cat-vllm-gaudi/LICENSE).
+// From 1cat-vllm-gaudi (https://github.com/1CatAI/1cat-vllm-gaudi, commit e2266e0e),
+// csrc/flashqla_hpu/flashqla_recurrent_prefill_f32_gaudi2.c; Apache-2.0 (the project's LICENSE file).
 //
 // BENCH: arch gaudi2
 // BENCH: in  f32 128 6 16 range=-0.15,0.15

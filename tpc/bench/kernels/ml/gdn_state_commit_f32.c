@@ -8,7 +8,8 @@
 // scaled deltas of the 6 tokens stay in local memory. The inner loop runs over
 // the tokens on 8-row tiles of the state held in registers: a dual-group move,
 // 8 lane broadcasts (shuffles) and 16 MACs per token.
-// From GaudiInfer, test_kernels/GaudiInfer/flashinfer_gaudi/kernels/gdn_state_commit_f32_gaudi2.c; Apache-2.0.
+// From GaudiInfer (https://github.com/JChen-318/GaudiInfer, commit cb260a91),
+// tpc/flashinfer_gaudi/kernels/gdn_state_commit_f32_gaudi2.c; Apache-2.0.
 //
 // BENCH: arch gaudi2
 // BENCH: in  f32 128 128 48 range=-1,1

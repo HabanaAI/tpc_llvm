@@ -5,7 +5,8 @@
 // unrolled: 120 scalar global loads of coefficients, MACs with a scalar
 // operand, the rows of the inverse kept in registers, 16-lane partial stores.
 // Only the strictly lower triangle of the input is read.
-// From 1cat-vllm-gaudi, test_kernels/1cat-vllm-gaudi/flashqla_hpu/flashqla_unit_lower_inverse16_f32_gaudi2.c; Apache-2.0 (test_kernels/1cat-vllm-gaudi/LICENSE).
+// From 1cat-vllm-gaudi (https://github.com/1CatAI/1cat-vllm-gaudi, commit e2266e0e),
+// csrc/flashqla_hpu/flashqla_unit_lower_inverse16_f32_gaudi2.c; Apache-2.0 (the project's LICENSE file).
 //
 // BENCH: arch gaudi2
 // BENCH: in  f32 16 16 64 6 1 range=-0.25,0.25

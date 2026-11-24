@@ -9,7 +9,8 @@
 // the kernel takes its fallback path (keep every slot, no deduplication)
 // rather than the merge of sorted lists; rows and heads are sized for its 2048
 // rows, so every element is written.
-// From 1cat-vllm-gaudi, test_kernels/1cat-vllm-gaudi/deepseek_v41_unique/kernels/deepseek_v41_mla_union_metadata_gaudi2.c; Apache-2.0.
+// From 1cat-vllm-gaudi (https://github.com/1CatAI/1cat-vllm-gaudi, commit e2266e0e),
+// csrc/deepseek_v41_unique/kernels/deepseek_v41_mla_union_metadata_gaudi2.c; Apache-2.0.
 //
 // BENCH: arch gaudi2
 // BENCH: in  i32 512 4 range=0,8063

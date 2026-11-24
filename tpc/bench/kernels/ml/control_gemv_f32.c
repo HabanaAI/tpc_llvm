@@ -4,7 +4,8 @@
 // activations, for 8 tokens. One output element per member, over the whole
 // K = 20480: 320 vector loads of each operand into one MAC chain, then a lane
 // reduction and a one-element partial store.
-// From 1cat-vllm-gaudi, test_kernels/1cat-vllm-gaudi/deepseek_v4/kernels/deepseek_v41_control_gemv_f32_gaudi2.c; Apache-2.0.
+// From 1cat-vllm-gaudi (https://github.com/1CatAI/1cat-vllm-gaudi, commit e2266e0e),
+// csrc/deepseek_v4/kernels/deepseek_v41_control_gemv_f32_gaudi2.c; Apache-2.0.
 //
 // BENCH: arch gaudi2
 // BENCH: in  f32 20480 8 range=-2,2

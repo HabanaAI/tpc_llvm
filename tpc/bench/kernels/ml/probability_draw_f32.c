@@ -9,7 +9,8 @@
 // blocks), 8 rows, one row per member, u in controls[2]. The probabilities
 // are uniform with mean 1/131072 and every partial is 1/64, so the partials
 // match the block sums to about 1%; the drawn column is almost always found.
-// From 1cat-vllm-gaudi, test_kernels/1cat-vllm-gaudi/deepseek_v41_unique/kernels/deepseek_v41_probability_draw_gaudi2.c; Apache-2.0.
+// From 1cat-vllm-gaudi (https://github.com/1CatAI/1cat-vllm-gaudi, commit e2266e0e),
+// csrc/deepseek_v41_unique/kernels/deepseek_v41_probability_draw_gaudi2.c; Apache-2.0.
 //
 // BENCH: arch gaudi2
 // BENCH: in  f32 131072 8 range=0,0.0000152587890625
