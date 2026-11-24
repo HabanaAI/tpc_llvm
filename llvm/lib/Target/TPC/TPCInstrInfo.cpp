@@ -945,16 +945,16 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         regsFound++;
       }
     }
-    if (regsFound == 0) {
-      llvm_unreachable("Cannot load IRF");
-    }
-    //dbgs() << "   === regsFound: " << regsFound << "\n";
+    if (regsFound == 0)
+      report_fatal_error("no free scalar register to reload an IRF register");
+    // With fewer than 5 free registers they are reused: each one is dead after
+    // its set_indx. Every dimension is reloaded, whatever the number found.
     for (int k = regsFound; k < 5; k++) {
       sRegs[k] = sRegs[k-regsFound];
     }
     unsigned DestReg = MI.getOperand(0).getReg();
     unsigned Offset = MI.getOperand(1).getImm();
-    for (int k = 0; k < regsFound; k++) {
+    for (int k = 0; k < 5; k++) {
       BuildMI(MBB, MI, DL, get(TPC::LD_Lsip), sRegs[k])
           .addImm(Offset + k*4)
           .addImm(0)
@@ -1246,15 +1246,15 @@ bool TPCInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
         regsFound++;
       }
     }
-    if (regsFound == 0) {
-      llvm_unreachable("Cannot store IRF");
-    }
-    //dbgs() << "   === regsFound for store: " << regsFound << "\n";
+    if (regsFound == 0)
+      report_fatal_error("no free scalar register to spill an IRF register");
+    // With fewer than 5 free registers they are reused: each one is dead after
+    // its st_l. Every dimension is stored, whatever the number found.
     for (int k = regsFound; k < 5; k++) {
       sRegs[k] = sRegs[k-regsFound];
     }
     unsigned Offset = MI.getOperand(0).getImm();
-    for (int k = 0; k < regsFound; k++) {
+    for (int k = 0; k < 5; k++) {
       BuildMI(MBB, MI, DL, get(TPC::MOV_IRF_DIM), sRegs[k])
           .addReg(MI.getOperand(1).getReg())
           .addImm(k) // DIM

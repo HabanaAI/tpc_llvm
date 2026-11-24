@@ -1,0 +1,40 @@
+# RUN: llc -mtriple=tpc -mcpu=gaudi2 -run-pass=postrapseudos %s -o - | FileCheck %s
+
+# An IRF register is spilled and reloaded one dimension at a time through a
+# free scalar register. Here only S5 and S6 are free, and all five dimensions
+# must still be stored and reloaded, the two registers taking turns; with fewer
+# than five free registers only that many dimensions were (wright's ix_cgather
+# and 1cat's qk_flat_reuse_softmax lost dimensions 3 and 4 of a coordinate).
+
+---
+name:            main
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    liveins: $i1, $s0, $s1, $s2, $s3, $s4, $s7, $s8, $s9, $s10, $s11, $s12, $s13, $s14, $s15, $s16, $s17, $s18, $s19, $s20, $s21, $s22, $s23, $s24, $s25, $s26, $s27, $s28, $s29, $s30, $s31
+    SPILL_IRF_SAVE 64, killed $i1
+    $i2 = SPILL_IRF_RESTORE 64
+    FAKE_USE $i2, $s0, $s1, $s2, $s3, $s4, $s7, $s8, $s9, $s10, $s11, $s12, $s13, $s14, $s15, $s16, $s17, $s18, $s19, $s20, $s21, $s22, $s23, $s24, $s25, $s26, $s27, $s28, $s29, $s30, $s31
+    HALTs
+...
+
+# CHECK:      $s5 = MOV_IRF_DIM $i1, 0, 0, undef $s5
+# CHECK-NEXT: ST_Lisp 64, killed $s5
+# CHECK-NEXT: $s6 = MOV_IRF_DIM $i1, 1, 0, undef $s6
+# CHECK-NEXT: ST_Lisp 68, killed $s6
+# CHECK-NEXT: $s5 = MOV_IRF_DIM $i1, 2, 0, undef $s5
+# CHECK-NEXT: ST_Lisp 72, killed $s5
+# CHECK-NEXT: $s6 = MOV_IRF_DIM $i1, 3, 0, undef $s6
+# CHECK-NEXT: ST_Lisp 76, killed $s6
+# CHECK-NEXT: $s5 = MOV_IRF_DIM $i1, 4, 0, undef $s5
+# CHECK-NEXT: ST_Lisp 80, killed $s5
+# CHECK-NEXT: $s5 = LD_Lsip 64, 0, undef $s5
+# CHECK-NEXT: $i2 = SET_INDX_spu_rp undef $i2, killed $s5, 1, 0
+# CHECK-NEXT: $s6 = LD_Lsip 68, 0, undef $s6
+# CHECK-NEXT: $i2 = SET_INDX_spu_rp $i2, killed $s6, 2, 0
+# CHECK-NEXT: $s5 = LD_Lsip 72, 0, undef $s5
+# CHECK-NEXT: $i2 = SET_INDX_spu_rp $i2, killed $s5, 4, 0
+# CHECK-NEXT: $s6 = LD_Lsip 76, 0, undef $s6
+# CHECK-NEXT: $i2 = SET_INDX_spu_rp $i2, killed $s6, 8, 0
+# CHECK-NEXT: $s5 = LD_Lsip 80, 0, undef $s5
+# CHECK-NEXT: $i2 = SET_INDX_spu_rp $i2, killed $s5, 16, 0
