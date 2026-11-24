@@ -347,11 +347,15 @@ TPCx2CombineUtil::createDRFfromVRFs(MachineFunction &MF, DebugLoc Loc,
   auto *TII = MF.getSubtarget().getInstrInfo();
   MachineRegisterInfo &MRI = MF.getRegInfo();
 
+  // The operands come from two instructions at other places than the one the
+  // new instructions go to, so their kill flags do not hold there: none are
+  // set (MachineCombiner does not fix them, and passes before LiveVariables
+  // trust them).
   DRFReg = MRI.createVirtualRegister(&TPC::DRFRegClass);
   auto MIB = BuildMI(MF, Loc, TII->get(TPC::REG_SEQUENCE), DRFReg)
-                 .addReg(VRF0.getReg(), getKillRegState(VRF0.isKill()))
+                 .addReg(VRF0.getReg())
                  .addImm(TPC::sub_0)
-                 .addReg(VRF1.getReg(), getKillRegState(VRF1.isKill()))
+                 .addReg(VRF1.getReg())
                  .addImm(TPC::sub_1);
   return MIB;
 }
@@ -366,8 +370,8 @@ MachineInstrBuilder TPCx2CombineUtil::createMACx2(
   ResultDRFReg = MRI.createVirtualRegister(&TPC::DRFRegClass);
   auto MIB = BuildMI(MF, Loc, TII->get(TPC::MACx2f32vvvp), ResultDRFReg)
                  .addReg(DRF0, RegState::Kill)
-                 .addReg(VRF1.getReg(), getKillRegState(VRF1.isKill()))
-                 .addReg(VRF2.getReg(), getKillRegState(VRF2.isKill()))
+                 .addReg(VRF1.getReg()) // no kill flags, see createDRFfromVRFs
+                 .addReg(VRF2.getReg())
                  .addImm(0)
                  .addImm(SwitchVal)
                  .addReg(AccumDRFReg, RegState::Kill)
@@ -394,7 +398,7 @@ void TPCx2CombineUtil::getMACX2Sequence(
   // %195:drf = REG_SEQUENCE %70:vrf, %subreg.sub_0, %71:vrf, %subreg.sub_1
   // %193:drf = MACx2vvvp killed %194:drf, %58:vrf, %60:vrf, 0, 16,
   //            %195:drf,%sprf,0
-  // %168:vrf = COPY killed %193.sub_0:drf
+  // %168:vrf = COPY %193.sub_0:drf
   // %172:vrf = COPY killed %193.sub_1:drf
 
   SmallVector<SmallVector<MachineOperand, 2>, 8> InstOp;
@@ -428,7 +432,7 @@ void TPCx2CombineUtil::getMACX2Sequence(
 
   MIB = BuildMI(MF, Root.getDebugLoc(), TII->get(TPC::COPY),
                 InstOp[0][0].getReg())
-            .addReg(ResultDRFReg, RegState::Kill, TPC::sub_0);
+            .addReg(ResultDRFReg, RegState::NoFlags, TPC::sub_0); // sub_1 is read next
   InsInstrs.push_back(MIB);
 
   MIB = BuildMI(MF, Root.getDebugLoc(), TII->get(TPC::COPY),
