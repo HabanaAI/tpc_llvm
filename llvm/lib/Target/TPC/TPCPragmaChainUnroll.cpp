@@ -27,6 +27,8 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsTPC.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -37,6 +39,11 @@ using namespace llvm;
 #define DEBUG_TYPE "tpc-pragma-chain-unroll"
 
 STATISTIC(NumLoops, "Pragma loops unrolled in order by the IR unroller");
+
+static cl::opt<unsigned> MaxAddressRegisters(
+    "tpc-pragma-chain-unroll-addresses", cl::Hidden, cl::init(8),
+    cl::desc("Lower the in-order unroll count so that the copies compute at "
+             "most this many addresses (the address registers; 0: no limit)"));
 
 static cl::opt<bool> EnablePragmaChainUnroll(
     "tpc-pragma-chain-unroll", cl::Hidden, cl::init(true),
@@ -91,8 +98,24 @@ PreservedAnalyses TPCPragmaChainUnrollPass::run(Loop &L, LoopAnalysisManager &,
   if (!CarriesChain)
     return PreservedAnalyses::all();
 
-  LLVM_DEBUG(dbgs() << "Unroll in order by " << CountC->getZExtValue() << ": "
-                    << L);
+  // Each copy of the body computes its global addresses, which LICM may then
+  // keep live across an outer loop. An address register cannot be spilled
+  // (TPCInstrInfo::storeRegToStackSlot) and there are 8 of them, so the count
+  // is lowered to keep the copies' addresses within 8. 1cat's w2_reduce_n256
+  // unrolled by 6 with 2 addresses per copy needed 12.
+  unsigned Count = CountC->getZExtValue();
+  unsigned Addresses = 0;
+  for (Instruction &I : *L.getHeader())
+    if (auto *II = dyn_cast<IntrinsicInst>(&I))
+      if (II->getIntrinsicID() == Intrinsic::tpc_gen_addr)
+        ++Addresses;
+  if (MaxAddressRegisters && Addresses &&
+      Count * Addresses > MaxAddressRegisters)
+    Count = MaxAddressRegisters / Addresses;
+  if (Count < 2)
+    return PreservedAnalyses::all();
+
+  LLVM_DEBUG(dbgs() << "Unroll in order by " << Count << ": " << L);
   LLVMContext &Ctx = L.getHeader()->getContext();
   SmallVector<Metadata *, 4> MDs = {nullptr};
   if (MDNode *LoopID = L.getLoopID())
@@ -104,8 +127,8 @@ PreservedAnalyses TPCPragmaChainUnrollPass::run(Loop &L, LoopAnalysisManager &,
     }
   MDs.push_back(MDNode::get(
       Ctx, {MDString::get(Ctx, "llvm.loop.unroll.count"),
-            ConstantAsMetadata::get(ConstantInt::get(
-                Type::getInt32Ty(Ctx), CountC->getZExtValue()))}));
+            ConstantAsMetadata::get(
+                ConstantInt::get(Type::getInt32Ty(Ctx), Count))}));
   MDNode *NewLoopID = MDNode::getDistinct(Ctx, MDs);
   NewLoopID->replaceOperandWith(0, NewLoopID);
   L.setLoopID(NewLoopID);

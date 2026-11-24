@@ -2222,6 +2222,13 @@ def : Pat<(v2i32 (int_tpc_get_addr i64:$src, (i32 imm:$sw), v2i32:$income, i1:$p
 
 //------ GEN_ADDR --------------------------------------------------------------
 
+// An address register cannot be spilled: on gaudi2 it carries state of the
+// tensor (gen_addr sets it, a move between address registers copies it) that a
+// move from a scalar pair does not restore, and a load through a register
+// reloaded that way fails (gaudi2 simulator: "Wrong
+// tensorDescriptorElementSizeType"). Recomputing the address instead of
+// spilling it is always right when the tensor is an immediate.
+let isReMaterializable = 1 in
 def GEN_ADDR_ld  : LoadInst_GEN_ADDR<0b000000, "gen_addr $sw $dest, $tensor, $coords, $pred", TensorSrc.DimMask>, MultiSlot<"GEN_ADDR">;
 def GEN_ADDR_ldT : LoadInst_GEN_ADDR<0b000000, "gen_addr $sw $dest, $tensor, $coords, $pred", TensorSrc.Reg>, Requires<[TnsrInReg]>, MultiSlot<"GEN_ADDRT">;
 
@@ -7306,6 +7313,8 @@ multiclass StoreIntrinsics<SDPatternOperator IntrinA1, SDPatternOperator IntrinA
 
 //------ GEN_ADDR --------------------------------------------------------------
 
+// Rematerializable: see GEN_ADDR_ld.
+let isReMaterializable = 1 in
 def GEN_ADDR_st  : StoreInst_GEN_ADDR<0b000000, "gen_addr $sw $dest, $tensor, $coords, $pred", TensorSrc.DimMask>, MultiSlot <"GEN_ADDR">;
 def GEN_ADDR_stT : StoreInst_GEN_ADDR<0b000000, "gen_addr $sw $dest, $tensor, $coords, $pred", TensorSrc.Reg>, Requires<[TnsrInReg]>, MultiSlot<"GEN_ADDRT">;
 

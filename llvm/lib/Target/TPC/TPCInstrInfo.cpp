@@ -797,12 +797,13 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
     StoreOpCode = TPC::SPILL_IRF_SAVE;
     StackID = TPCStackID::SLM_SPILL;
   } else if (TPC::ADRFRegClass.hasSubClassEq(RC)) {
-    if (Subtarget.hasADRFMov()) {
-      StoreOpCode = TPC::SPILL_ADRF_SAVE;
-      StackID = TPCStackID::SLM_SPILL;
-    } else {
-      report_fatal_error("ADRF registers are not spillable on this processor");
-    }
+    // An address register also holds its tensor (gen_addr sets it, a move
+    // between address registers copies it), which no spill can save: through
+    // a scalar pair, a load from the reloaded register fails (gaudi2
+    // simulator: "Wrong tensorDescriptorElementSizeType", gaudi3: "Wrong
+    // tensorID"). Stop rather than generate such code.
+    report_fatal_error("too many addresses are live at once: an address "
+                       "register (a gen_addr result) cannot be spilled");
   } else {
     report_fatal_error("Unsupported register class in StoreToStack");
   }
@@ -852,12 +853,9 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
     LoadOpCode = TPC::SPILL_IRF_RESTORE;
     StackID = TPCStackID::SLM_SPILL;
   } else if (TPC::ADRFRegClass.hasSubClassEq(RC)) {
-    if (Subtarget.hasADRFMov()) {
-      LoadOpCode = TPC::SPILL_ADRF_RESTORE;
-      StackID = TPCStackID::SLM_SPILL;
-    } else {
-      report_fatal_error("ADRF registers are not spillable on this processor");
-    }
+    // See storeRegToStackSlot.
+    report_fatal_error("too many addresses are live at once: an address "
+                       "register (a gen_addr result) cannot be spilled");
   } else {
     report_fatal_error("Unsupported register class in loadFromStack");
   }
