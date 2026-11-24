@@ -29,6 +29,15 @@ public:
 };
 
 
+/// Loop pass "tpc-pragma-chain-unroll": a loop_unroll pragma loop that
+/// carries a value the backend unroller does not take is unrolled in order by
+/// LLVM's unroller instead (see TPCPragmaChainUnroll.cpp).
+class TPCPragmaChainUnrollPass : public PassInfoMixin<TPCPragmaChainUnrollPass> {
+public:
+  PreservedAnalyses run(Loop &L, LoopAnalysisManager &AM,
+                        LoopStandardAnalysisResults &AR, LPMUpdater &U);
+};
+
 /// Pass "scalar2irf".
 class TPCScalarToIRFPass : public PassInfoMixin<TPCScalarToIRFPass> {
   bool FoldCmp;

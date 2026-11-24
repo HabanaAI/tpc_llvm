@@ -56,6 +56,7 @@ set(sources
   TPCHardwareLoops.cpp
   TPCLoopBoundaryImm.cpp
   TPCMulAddCombine.cpp
+  TPCPragmaChainUnroll.cpp
   TPCCarryDeps.cpp
   TPCCarryPairs.cpp
   TPCModuloScheduling.cpp

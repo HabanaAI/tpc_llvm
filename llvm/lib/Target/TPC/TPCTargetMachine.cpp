@@ -306,6 +306,10 @@ void TPCTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           LPM.addPass(TpcLoopOptPass());
           return true;
         }
+        if (Name == "tpc-pragma-chain-unroll") {
+          LPM.addPass(TPCPragmaChainUnrollPass());
+          return true;
+        }
         return false;
       });
 
@@ -332,6 +336,14 @@ void TPCTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // Legacy: first pass of PassManagerBuilder::populateModulePassManager.
         MPM.addPass(LinkTPCHeadersPass());
 #endif
+      });
+
+  // Before the IR unrollers: a loop_unroll pragma loop the backend unroller
+  // would refuse gets LLVM's unroll pragma instead.
+  PB.registerLateLoopOptimizationsEPCallback(
+      [](LoopPassManager &LPM, OptimizationLevel Level) {
+        if (Level != OptimizationLevel::O0)
+          LPM.addPass(TPCPragmaChainUnrollPass());
       });
 
   // Legacy EP_CGSCCOptimizerLate (GlobalOpt, ADCE, SROA) followed by
