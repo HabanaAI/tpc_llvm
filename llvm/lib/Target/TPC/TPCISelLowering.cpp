@@ -1505,10 +1505,11 @@ SDValue TPCTargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
       cond1 = cond2 = Cond;
     }
 
+    // Each half selects between the same half of the two operands.
     SDValue half1 =
-        DAG.getNode(ISD::SELECT, DL, SubregType, cond1, Op1_1, Op1_2);
+        DAG.getNode(ISD::SELECT, DL, SubregType, cond1, Op1_1, Op2_1);
     SDValue half2 =
-        DAG.getNode(ISD::SELECT, DL, SubregType, cond2, Op2_1, Op2_2);
+        DAG.getNode(ISD::SELECT, DL, SubregType, cond2, Op1_2, Op2_2);
 
     SmallVector<SDValue, 2> SubVects;
     SubVects.push_back(LowerSELECT(half1, DAG));
