@@ -54,6 +54,7 @@ set(sources
   TPCSelectionDAGInfo.cpp
   TPCTargetObjectFile.cpp
   TPCHardwareLoops.cpp
+  TPCLoopBoundaryImm.cpp
   TPCMulAddCombine.cpp
   TPCCarryDeps.cpp
   TPCCarryPairs.cpp

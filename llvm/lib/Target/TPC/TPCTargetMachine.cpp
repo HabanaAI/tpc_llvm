@@ -48,6 +48,7 @@ extern "C" void LLVMInitializeTPCTarget() {
   initializeTPCModuloScheduleSetupPass(Registry);
   initializeTPCModuloScheduleFinishPass(Registry);
   initializeTPCMulAddCombinePass(Registry);
+  initializeTPCLoopBoundaryImmPass(Registry);
   initializeTPCCarryDepsPass(Registry);
 }
 
@@ -496,6 +497,8 @@ void TPCPassConfig::addPreRegAlloc() {
     addPass(createTPCSubregInitElimination());
     // TODO: some kernels fail because of this pass
     addPass(createTPCMovCoalescer());
+    // After every pass that makes or changes LOOPs.
+    addPass(createTPCLoopBoundaryImm());
   }
   if (getOptLevel() == CodeGenOptLevel::None)
    addPass(createTPCHWWAGeneral());

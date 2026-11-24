@@ -149,6 +149,8 @@ FunctionPass *createTPCModuloScheduleFinish();
 void initializeTPCModuloScheduleFinishPass(PassRegistry &);
 FunctionPass *createTPCMulAddCombine();
 void initializeTPCMulAddCombinePass(PassRegistry &);
+FunctionPass *createTPCLoopBoundaryImm();
+void initializeTPCLoopBoundaryImmPass(PassRegistry &);
 FunctionPass *createTPCCarryDeps();
 void initializeTPCCarryDepsPass(PassRegistry &);
 FunctionPass *createTPCPipeliner();
