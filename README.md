@@ -113,7 +113,7 @@ TPC that ran the kernel (2 to 8 per launch), summed, so host and launch
 overhead are left out. Each time is the median of 6 runs, which spread by at
 most ±0.9%. Speedup is Habana's time divided by the fork's, so above 1× the
 fork is faster. Every run's outputs equal those of the other compiler and of
-the TPC simulator. Measured on 2026-11-24 with the fork at e3355c362dd9; the
+the TPC simulator. Measured on 2026-11-23 with the fork at e3355c362dd9; the
 method, and how to rerun it, is in [`tpc/README.md`](tpc/README.md#microbenchmarks-bench).
 
 ## Clone tpc-llvm Repository
