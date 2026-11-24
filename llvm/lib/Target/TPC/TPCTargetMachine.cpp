@@ -50,6 +50,7 @@ extern "C" void LLVMInitializeTPCTarget() {
   initializeTPCMulAddCombinePass(Registry);
   initializeTPCLoopBoundaryImmPass(Registry);
   initializeTPCCarryDepsPass(Registry);
+  initializeTPCLatencyResolverPass(Registry); // for -run-pass=tpclatresolver
 }
 
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model> RM) {

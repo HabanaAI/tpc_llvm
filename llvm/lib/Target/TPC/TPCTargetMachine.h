@@ -162,6 +162,7 @@ FunctionPass *createTPCLoopBoundaryImm();
 void initializeTPCLoopBoundaryImmPass(PassRegistry &);
 FunctionPass *createTPCCarryDeps();
 void initializeTPCCarryDepsPass(PassRegistry &);
+void initializeTPCLatencyResolverPass(PassRegistry &);
 FunctionPass *createTPCPipeliner();
 FunctionPass *createTPCPacketizer();
 FunctionPass *createTPCExpandHWRegCopies();

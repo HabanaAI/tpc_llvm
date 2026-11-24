@@ -1,0 +1,23 @@
+# RUN: llc -mtriple=tpc -mcpu=gaudi2 -run-pass=tpclatresolver %s -o - | FileCheck %s
+
+# A MAC x2 writes the pair D8; a plain MAC then accumulates into V9, the high
+# half. A value that moves to the other half of a pair between an X2 FMA and
+# another FMA needs 6 cycles [LLVM-2305]; the rule was applied only when the
+# consumer was the X2 one, and here 4 cycles were left: the plain MAC read the
+# old V9 on the gaudi2 simulator (1cat's mhc_control_tiles, which needs 6).
+
+---
+name:            main
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    liveins: $d8, $d24, $v20, $v22, $v23, $v33
+    $d8 = MACx2f32vvvp $d24, $v22, $v33, 0, 16, $d8, $sprf_true, 0
+    $v9 = MACf32vvp $v23, $v20, 0, 0, $v9, $sprf_true, 0
+    FAKE_USE $v9, $v8
+    HALTs
+...
+
+# CHECK:      $d8 = MACx2f32vvvp
+# CHECK-COUNT-5: NOPv
+# CHECK-NEXT: $v9 = MACf32vvp

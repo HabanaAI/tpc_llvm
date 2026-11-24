@@ -2954,11 +2954,13 @@ int TPCInstrInfo::getTPCOperandLatency(const InstrItineraryData *ItinData,
       uint8_t DefIdxDst0 = GetIndexBySubReg(DefReg, *SubReg);
       uint8_t UseIdxDst0 = GetIndexBySubReg(UseReg, *SubReg);
 
-      // FMA X2 to FMA and vs versa
-      // [LLVM-2305] In case the instruction is a switch with X2 return 0
-      // otherwise return 1 This check only relvent for FMA operations
-      // with X2.
-      if (getSwitches(UseMI) & TPCII::SW_X2_ARITHMETIC &&
+      // FMA X2 to FMA and vice versa [LLVM-2305]: when either one is X2
+      // and the value moves to the other half of a pair, the latency is 6.
+      // Checking only the consumer gave an X2 MAC feeding the accumulator of
+      // a plain MAC from its high half 4 cycles: the plain MAC read the old
+      // value on the gaudi2 simulator (it needs 6).
+      if (((getSwitches(UseMI) | getSwitches(DefMI)) &
+           TPCII::SW_X2_ARITHMETIC) &&
           DefIdxDst0 != UseIdxDst0) {
         DEBUG_WITH_TYPE("latency", dbgs() << "LLVM-2305" << 6 << "\n");
         return 6;
@@ -3012,11 +3014,9 @@ int TPCInstrInfo::getTPCOperandLatency(const InstrItineraryData *ItinData,
 
       for (auto DefIdx : DefIdxs) {
         for (auto UseIdx : UseIdxs) {
-          // FMA X2 to FMA and vs versa
-          // [LLVM-2305] In case the instruction is a switch with X2 return 0
-          // otherwise return 1. This check only relvent for FMA operations
-          // with X2.
-          if (getSwitches(UseMI) & TPCII::SW_X2_ARITHMETIC &&
+          // FMA X2 to FMA and vice versa, as for physical registers above.
+          if (((getSwitches(UseMI) | getSwitches(DefMI)) &
+               TPCII::SW_X2_ARITHMETIC) &&
               DefIdx != UseIdx) {
             DEBUG_WITH_TYPE("latency", dbgs() << "LLVM-2305" << 6 << "\n");
             return 6;
