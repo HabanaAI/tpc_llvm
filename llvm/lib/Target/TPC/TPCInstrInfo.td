@@ -6333,6 +6333,9 @@ def CMP_EQvsm : VpuInstBinSw <0b001001, VPRF, VRF, SRF,    "cmp_eq$optype $sw $d
 
 defm : CmpOpVect<seteq, CMP_EQvvp, CMP_EQvsp, CMP_EQvip>;
 defm : FCmpOpVect<setoeq, CMP_EQvvp, CMP_EQvsp, CMP_EQvip>;
+// Without NaNs (fast-math, -fno-honor-nans) LLVM drops the ordered part of
+// a float predicate; such compares use the same instructions.
+defm : FCmpOpVect<seteq, CMP_EQvvp, CMP_EQvsp, CMP_EQvip>;
 
 foreach type = [v256i8, v128i16, v64i32, v64f32, v128bf16, v128f16, v256f8_143, v256f8_152] in
   foreach pred = [i1, v256i1] in {
@@ -6357,6 +6360,7 @@ def CMP_NEQvsm : VpuInstBinSw <0b001010, VPRF, VRF, SRF,    "cmp_neq$optype $sw 
 
 defm : CmpOpVect<setne, CMP_NEQvvp, CMP_NEQvsp, CMP_NEQvip>;
 defm : FCmpOpVect<setone, CMP_NEQvvp, CMP_NEQvsp, CMP_NEQvip>;
+defm : FCmpOpVect<setne, CMP_NEQvvp, CMP_NEQvsp, CMP_NEQvip>;
 
 foreach type = [v256i8, v128i16, v64i32, v64f32, v128bf16, v128f16, v256f8_143, v256f8_152] in
   foreach pred = [i1, v256i1] in {
@@ -6376,6 +6380,7 @@ def CMP_LESSvsm : VpuInstBinSw <0b001011, VPRF, VRF, SRF,    "cmp_less$optype $s
 defm : CmpOpVect<setlt, CMP_LESSvvp, CMP_LESSvsp, CMP_LESSvip>;
 defm : CmpOpUVect<setult, CMP_LESSvvp, CMP_LESSvsp, CMP_LESSvip>;
 defm : FCmpOpVect<setolt, CMP_LESSvvp, CMP_LESSvsp, CMP_LESSvip>;
+defm : FCmpOpVect<setlt, CMP_LESSvvp, CMP_LESSvsp, CMP_LESSvip>;
 
 foreach type = [v256i8, v128i16, v64i32, v64f32, v128bf16, v128f16, v256f8_143, v256f8_152] in
   foreach pred = [i1, v256i1] in {
@@ -6394,6 +6399,7 @@ def CMP_LEQvsm : VpuInstBinSw <0b001100, VPRF, VRF, SRF,    "cmp_leq$optype $sw 
 
 defm : CmpOpVect<setle, CMP_LEQvvp, CMP_LEQvsp, CMP_LEQvip>;
 defm : CmpOpUVect<setule, CMP_LEQvvp, CMP_LEQvsp, CMP_LEQvip>;
+defm : FCmpOpVect<setole, CMP_LEQvvp, CMP_LEQvsp, CMP_LEQvip>;
 defm : FCmpOpVect<setle, CMP_LEQvvp, CMP_LEQvsp, CMP_LEQvip>;
 
 foreach type = [v256i8, v128i16, v64i32, v64f32, v128bf16, v128f16, v256f8_143, v256f8_152] in
@@ -6414,6 +6420,7 @@ def CMP_GRTvsm : VpuInstBinSw <0b001101, VPRF, VRF, SRF,    "cmp_grt$optype $sw 
 defm : CmpOpVect<setgt, CMP_GRTvvp, CMP_GRTvsp, CMP_GRTvip>;
 defm : CmpOpUVect<setugt, CMP_GRTvvp, CMP_GRTvsp, CMP_GRTvip>;
 defm : FCmpOpVect<setogt, CMP_GRTvvp, CMP_GRTvsp, CMP_GRTvip>;
+defm : FCmpOpVect<setgt, CMP_GRTvvp, CMP_GRTvsp, CMP_GRTvip>;
 
 foreach type = [v256i8, v128i16, v64i32, v64f32, v128bf16, v128f16, v256f8_143, v256f8_152] in
   foreach pred = [i1, v256i1] in {
@@ -6433,6 +6440,7 @@ def CMP_GEQvsm : VpuInstBinSw <0b001110, VPRF, VRF, SRF,    "cmp_geq$optype $sw 
 defm : CmpOpVect<setge, CMP_GEQvvp, CMP_GEQvsp, CMP_GEQvip>;
 defm : CmpOpUVect<setuge, CMP_GEQvvp, CMP_GEQvsp, CMP_GEQvip>;
 defm : FCmpOpVect<setoge, CMP_GEQvvp, CMP_GEQvsp, CMP_GEQvip>;
+defm : FCmpOpVect<setge, CMP_GEQvvp, CMP_GEQvsp, CMP_GEQvip>;
 
 foreach type = [v256i8, v128i16, v64i32, v64f32, v128bf16, v128f16, v256f8_143, v256f8_152] in
   foreach pred = [i1, v256i1] in {
@@ -6617,6 +6625,15 @@ def : Pat<(fminnum v64f32:$v0, v64f32:$v1),
  // llvm fmaxnum
 def : Pat<(fmaxnum v64f32:$v0, v64f32:$v1),
       (v64f32(MAXvvp $v0,  $v1, (i8 0), (i32 0),(IMPLICIT_DEF), SPRF_TRUE, (i1 0)))>;
+// The same for bf16 and f16 (fast-math turns a < b ? a : b into fminnum).
+def : Pat<(fminnum v128bf16:$v0, v128bf16:$v1),
+      (v128bf16 (MINvvp $v0, $v1, OpType.BF16, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)))>;
+def : Pat<(fmaxnum v128bf16:$v0, v128bf16:$v1),
+      (v128bf16 (MAXvvp $v0, $v1, OpType.BF16, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)))>;
+def : Pat<(fminnum v128f16:$v0, v128f16:$v1),
+      (v128f16 (MINvvp $v0, $v1, OpType.FP16, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)))>;
+def : Pat<(fmaxnum v128f16:$v0, v128f16:$v1),
+      (v128f16 (MAXvvp $v0, $v1, OpType.FP16, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0)))>;
 
 
 //------ NEARBYINT -------------------------------------------------------------
@@ -7992,7 +8009,8 @@ multiclass SelPatterns<SDPatternOperator Pred, ValueType TC, ValueType TD, bits<
 
 foreach TC = [v64f32, v128bf16, v128f16, v256f8_143, v256f8_152] in
   foreach TD = SelCompatibleTypes<TC>.Ts in
-    foreach Pred = [setoeq, setone, setolt, setole, setogt, setoge] in
+    foreach Pred = [setoeq, setone, setolt, setole, setogt, setoge,
+                    seteq, setne, setlt, setle, setgt, setge] in
       defm : SelPatterns<Pred, TC, TD, OpTypeForType<TC>.V>;
 
 foreach TC = [v64i32, v128i16, v256i8] in

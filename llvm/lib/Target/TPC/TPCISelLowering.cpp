@@ -443,9 +443,14 @@ static SDValue helperExtractSubRegSDValue(unsigned subReg, const SDLoc &DL,
       setOperationAction(Opc, VT, Custom);
   for (auto VT : {MVT::v256f32, MVT::v256bf16, MVT::v256f16})
     setOperationAction(ISD::FMUL, VT, Custom);
-  // bf16 and f16 have no FMINNUM/FMAXNUM even in one register.
-  for (unsigned Opc : {ISD::FMINNUM, ISD::FMAXNUM})
-    setOperationAction(Opc, MVT::v256f32, Custom);
+  // FMINNUM/FMAXNUM are MIN/MAX in one register (patterns), split in two or
+  // four.
+  for (unsigned Opc : {ISD::FMINNUM, ISD::FMAXNUM}) {
+    for (auto VT : {MVT::v128bf16, MVT::v128f16})
+      setOperationAction(Opc, VT, Legal);
+    for (auto VT : {MVT::v256f32, MVT::v256bf16, MVT::v256f16})
+      setOperationAction(Opc, VT, Custom);
+  }
   for (auto VT : {MVT::v128i32, MVT::v256i32, MVT::v256i16})
     for (unsigned Opc : {ISD::OR, ISD::XOR, ISD::SRA, ISD::SMIN, ISD::SMAX,
                          ISD::UMIN, ISD::UMAX})
