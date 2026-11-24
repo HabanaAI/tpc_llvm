@@ -436,6 +436,23 @@ static SDValue helperExtractSubRegSDValue(unsigned subReg, const SDLoc &DL,
   for (auto VT : {MVT::v256bf16, MVT::v256f16, MVT::v128f32, MVT::v256f32})
     setOperationAction(ISD::FP_EXTEND, VT, Custom);
 
+  // Operations on register pairs and quads that have no pattern: split them
+  // (splitWideVectorOp).
+  for (auto VT : {MVT::v128f32, MVT::v256f32, MVT::v256bf16, MVT::v256f16})
+    for (unsigned Opc : {ISD::FABS, ISD::FNEG})
+      setOperationAction(Opc, VT, Custom);
+  for (auto VT : {MVT::v256f32, MVT::v256bf16, MVT::v256f16})
+    setOperationAction(ISD::FMUL, VT, Custom);
+  // bf16 and f16 have no FMINNUM/FMAXNUM even in one register.
+  for (unsigned Opc : {ISD::FMINNUM, ISD::FMAXNUM})
+    setOperationAction(Opc, MVT::v256f32, Custom);
+  for (auto VT : {MVT::v128i32, MVT::v256i32, MVT::v256i16})
+    for (unsigned Opc : {ISD::OR, ISD::XOR, ISD::SRA, ISD::SMIN, ISD::SMAX,
+                         ISD::UMIN, ISD::UMAX})
+      setOperationAction(Opc, VT, Custom);
+  for (unsigned Opc : {ISD::MUL, ISD::AND, ISD::SHL, ISD::SRL})
+    setOperationAction(Opc, MVT::v256i16, Custom);
+
   setOperationAction(ISD::TRUNCATE, MVT::v256i16, Custom);
   setOperationAction(ISD::TRUNCATE, MVT::v128i16, Custom);
   setOperationAction(ISD::TRUNCATE, MVT::v256i8, Custom);
@@ -832,6 +849,56 @@ TPCTargetLowering::getConstraintType(StringRef Constraint) const {
   return C_Unknown;
 }
 
+// Vector types wider than a register live in register pairs or quads, and
+// many operations have no pattern for them. InstCombine still forms them, for
+// instance the fabs of both halves of a float128 becomes one <128 x float>
+// fabs. Split such an operation into one per register.
+static SDValue splitWideVectorOp(SDValue Op, SelectionDAG &DAG) {
+  SDLoc DL(Op);
+  EVT ResTy = Op.getValueType();
+  if (!ResTy.isSimple())
+    return SDValue();
+  EVT SubTy;
+  switch (ResTy.getSimpleVT().SimpleTy) {
+  case MVT::v128f32:
+  case MVT::v256f32:
+    SubTy = MVT::v64f32;
+    break;
+  case MVT::v256bf16:
+    SubTy = MVT::v128bf16;
+    break;
+  case MVT::v256f16:
+    SubTy = MVT::v128f16;
+    break;
+  case MVT::v128i32:
+  case MVT::v256i32:
+    SubTy = MVT::v64i32;
+    break;
+  case MVT::v256i16:
+    SubTy = MVT::v128i16;
+    break;
+  default:
+    return SDValue();
+  }
+  unsigned Parts = ResTy.getSizeInBits().getFixedValue() /
+                   SubTy.getSizeInBits().getFixedValue();
+  static const unsigned SubRegs[] = {TPC::sub_0, TPC::sub_1, TPC::sub_2,
+                                     TPC::sub_3};
+  SmallVector<SDValue, 4> Pieces;
+  for (unsigned P = 0; P < Parts; ++P) {
+    SDValue Idx = DAG.getTargetConstant(SubRegs[P], DL, MVT::i32);
+    SmallVector<SDValue, 2> Ops;
+    for (const SDValue &O : Op->op_values()) {
+      assert(O.getValueType() == ResTy && "operand of another type");
+      Ops.push_back(SDValue(
+          DAG.getMachineNode(TargetOpcode::EXTRACT_SUBREG, DL, SubTy, O, Idx),
+          0));
+    }
+    Pieces.push_back(DAG.getNode(Op.getOpcode(), DL, SubTy, Ops, Op->getFlags()));
+  }
+  return DAG.getNode(ISD::CONCAT_VECTORS, DL, ResTy, Pieces);
+}
+
 SDValue TPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   LLVM_DEBUG(dbgs() << "TPC custom lowering:\n    "; Op.dump(&DAG););
   switch (Op.getOpcode()) {
@@ -889,7 +956,25 @@ SDValue TPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::INSERT_VECTOR_ELT:
     return lowerINSERT_VECTOR_ELT(Op, DAG);
   case ISD::MUL:
+    if (SDValue Split = splitWideVectorOp(Op, DAG))
+      return Split;
     return lowerMUL(Op, DAG);
+  case ISD::FABS:
+  case ISD::FNEG:
+  case ISD::FMUL:
+  case ISD::FMINNUM:
+  case ISD::FMAXNUM:
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR:
+  case ISD::SHL:
+  case ISD::SRL:
+  case ISD::SRA:
+  case ISD::SMIN:
+  case ISD::SMAX:
+  case ISD::UMIN:
+  case ISD::UMAX:
+    return splitWideVectorOp(Op, DAG);
   case ISD::MULHU:
     return lowerMULHU(Op, DAG);
   case ISD::MULHS:
@@ -2551,6 +2636,43 @@ SDValue TPCTargetLowering::lowerVECTOR_SHUFFLE(SDValue Op,
       return DAG.getNode(ISD::BUILD_VECTOR, DL, VT, Args);
 #endif
     }
+  }
+
+  // A result in several registers, each a whole register of an operand (or
+  // undefined), such as <128 x float> <0..63, 0..63> that SROA makes of a
+  // float128 whose halves are the same: a tuple of those registers.
+  unsigned RegElts = 2048 / EltSize;
+  if (VectWidth > RegElts && VectWidth % RegElts == 0 &&
+      OpVectSize % RegElts == 0 && ShuffleMask.size() == VectWidth) {
+    EVT RegTy = EVT::getVectorVT(*DAG.getContext(), EltT, RegElts);
+    SmallVector<SDValue, 4> Regs;
+    for (unsigned R = 0; R < VectWidth / RegElts; ++R) {
+      ArrayRef<int> Part = ShuffleMask.slice(R * RegElts, RegElts);
+      int Start = -1;
+      bool Whole = true;
+      for (unsigned I = 0; I < RegElts && Whole; ++I) {
+        if (Part[I] < 0)
+          continue;
+        int S = Part[I] - int(I);
+        if (Start < 0)
+          Start = S;
+        Whole = S == Start && S % int(RegElts) == 0;
+      }
+      if (!Whole)
+        break;
+      if (Start < 0) {
+        Regs.push_back(DAG.getUNDEF(RegTy));
+        continue;
+      }
+      SDValue Src = unsigned(Start) < OpVectSize ? V1 : V2;
+      unsigned Offset = unsigned(Start) % OpVectSize;
+      Regs.push_back(OpVectSize == RegElts
+                         ? Src
+                         : DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, RegTy, Src,
+                                       DAG.getConstant(Offset, DL, MVT::i32)));
+    }
+    if (Regs.size() == VectWidth / RegElts)
+      return createTuple(Regs, DAG);
   }
 
   assert(false && (Op.dump(), "Unhandled shufflevector"));
@@ -4959,9 +5081,15 @@ TPCTargetLowering::Extend_8_to_32(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
 
 SmallVector<SDValue, 2>
 TPCTargetLowering::Extend_8_to_16(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
-                                  const SDLoc &DL, unsigned DataType) const {
+                                  const SDLoc &DL, unsigned DataType,
+                                  bool ZeroExtend) const {
  EVT SrcVT = Src.getValueType();
  SmallVector<SDValue, 2> ExtArg;
+  // UNPACK writes every second byte and keeps the others from its income. When
+  // no convert follows, the result is the zero extension only if the income
+  // is zero (Habana's compiler zeroes it too); otherwise the convert reads
+  // only the unpacked bytes.
+  SDValue Income = ZeroExtend ? DAG.getConstant(0, DL, SrcVT) : DAG.getUNDEF(SrcVT);
   // unpack-1
   SmallVector<SDValue, 8> Ops1(6);
   Ops1[0] = Src;                                           // Source.
@@ -4971,7 +5099,7 @@ TPCTargetLowering::Extend_8_to_16(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
   Ops1[2] = DAG.getTargetConstant(TPCII::SW_GROUP_0 | TPCII::SW_STRIDE_2 |
                                       TPCII::SW_GROUP_HALF_0,
                                   DL, MVT::i32);   // Switch.
-  Ops1[3] = DAG.getUNDEF(SrcVT);                   // Income.
+  Ops1[3] = Income;                                // Income.
   Ops1[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops1[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
   MachineSDNode *Node1 = DAG.getMachineNode(TPC::UNPACKp, DL, SrcVT, Ops1);
@@ -4986,7 +5114,7 @@ TPCTargetLowering::Extend_8_to_16(EVT ResultVT, SDValue Src, SelectionDAG &DAG,
   Ops2[2] = DAG.getTargetConstant(
       (TPCII::SW_GROUP_1 | TPCII::SW_STRIDE_2 | TPCII::SW_GROUP_HALF_0), DL,
       MVT::i32);                                   // Switch
-  Ops2[3] = DAG.getUNDEF(SrcVT);                   // Income.
+  Ops2[3] = Income;                                // Income.
   Ops2[4] = DAG.getRegister(TPC::SPRF_TRUE, MVT::i1);    // Predicate.
   Ops2[5] = DAG.getTargetConstant(0, DL, MVT::i1); // Polarity.
   MachineSDNode *Node2 = DAG.getMachineNode(TPC::UNPACKp, DL, SrcVT, Ops2);
@@ -7501,7 +7629,8 @@ SDValue TPCTargetLowering::ConversionEntity(EVT DestVT, SDValue Source,
           ExtArg =
               helperExtend_16_32(Source, DataType, SrcVT, DAG, DL, Subtarget);
         } else if (DestElBitsize == 16 && SrcElBitsize == 8) {
-          ExtArg = Extend_8_to_16(SrcVT, Source, DAG, DL, DataTypeVal);
+          ExtArg = Extend_8_to_16(SrcVT, Source, DAG, DL, DataTypeVal,
+                                  SrcIsUnsigned && DestIsUnsigned);
         } else {
           assert(false && "impossible extend conversion");
           return SDValue();

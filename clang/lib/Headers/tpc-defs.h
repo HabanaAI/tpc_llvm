@@ -460,6 +460,9 @@ enum {
   SW_SR_RNE             = 0x7 << (0 + 16),
   SW_CLIP_FP            = 0x1 << (4 + 16),
   SW_LINEAR             = 0x1 << 24,
+  // fp8_143 with exponent bias 7, the default: no bit set, as in Habana's
+  // compiler on every architecture.
+  SW_FP8_BIAS7          = 0,
   // GEN_ADDR
   SW_DT_INT8            = 0x0 << 0,
   SW_DT_INT16           = 0x1 << 0,

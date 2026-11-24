@@ -153,6 +153,14 @@ def CastToImm32 : SDNodeXForm<imm, [{
   return CurDAG->getTargetConstant(N->getZExtValue(), SDLoc(N), MVT::i32);
 }]>;
 
+// A scalar or immediate SRC2 of SHUFFLE is broadcast to every 32-bit lane, and
+// each element reads its own control byte from it, so a splat of one control
+// byte must repeat the byte in all four bytes of the 32-bit value.
+def SplatI8ToImm32 : SDNodeXForm<imm, [{
+  return CurDAG->getTargetConstant((N->getZExtValue() & 0xFF) * 0x01010101,
+                                   SDLoc(N), MVT::i32);
+}]>;
+
 def FPToImm32 : SDNodeXForm<fpimm, [{
   const APFloat &Val = N->getValueAPF();
   APInt IC = Val.bitcastToAPInt();
@@ -7100,9 +7108,12 @@ foreach type = [v64f32, v128bf16, v128f16, v256f8_143, v256f8_152, v64i32, v128i
     def : Pat <(type (int_tpc_shuffle type:$src1, v256i8:$src2, (i8 imm:$optype), (i32 imm:$sw), type:$income, pred:$pred, (i1 imm:$polarity))),
                (type (ConstructInsn<"SHUFFLEvv", pred>.Insn VRF:$src1, VRF:$src2, (i8 imm:$optype), (i32 imm:$sw), VRF:$income, pred:$pred, (i1 imm:$polarity)))>;
     def : Pat <(type (int_tpc_shuffle type:$src1, (v256i8 (vsplati8 i8:$src2)),  (i8 imm:$optype), (i32 imm:$sw), type:$income, pred:$pred, (i1 imm:$polarity))),
-               (type (ConstructInsn<"SHUFFLEvs", pred>.Insn VRF:$src1, SRF:$src2, (i8 imm:$optype), (i32 imm:$sw), VRF:$income, pred:$pred, (i1 imm:$polarity)))>, Requires<[Gen4Plus]>;
+               (type (ConstructInsn<"SHUFFLEvs", pred>.Insn VRF:$src1,
+                        (i32 (MULsip (i32 (ANDsip SRF:$src2, (i32 0xFF), OpType.INT32, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))),
+                                     (i32 0x01010101), OpType.INT32, (i32 0), (IMPLICIT_DEF), SPRF_TRUE, (i1 0))),
+                        (i8 imm:$optype), (i32 imm:$sw), VRF:$income, pred:$pred, (i1 imm:$polarity)))>, Requires<[Gen4Plus]>;
     def : Pat <(type (int_tpc_shuffle type:$src1, (v256i8 (vsplati8 (i8 imm:$src2))), (i8 imm:$optype), (i32 imm:$sw), type:$income, pred:$pred, (i1 imm:$polarity))),
-               (type (ConstructInsn<"SHUFFLEvi", pred>.Insn VRF:$src1, (CastToImm32 $src2), (i8 imm:$optype), (i32 imm:$sw), VRF:$income, pred:$pred, (i1 imm:$polarity)))>, Requires<[Gen4Plus]>;
+               (type (ConstructInsn<"SHUFFLEvi", pred>.Insn VRF:$src1, (SplatI8ToImm32 $src2), (i8 imm:$optype), (i32 imm:$sw), VRF:$income, pred:$pred, (i1 imm:$polarity)))>, Requires<[Gen4Plus]>;
 }
 
 //------ GET_LUT_ENTRY_AND_INTERVAL_START --------------------------------------

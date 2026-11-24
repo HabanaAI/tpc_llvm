@@ -850,6 +850,10 @@ class TPCPipelinerLatencyMutation : public ScheduleDAGMutation {
     if (!SU->isInstr())
       return false;
     const MachineInstr *MI = SU->getInstr();
+    // A copy into a physical register, such as LD_PARTIAL_REG or a squeeze
+    // counter, is a real MOV with its own latency to the reader.
+    if (MI->isCopy() && MI->getOperand(0).getReg().isPhysical())
+      return false;
     return MI->isRegSequence() || MI->isCopy() || MI->isInsertSubreg() ||
            MI->isSubregToReg();
   }

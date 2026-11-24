@@ -1040,7 +1040,7 @@ private:
     const int RMaskIx = RShuffleI->getMaskValue(RScalarIx);
 
     const bool IsLUndef = LMaskIx == -1;
-    const bool IsRUndef = LMaskIx == -1;
+    const bool IsRUndef = RMaskIx == -1;
 
     if (IsLUndef != IsRUndef) {
       LLVM_DEBUG(dbgs() << "Not equivalent undef index:\n"

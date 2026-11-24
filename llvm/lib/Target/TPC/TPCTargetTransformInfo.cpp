@@ -54,6 +54,12 @@ static cl::opt<unsigned> ChainUnrollCount(
              "induction variable from one iteration to the next up to this "
              "many times, in order (0 or 1: no)"));
 
+static cl::opt<unsigned> ChainUnrollBudget(
+    "tpc-chain-unroll-budget", cl::Hidden, cl::init(2400),
+    cl::desc("Unroll such loops only while the function stays within this "
+             "many IR instructions, so that the kernel fits the instruction "
+             "cache (0: no limit)"));
+
 /// The backend unroller (TPCSoftwareLoopPipelining) gives each copy of a loop
 /// body its own version of every carried value, which is right for
 /// induction variables and coordinates and is why it leaves alone a loop
@@ -87,6 +93,29 @@ void TPCTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
   }
   if (!CarriesChain)
     return;
+  // The kernel's code must fit the TPC's instruction cache: a loop of more
+  // than ~64 KB runs ~10x slower per instruction on a gaudi2 card (measured
+  // 2026-11-23; 56 KB and less run at ~1.1 cycles per bundle), which the
+  // simulator does not show. Each unrolled loop adds about Count copies of its
+  // body (the remainder loop included), so the count is halved until the
+  // function stays within the budget, counted in IR instructions (about 33
+  // bytes of code each, from 19 to 49 in test_kernels, so the budget is
+  // coarse). 2400 stops GaudiInfer's gdn_state_commit_f32, whose 16 small
+  // loops took it from 53 to 104 KB and 4.2x the card time; of the 103 large
+  // test_kernels kernels, only samp_select (71 -> 68 KB) changes besides.
+  unsigned Count = ChainUnrollCount;
+  if (ChainUnrollBudget) {
+    unsigned FunctionSize = 0;
+    for (const BasicBlock &BB : *L->getHeader()->getParent())
+      FunctionSize += BB.size();
+    unsigned LoopSize = 0;
+    for (const BasicBlock *BB : L->blocks())
+      LoopSize += BB->size();
+    while (Count >= 2 && FunctionSize + LoopSize * Count > ChainUnrollBudget)
+      Count /= 2;
+    if (Count < 2)
+      return;
+  }
   // The remainder loop needs the trip count: one SCEV cannot compute is no
   // use, and a 64-bit one (the sign-extended count of a 'kh <= h + 1' loop)
   // gives i64 arithmetic, which TPC cannot select.
@@ -97,7 +126,7 @@ void TPCTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
   UP.Partial = true;
   UP.Runtime = true;
   UP.UpperBound = true;
-  UP.MaxCount = ChainUnrollCount;
+  UP.MaxCount = Count;
   UP.PartialThreshold = std::max(UP.PartialThreshold, 400u);
   // A loop stepping by a vector, (n + 63) / 64 times, has a division in its
   // trip count, which is a shift here.

@@ -214,14 +214,19 @@ bool TPCx2CombineUtil::hasDependence(MachineInstr *I1, MachineInstr *I2,
   DenseSet<MachineInstr *> UseSet;
 
   // Initialize the set with users of I1
+  // A user need not define a register (a store's first operand can be an
+  // immediate), so look at the definitions, not at operand 0.
   auto addUsers = [&](MachineInstr *I) -> bool {
-    Register DstReg = I->getOperand(0).getReg();
-    for (auto &Use : MRI.use_instructions(DstReg)) {
-      if (Use.getParent() != CurMBB || Use.isPHI())
+    for (const MachineOperand &Def : I->defs()) {
+      if (!Def.isReg() || !Def.getReg().isVirtual())
         continue;
-      if (&Use == I2)
-        return true;
-      UseSet.insert(&Use);
+      for (auto &Use : MRI.use_instructions(Def.getReg())) {
+        if (Use.getParent() != CurMBB || Use.isPHI())
+          continue;
+        if (&Use == I2)
+          return true;
+        UseSet.insert(&Use);
+      }
     }
     return false;
   };

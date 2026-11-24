@@ -48,6 +48,7 @@ extern "C" void LLVMInitializeTPCTarget() {
   initializeTPCModuloScheduleSetupPass(Registry);
   initializeTPCModuloScheduleFinishPass(Registry);
   initializeTPCMulAddCombinePass(Registry);
+  initializeTPCLoopBoundaryImmPass(Registry);
   initializeTPCCarryDepsPass(Registry);
 }
 
@@ -305,6 +306,10 @@ void TPCTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           LPM.addPass(TpcLoopOptPass());
           return true;
         }
+        if (Name == "tpc-pragma-chain-unroll") {
+          LPM.addPass(TPCPragmaChainUnrollPass());
+          return true;
+        }
         return false;
       });
 
@@ -331,6 +336,14 @@ void TPCTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // Legacy: first pass of PassManagerBuilder::populateModulePassManager.
         MPM.addPass(LinkTPCHeadersPass());
 #endif
+      });
+
+  // Before the IR unrollers: a loop_unroll pragma loop the backend unroller
+  // would refuse gets LLVM's unroll pragma instead.
+  PB.registerLateLoopOptimizationsEPCallback(
+      [](LoopPassManager &LPM, OptimizationLevel Level) {
+        if (Level != OptimizationLevel::O0)
+          LPM.addPass(TPCPragmaChainUnrollPass());
       });
 
   // Legacy EP_CGSCCOptimizerLate (GlobalOpt, ADCE, SROA) followed by
@@ -496,6 +509,8 @@ void TPCPassConfig::addPreRegAlloc() {
     addPass(createTPCSubregInitElimination());
     // TODO: some kernels fail because of this pass
     addPass(createTPCMovCoalescer());
+    // After every pass that makes or changes LOOPs.
+    addPass(createTPCLoopBoundaryImm());
   }
   if (getOptLevel() == CodeGenOptLevel::None)
    addPass(createTPCHWWAGeneral());
