@@ -130,7 +130,7 @@ named `<category>/<name>`, and the report gives a geometric mean per category.
 | Category | Kernels |
 |----------|---------|
 | `general/` | Basic patterns: streaming elementwise ops, select, 8-bit lanes, conversion, reductions, scans, integer division, short loops, vector local memory. |
-| `ml/` | Inference kernels, many modeled on operations of DeepSeek-V3 and Qwen inference (vLLM, DeepSeek's reference code): RMSNorm with and without the fused residual add, LayerNorm, softmax, GELU, SwiGLU, RoPE, decode attention, MoE routing, FP8 quantization, int4 dequantization, causal conv1d. |
+| `ml/` | Inference kernels, many modeled on operations of DeepSeek-V3 and Qwen inference (vLLM, DeepSeek's reference code): RMSNorm with and without the fused residual add, LayerNorm, softmax, GELU, SwiGLU, RoPE, decode attention, MoE routing, FP8 quantization, int4 dequantization, causal conv1d. Eight more are taken unchanged from Apache-2.0 inference projects (1cat-vllm-gaudi, GaudiInfer): a Gated DeltaNet state commit, WY-form recurrence and gated RMSNorm with quantization, a linear-attention prefill, a unit lower-triangular inverse, a GEMV, an inverse-CDF sampler and a merge of sorted index lists. |
 | `hpc/` | Scientific workloads: 2-D and 3-D stencils, an FFT stage, an ODE integrator, Monte Carlo, N-body, Black-Scholes. |
 | `misc/` | Anything else, for now graphics: Mandelbrot, ray tracing, Game of Life, a plasma effect. |
 
