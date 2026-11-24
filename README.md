@@ -28,9 +28,10 @@ TPC-CLANG compiler is based on the widely used [LLVM](https://llvm.org/) open-so
 
 The code this fork generates, against that of Habana's own tpc-clang from the
 habanalabs-tools 1.24.2 SDK, timed on a Gaudi2 card (HL-225, driver 1.24.2):
-33 microbenchmarks from [`tpc/bench/kernels/`](tpc/bench/kernels), compiled
-for gaudi2 at -O2. The fork's code is 1.31× as fast (geometric mean), 1.57×
-on the ML kernels.
+41 microbenchmarks from [`tpc/bench/kernels/`](tpc/bench/kernels), compiled
+for gaudi2 at -O2. Eight of the ML ones are taken unchanged from open
+inference projects (see [`tpc/README.md`](tpc/README.md#microbenchmarks-bench)).
+The fork's code is 1.35× as fast (geometric mean), 1.46× on the ML kernels.
 
 * **Faster**, mostly because the fork overlaps a loop's iterations where
   Habana's compiler runs them one after another. It modulo-schedules
@@ -40,64 +41,79 @@ on the ML kernels.
   iteration to the next. It unrolls other hardware loops without a pragma,
   including loops over the member's part of the index space, and unrolls
   loops that carry a sum, in order. The largest gains: GELU (3.04×), the
-  2-D stencil (2.94×), the fused residual add and RMSNorm (2.47×), Game of
-  Life (2.41×), RoPE (2.11×), short rows (2.06×), RMSNorm (1.87×),
-  LayerNorm (1.66×), decode attention (1.64×) and SwiGLU (1.63×).
+  2-D stencil (2.93×), Game of Life (2.41×), the fused residual add and
+  RMSNorm (2.34×), RoPE (2.11×), short rows (2.05×), softmax and RMSNorm
+  (2.03×), LayerNorm (1.85×), the inverse-CDF sampler (1.73×), decode
+  attention (1.64×) and SwiGLU (1.63×).
 * **Even:** the streaming kernels (add, axpy, cast) run at the card's memory
   speed with either compiler's code, though the fork's takes half the cycles
-  on the simulator.
-* **Slower:** staging data in vector local memory (0.45×), whose accesses
-  Habana's compiler keeps in registers and the fork does not yet; the 3-D
-  stencil (0.88×); and kernels that spend most of their time in tpclib math
-  functions, such as the plasma effect (0.88×) and Black-Scholes (0.95×).
+  on the simulator; so do staging data in vector local memory, the FFT stage,
+  int4 dequantization, the gated RMSNorm with quantization and the
+  linear-attention prefill.
+* **Slower:** the 3-D stencil (0.88×), the merge of sorted index lists
+  (0.96×), the plasma effect, which spends most of its time in tpclib's sine
+  (0.96×), integer division (0.97×) and the Gated DeltaNet state commit
+  (0.97×).
+
+The TPC's instruction cache holds about 64 KB of code: a loop bigger than that
+ran ~10× slower per instruction on the card, which the simulator does not
+show, so the fork keeps its unrolling within a code-size budget.
 
 | Kernel | Habana (TPC-µs) | Fork (TPC-µs) | Fork speedup |
 |---|---:|---:|---:|
-| `general/add_f32` | 37.1 | 37.4 | 0.99× |
+| `general/add_f32` | 37.4 | 37.4 | 1.00× |
 | `general/add_sat_u8` | 37.2 | 37.3 | 1.00× |
-| `general/axpy_bf16` | 37.3 | 37.4 | 1.00× |
-| `general/cast_f32_bf16` | 18.7 | 18.6 | 1.01× |
-| `general/local_mem_f32` | 18.6 | 41.3 | 0.45× |
-| `general/prefix_sum_f32` | 32.0 | 20.3 | 1.57× |
-| `general/reduce_sum_f32` | 27.5 | 19.7 | 1.40× |
+| `general/axpy_bf16` | 37.4 | 37.3 | 1.00× |
+| `general/cast_f32_bf16` | 18.7 | 18.6 | 1.00× |
+| `general/local_mem_f32` | 18.5 | 18.6 | 1.00× |
+| `general/prefix_sum_f32` | 32.2 | 20.5 | 1.57× |
+| `general/reduce_sum_f32` | 27.4 | 19.8 | 1.38× |
 | `general/sdiv_i32` | 703.5 | 726.2 | 0.97× |
-| `general/short_rows_f32` | 60.0 | 29.2 | 2.06× |
-| `general/where_f32` | 59.8 | 37.4 | 1.60× |
-| `hpc/blackscholes_f32` | 1420.4 | 1494.0 | 0.95× |
-| `hpc/fft_radix4_f32` | 49.2 | 49.1 | 1.00× |
-| `hpc/jacobi2d_f32` | 137.0 | 46.6 | 2.94× |
+| `general/short_rows_f32` | 59.8 | 29.1 | 2.05× |
+| `general/where_f32` | 59.8 | 37.2 | 1.61× |
+| `hpc/blackscholes_f32` | 1420.5 | 1402.2 | 1.01× |
+| `hpc/fft_radix4_f32` | 49.1 | 49.2 | 1.00× |
+| `hpc/jacobi2d_f32` | 136.8 | 46.6 | 2.93× |
 | `hpc/laplace3d_f32` | 240.9 | 272.7 | 0.88× |
 | `hpc/montecarlo_pi_f32` | 701.4 | 504.0 | 1.39× |
-| `hpc/nbody_f32` | 1312.3 | 828.5 | 1.58× |
-| `hpc/rk4_duffing_f32` | 460.2 | 457.4 | 1.01× |
-| `misc/game_of_life_i32` | 200.5 | 83.2 | 2.41× |
-| `misc/mandelbrot_f32` | 1256.4 | 1220.0 | 1.03× |
-| `misc/plasma_rgb_f32` | 348.2 | 397.5 | 0.88× |
-| `misc/raytrace_spheres_f32` | 722.9 | 747.4 | 0.97× |
-| `ml/add_rmsnorm_bf16` | 132.2 | 53.6 | 2.47× |
+| `hpc/nbody_f32` | 1312.3 | 827.4 | 1.59× |
+| `hpc/rk4_duffing_f32` | 460.0 | 457.4 | 1.01× |
+| `misc/game_of_life_i32` | 200.6 | 83.2 | 2.41× |
+| `misc/mandelbrot_f32` | 1256.3 | 1220.0 | 1.03× |
+| `misc/plasma_rgb_f32` | 348.2 | 364.0 | 0.96× |
+| `misc/raytrace_spheres_f32` | 722.8 | 706.6 | 1.02× |
+| `ml/add_rmsnorm_bf16` | 132.3 | 56.5 | 2.34× |
 | `ml/causal_conv1d_bf16` | 423.7 | 292.3 | 1.45× |
-| `ml/decode_attention_bf16` | 934.3 | 568.5 | 1.64× |
+| `ml/control_gemv_f32` | 416.4 | 280.9 | 1.48× |
+| `ml/decode_attention_bf16` | 934.2 | 570.2 | 1.64× |
 | `ml/dequant_int4_f32` | 52.6 | 52.6 | 1.00× |
-| `ml/fp8_quant_bf16` | 159.6 | 166.6 | 0.96× |
-| `ml/gelu_f32` | 396.5 | 130.6 | 3.04× |
-| `ml/layernorm_f32` | 129.9 | 78.4 | 1.66× |
-| `ml/moe_router_f32` | 343.4 | 338.1 | 1.02× |
-| `ml/rmsnorm_bf16` | 76.2 | 40.8 | 1.87× |
-| `ml/rope_neox_bf16` | 111.9 | 53.1 | 2.11× |
-| `ml/softmax_f32` | 1094.6 | 871.4 | 1.26× |
+| `ml/flashqla_recurrent_prefill_f32` | 890.0 | 902.5 | 0.99× |
+| `ml/flashqla_unit_lower_inverse16_f32` | 640.6 | 452.4 | 1.42× |
+| `ml/fp8_quant_bf16` | 159.7 | 134.9 | 1.18× |
+| `ml/gated_norm_quant_bf16` | 42.9 | 42.7 | 1.00× |
+| `ml/gdn_mtp_wy_f32` | 743.1 | 685.8 | 1.08× |
+| `ml/gdn_state_commit_f32` | 116.0 | 119.7 | 0.97× |
+| `ml/gelu_f32` | 396.6 | 130.6 | 3.04× |
+| `ml/layernorm_f32` | 129.9 | 70.1 | 1.85× |
+| `ml/mla_union_metadata_i32` | 178.2 | 185.6 | 0.96× |
+| `ml/moe_router_f32` | 343.4 | 330.1 | 1.04× |
+| `ml/probability_draw_f32` | 98.7 | 57.1 | 1.73× |
+| `ml/rmsnorm_bf16` | 76.2 | 37.6 | 2.03× |
+| `ml/rope_neox_bf16` | 112.0 | 53.0 | 2.11× |
+| `ml/softmax_f32` | 1094.7 | 540.0 | 2.03× |
 | `ml/swiglu_bf16` | 99.5 | 61.1 | 1.63× |
-| geomean, general |  |  | 1.12× |
-| geomean, hpc |  |  | 1.27× |
-| geomean, misc |  |  | 1.20× |
-| geomean, ml |  |  | 1.57× |
-| **geomean, all** |  |  | **1.31×** |
+| geomean, general |  |  | 1.21× |
+| geomean, hpc |  |  | 1.29× |
+| geomean, misc |  |  | 1.25× |
+| geomean, ml |  |  | 1.46× |
+| **geomean, all** |  |  | **1.35×** |
 
 Time is in TPC-microseconds: the Habana profiler's start-to-halt time of each
 TPC that ran the kernel (2 to 8 per launch), summed, so host and launch
-overhead are left out. Each time is the median of 10 runs, which spread by at
-most ±1.1%. Speedup is Habana's time divided by the fork's, so above 1× the
+overhead are left out. Each time is the median of 6 runs, which spread by at
+most ±0.9%. Speedup is Habana's time divided by the fork's, so above 1× the
 fork is faster. Every run's outputs equal those of the other compiler and of
-the TPC simulator. Measured on 2026-11-21 with the fork at cdebf620f97e; the
+the TPC simulator. Measured on 2026-11-24 with the fork at e3355c362dd9; the
 method, and how to rerun it, is in [`tpc/README.md`](tpc/README.md#microbenchmarks-bench).
 
 ## Clone tpc-llvm Repository
